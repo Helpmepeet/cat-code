@@ -174,6 +174,7 @@ const snipProjection = feature('HISTORY_SNIP')
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 export type QueryEngineConfig = {
+  lookupLegacyPeerCreator?: ToolUseContext['lookupLegacyPeerCreator']
   pendingQuestionRuntime?: PendingQuestionRuntime
   /** A structured-input session owns its interpreter and restores history once. */
   codeModeHost?: CodeModeHost
@@ -767,6 +768,7 @@ export class QueryEngine {
       pendingQuestions: this.questionRuntime?.registry,
       messages: this.mutableMessages,
       getCurrentAutoModeMessages: () => this.mutableMessages,
+      lookupLegacyPeerCreator: this.config.lookupLegacyPeerCreator,
       // Slash commands that mutate the message array (e.g. /force-snip)
       // call setMessages(fn).  In interactive mode this writes back to
       // AppState; in print mode we write back to mutableMessages so the
@@ -1109,6 +1111,7 @@ export class QueryEngine {
       turnHandoff,
       pendingQuestions: this.questionRuntime?.registry,
       messages,
+      lookupLegacyPeerCreator: this.config.lookupLegacyPeerCreator,
       setMessages: () => {},
       onChangeAPIKey: () => {},
       handleElicitation: this.config.handleElicitation,

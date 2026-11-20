@@ -282,6 +282,10 @@ export type ToolUseContext = {
   autoModeInstructionContext?: string | null
   /** Live session evidence for a review held across an asynchronous boundary. */
   getCurrentAutoModeMessages?: () => readonly Message[]
+  /** Desktop-owned identities for a peer created before assignment links were recorded. */
+  lookupLegacyPeerCreator?: (creatorAppSessionId: string) => Promise<
+    { parentSessionId: string; childAppSessionId: string } | undefined
+  >
   contextualWorkerAssignment?: import('./utils/permissions/contextualAuthority.js').ContextualWorkerAssignment
   contextualParentScriptSource?: string
   contextualAutoAttempt?: import('./utils/permissions/contextualAuthorization.js').ContextualAutoAttempt

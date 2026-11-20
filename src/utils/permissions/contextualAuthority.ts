@@ -104,20 +104,59 @@ type PeerParentEvidence = {
   isCurrent: () => boolean
 }
 
-export async function resolveContextualPeerParent(context: ToolUseContext): Promise<PeerParentEvidence | undefined> {
+// Only a successful host receipt identifies the child. Identical brief text
+// or a peer's display name alone can occur in unrelated launches.
+function legacyLaunchAnchor(messages: readonly Message[], childId: string, openingBrief: string): string | undefined {
+  const matches: number[] = []
+  const calls = new Map<string, { index: number; messageId: string }>()
+  for (const [index, message] of messages.entries()) {
+    if (message.type === 'assistant' && !message.isVirtual && !message.codeMode) {
+      for (const block of message.message.content) {
+        if (block.type === 'tool_use' && block.name === 'CreatePeer' && block.input &&
+            typeof block.input === 'object' && 'prompt' in block.input && block.input.prompt === openingBrief) {
+          if (calls.has(block.id)) return undefined
+          calls.set(block.id, { index, messageId: message.uuid })
+        }
+      }
+    }
+    if (message.type !== 'user' || message.isVirtual || !Array.isArray(message.message.content) ||
+        message.message.content.length !== 1) continue
+    const result = message.toolUseResult
+    if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true ||
+        'failedStep' in result || !('appSessionId' in result) || result.appSessionId !== childId) continue
+    const block = message.message.content[0]
+    if (block?.type !== 'tool_result' || block.is_error) continue
+    const call = calls.get(block.tool_use_id)
+    if (call && call.messageId === message.sourceToolAssistantUUID) matches.push(call.index)
+  }
+  if (matches.length !== 1) return undefined
+  return conversationEvidence(messages.slice(0, matches[0])).findLast(row => row.origin === 'operator' && row.id)?.id
+}
+
+export async function resolveContextualPeerParent(
+  context: ToolUseContext,
+  lookupLegacyCreator?: ToolUseContext['lookupLegacyPeerCreator'],
+): Promise<PeerParentEvidence | undefined> {
   if (context.agentId) return undefined
   const current = context.getCurrentAutoModeMessages?.() ?? context.messages
   const origin = current.flatMap(message => {
     const source = message.type === 'user' ? message.origin
       : message.type === 'attachment' ? queuedCommandOrigin(message.attachment) : undefined
-    return source?.kind === 'peer' && source.creationPrompt && source.assignment ? [source.assignment] : []
+    if (source?.kind !== 'peer' || !source.creationPrompt) return []
+    const input = message.type === 'user' ? message.message.content : undefined
+    const onlyBlock = Array.isArray(input) && input.length === 1 ? input[0] : undefined
+    const brief = typeof input === 'string' ? input : onlyBlock?.type === 'text' ? onlyBlock.text : undefined
+    return [{ source, brief }]
   })
   if (origin.length !== 1) return undefined
-  const reference = origin[0]!
-  if (!validateUuid(reference.parentSessionId) || !validateUuid(reference.userMessageId)) return undefined
+  const { source, brief } = origin[0]!
+  const linked = source.assignment
   try {
+    const legacy = !linked && brief && validateUuid(source.appSessionId) ? await lookupLegacyCreator?.(source.appSessionId) : undefined
+    const parentSessionId = linked?.parentSessionId ?? legacy?.parentSessionId
+    if (!parentSessionId || !validateUuid(parentSessionId) || (legacy && !validateUuid(legacy.childAppSessionId))) return undefined
     const { getTranscriptPathForSession, loadTranscriptFromFile } = await import('../sessionStorage.js')
-    const path = getTranscriptPathForSession(reference.parentSessionId)
+    const path = getTranscriptPathForSession(parentSessionId)
     const fingerprint = () => {
       const file = statSync(path, { bigint: true })
       return [file.ino, file.size, file.mtimeNs, file.ctimeNs].join(':')
@@ -127,9 +166,13 @@ export async function resolveContextualPeerParent(context: ToolUseContext): Prom
     const isCurrent = () => {
       try { return fingerprint() === before } catch { return false }
     }
-    if (!isCurrent() || transcript.sessionId !== reference.parentSessionId ||
-        !conversationEvidence(transcript.messages).some(row => row.id === reference.userMessageId && row.origin === 'operator')) return undefined
-    return { reference, messages: transcript.messages, isCurrent }
+    if (!isCurrent() || transcript.sessionId !== parentSessionId) return undefined
+    const userMessageId = linked?.userMessageId ?? (legacy && brief
+      ? legacyLaunchAnchor(transcript.messages, legacy.childAppSessionId, brief)
+      : undefined)
+    if (!userMessageId || !validateUuid(userMessageId) ||
+        !conversationEvidence(transcript.messages).some(row => row.id === userMessageId && row.origin === 'operator')) return undefined
+    return { reference: { parentSessionId, userMessageId }, messages: transcript.messages, isCurrent }
   } catch {
     return undefined
   }

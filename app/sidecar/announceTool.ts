@@ -42,7 +42,7 @@ export function createAnnounceTool(requestHost: PeerHostRequester = requestPeerH
       const notice = parsePeerNoticeInput(input)
       if (!notice) return { data: { ok: false, message: 'Use one non-empty doing line and at most 1 KiB for the whole notice.' } }
       const result = await requestHost('peer.announce', notice)
-      return { data: result.ok
+      return { data: result.ok === true
         ? { ok: true, postedAt: new Date(result.value.postedAt).toISOString(),
             ...(result.value.saved === false ? {
               saved: false as const,

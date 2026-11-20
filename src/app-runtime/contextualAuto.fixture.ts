@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 
 const root = process.env.CONTEXTUAL_AUTO_TEST_ROOT!
 const scenario = process.env.CONTEXTUAL_AUTO_TEST_SCENARIO!
+const legacyNotice = scenario.startsWith('legacy-notice-')
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated fixture required')
 Object.assign(globalThis, { MACRO: { VERSION: 'contextual-auto-test' } })
 globalThis.fetch = Object.assign(async () => { throw new Error('Unexpected network request') }, { preconnect: globalThis.fetch.preconnect })
@@ -83,8 +84,10 @@ mock.module('../services/api/client.js', () => ({
       })()
     }
     const index = modelCalls++
-    const invocation = index === 0 || scenario === 'skip-queued' && index === 1
-    const main = index === 0 ? submitted
+    const invocation = index === 0 || (scenario === 'skip-queued' || legacyNotice) && index === 1
+    const main = legacyNotice
+      ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
+      : index === 0 ? submitted
       : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
@@ -159,6 +162,33 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
   initialMessages: initial,
 }
+const creatorAppId = randomUUID()
+const postedNotices: unknown[] = []
+if (legacyNotice) {
+  const { getTranscriptPathForSession } = await import('../utils/sessionStorage.js')
+  const { createAnnounceTool } = await import('../../app/sidecar/announceTool.js')
+  const parentSessionId = randomUUID()
+  const childAppSessionId = randomUUID()
+  const parentFile = getTranscriptPathForSession(parentSessionId)
+  const grant = createUserMessage({ content: 'Have a helper inspect a.txt. Leave it untouched.' })
+  const callId = randomUUID()
+  const create = { type: 'assistant', uuid: randomUUID(), message: { role: 'assistant', content: [
+    { type: 'tool_use', name: 'CreatePeer', id: callId, input: { prompt: 'Inspect a.txt.' } },
+  ] } }
+  const receipt = createUserMessage({ content: [{ type: 'tool_result', tool_use_id: callId, content: 'Created peer' }],
+    sourceToolAssistantUUID: create.uuid, toolUseResult: { ok: true,
+      appSessionId: scenario === 'legacy-notice-other-child' ? randomUUID() : childAppSessionId } })
+  const rows = [grant, create, receipt]
+  await mkdir(dirname(parentFile), { recursive: true })
+  await writeFile(parentFile, rows.map((row, i) => JSON.stringify({ ...row, parentUuid: rows[i - 1]?.uuid ?? null,
+    sessionId: parentSessionId, cwd, isSidechain: false, userType: 'external' })).join('\n') + '\n')
+  config.lookupLegacyPeerCreator = async creator => creator === creatorAppId ? { parentSessionId, childAppSessionId } : undefined
+  config.tools = [...config.tools, createAnnounceTool(async (verb, args) => {
+    if (verb !== 'peer.announce') throw new Error('Unexpected fixture host request')
+    postedNotices.push(args)
+    return { ok: true, value: { postedAt: Date.now() } } as never
+  })]
+}
 const session = createQueryEngineAppSession(config)
 const controller = createQueryEngineSessionController(session)
 const prompts: unknown[] = []
@@ -208,7 +238,10 @@ async function awaitHook() {
 }
 
 if (surface === 'desktop') {
-  await controller.submit(routed ? assignment : 'Run the isolated action and report the result.', routed ? {
+  if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
+    kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
+  } })
+  else await controller.submit(routed ? assignment : 'Run the isolated action and report the result.', routed ? {
     origin: { kind: 'peer', name: 'Lead', appSessionId: 'fixture-lead', creationPrompt: true, ...(parentReference && { assignment: parentReference }) },
   } : undefined)
 } else {
@@ -294,7 +327,7 @@ if (scenario.startsWith('measure-')) {
     .map(row => ({ id: row.tool_use_id, durationMs: row.duration_ms }))
 }
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
-  scenarios: scenario, requests, prompts, reviewEvents, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults,
+  scenarios: scenario, requests, prompts, reviewEvents, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices,
   wallMs: scriptWallMs, executions, effect: await effect(), files:
     Object.fromEntries(await Promise.all(['a', 'b', 'c', 'hooked'].map(async name => [name, await readFile(join(cwd, name + '.txt'), 'utf8')]))),
 }))

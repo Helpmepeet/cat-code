@@ -72,6 +72,7 @@ import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { buildDesktopSystemPrompt } from './desktopSystemPrompt.js'
 import { createListPeersTool } from './listPeersTool.js'
 import { createAnnounceTool } from './announceTool.js'
+import { readPeerIdentity, requestPeerHost, requestPeerRoster } from './peerHostRequester.js'
 import {
   createCreatePeerTool,
   inheritedEffort,
@@ -607,6 +608,15 @@ export async function createNormalSidecarQueryEngineConfig(
       ...(initialMessages !== undefined
         ? { initialMessages: [...initialMessages] }
         : {}),
+      ...(appSessionId && binding.kind === 'project' && {
+        lookupLegacyPeerCreator: async (creator: string) => {
+          if (readPeerIdentity().createdById !== creator) return undefined
+          const roster = await requestPeerRoster(requestPeerHost, { timeoutMs: 1000 })
+          if (!roster.ok) return undefined
+          const parent = roster.value.peers.find(peer => peer.appSessionId === creator)
+          return parent?.engineSessionId ? { parentSessionId: parent.engineSessionId, childAppSessionId: appSessionId } : undefined
+        },
+      }),
       ...(initialRecoveryReviewRequired !== undefined ? { initialRecoveryReviewRequired } : {}),
     },
   }

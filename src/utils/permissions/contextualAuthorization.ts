@@ -35,7 +35,7 @@ const toolEffects: Readonly<Record<string, string>> = {
   REPL: 'Admit the complete submitted source to the isolated Script interpreter. Each child is authorized separately.',
   Agent: 'Launch an agent with the specified assignment and capabilities.',
   CreatePeer: 'Create a new peer and deliver the specified opening assignment.',
-  Announce: 'Post the specified notice to its audience.',
+  Announce: 'Replace this session’s scope notice on the workspace peer roster. Peers can read the notice when they list the roster. Posting executes no edits and grants no file permissions.',
 }
 
 function projectAction(tool: Tool, input: Input, context: ToolUseContext) {
@@ -94,7 +94,8 @@ export async function createContextualAttempt(
   if (!mode) return undefined
   const snapshot = structuredClone(input)
   const action = projectAction(tool, snapshot, context)
-  const peerParent = await resolveContextualPeerParent(context)
+  const peerParent = await resolveContextualPeerParent(context,
+    tool.name === 'Announce' && !tool.isMcp && !tool.mcpInfo ? context.lookupLegacyPeerCreator : undefined)
   const authority = readContextualAuthority(context, peerParent)
   const policy: ToolPermissionContext = structuredClone(context.getAppState().toolPermissionContext)
   const instructions = getSourcedAutoModeInstructions()

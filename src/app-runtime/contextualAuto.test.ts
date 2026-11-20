@@ -36,6 +36,21 @@ async function run(scenario: string) {
   }
 }
 
+for (const receipt of ['matching', 'other-child']) {
+  test(`legacy notice with ${receipt} creation receipt cannot authorize the next edit`, async () => {
+    const proof = await run(`legacy-notice-${receipt}`)
+    const matching = receipt === 'matching'
+    expect(proof.postedNotices).toHaveLength(matching ? 1 : 0)
+    expect(proof.prompts.map((p: any) => p.tool_name)).toEqual(matching ? ['Edit'] : ['Announce', 'Edit'])
+    expect(proof.files.a).toBe('old')
+    const notice = proof.requests.find((row: any) => row.tool === 'Announce')
+    if (matching) expect(notice.content.assignment.parent).toContainEqual(expect.objectContaining({
+      origin: 'operator', text: 'Have a helper inspect a.txt. Leave it untouched.',
+    }))
+    else expect(notice).toBeUndefined()
+  }, 30_000)
+}
+
 for (const entry of ['direct', 'script']) {
   for (const tool of ['edit', 'bash']) {
     for (const source of ['verified', 'peer-only', 'withdrawn', 'stopped']) {
