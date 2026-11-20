@@ -10,7 +10,7 @@ async function run(scenario: string) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cat-contextual-auto-')))
   try {
     await Promise.all([mkdir(join(root, 'config')), mkdir(join(root, 'workspace'))])
-    const trial = scenario.startsWith('trial-') || scenario.startsWith('mcp-')
+    const trial = scenario.startsWith('trial-') || scenario.startsWith('mcp-') || scenario.startsWith('native-')
     const runtimeArgs = trial ? resolveSidecarLaunch({
       mainDir: new URL('../../app/main/', import.meta.url).pathname,
       packaged: false,
@@ -148,6 +148,29 @@ for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
     }
   }, 30_000)
 }
+
+for (const delegated of [false, true]) {
+  test(`the desktop browser can perform a reviewed action for a ${delegated ? 'verified helper' : 'direct user'} request`, async () => {
+    const proof = await run(delegated ? 'native-browser-peer' : 'native-browser')
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.browserCalls).toBe(1)
+    const review = proof.requests.find((request: any) => request.contextual === delegated)
+    if (delegated) {
+      expect(review?.content.action).toMatchObject({ tool: 'BrowserAct',
+        execution: { resolvedAction: 'click button Save changes on localhost:3000' } })
+      expect(review.content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator' }))
+    } else {
+      expect(review?.content).toContain('click button Save changes on localhost:3000')
+    }
+  }, 30_000)
+}
+
+test('a GPT file patch reaches contextual review when the user asked to inspect only', async () => {
+  const proof = await run('native-patch')
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.requests).toContainEqual(expect.objectContaining({ tool: 'apply_patch', contextual: true }))
+  expect(proof.files.a).toBe('old')
+}, 30_000)
 
 for (const entry of ['direct', 'script']) {
   for (const tool of ['edit', 'bash']) {

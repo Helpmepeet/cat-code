@@ -12,6 +12,15 @@ const lateCorrection = scenario === 'direct-late-correction'
 const credentialSettings = scenario === 'direct-credential-settings'
 const compacted = scenario.startsWith('compacted-')
 const mainEdit = scenario === 'main-inspect-only'
+const directPatch = scenario === 'native-patch'
+const browserAction = scenario.startsWith('native-browser')
+const browserPeer = scenario === 'native-browser-peer'
+const browserTarget = 'click button Save changes on localhost:3000'
+const nativeAction = browserAction
+  ? { name: 'BrowserAct', input: { action: 'click', ref: 'g1-e12' } }
+  : directPatch
+    ? { name: 'apply_patch', input: { input: '*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch' } }
+    : undefined
 const localMcp = scenario.startsWith('mcp-')
 const mcpAction = { name: 'mcp__fixture__records', input: { key: 'sample' } }
 const mcpWithdrawal = scenario === 'mcp-withdrawal'
@@ -56,7 +65,7 @@ const code = scenario === 'skip-queued'
     : scenario === 'hook-edit' ? `const name = "a" + ".txt"; await tools.call({name:"Edit",input:{file_path:name,old_string:"old",new_string:"new"}});`
     : routed ? `const pending = ${JSON.stringify(candidate)}; await tools.call(pending); output("helper completed");`
     : `await tools.call(${JSON.stringify(command)}); output("after approval");`
-const submitted = localMcp ? mcpAction : peerAction ?? (questionReply ? question
+const submitted = localMcp ? mcpAction : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || mainEdit || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
     : { name: 'REPL', input: { code, description: 'Run isolated fixture',
@@ -93,7 +102,7 @@ mock.module('../services/api/client.js', () => ({
       const review = { tool, content, startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
       const verdict = tool === 'REPL' ? 'allow'
-        : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction ? 'deny'
+        : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction || directPatch ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
         : scenario.startsWith('wait-') || scenario.startsWith('direct-') ? 'ask' : 'allow'
@@ -213,6 +222,24 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
 }
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
+let browserCalls = 0
+if (nativeAction) {
+  if (browserAction) {
+    const { createBrowserTools } = await import('../../app/sidecar/browserTools.js')
+    config.tools = [...config.tools, ...createBrowserTools((async verb => {
+      if (verb === 'browser.describe') return { ok: true, value: {
+        description: browserTarget, url: 'http://localhost:3000/settings',
+      } }
+      if (verb !== 'browser.act') throw new Error('Unexpected browser fixture request')
+      browserCalls++
+      return { ok: true, value: {} }
+    }) as import('../../app/sidecar/peerHostRequester.js').PeerHostRequester)]
+    if (browserPeer) config.initialMessages = [createUserMessage({ content: 'Click Save in the browser.' })]
+  } else {
+    const { FilePatchTool } = await import('../tools/FilePatchTool/FilePatchTool.js')
+    config.tools = [...config.tools, FilePatchTool]
+  }
+}
 let cleanupMcp: (() => Promise<void>) | undefined
 if (localMcp) {
   const { connectToServer, fetchToolsForClient } = await import('../services/mcp/client.js')
@@ -335,6 +362,8 @@ if (surface === 'desktop') {
   if (localMcp) await controller.submit('Look up the sample record.', scenario === 'mcp-peer-only' ? {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   } : undefined)
+  else if (nativeAction) await controller.submit(browserAction ? 'Click Save in the browser.' : 'Inspect a.txt and leave it untouched.',
+    browserPeer ? { origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId } } : undefined)
   else if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
     kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
   } })
@@ -439,6 +468,7 @@ if (lateCorrection || backgroundWithdrawal || scenario.startsWith('trial-')) {
 }
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
   scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
+  ...(browserAction && { browserCalls }),
   ...(localMcp && { mcpCalls: await readFile(join(root, 'mcp-calls.jsonl'), 'utf8')
     .then(text => text.trim().split('\n').map(line => JSON.parse(line)), () => []) }),
   wallMs: scriptWallMs, executions, effect: await effect(), files:

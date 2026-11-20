@@ -11,9 +11,12 @@ import { persistAutoModeReview } from '../../app-runtime/autoModeReviewPersisten
 import type { AutoModeReview } from '../../app-runtime/autoModeReviewContract.js'
 import { scanForSecrets } from '../../services/teamMemorySync/secretScanner.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
+import { isFilePatchToolName, FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
 import { getBashExecutionSettings, type BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { codeModeToolPrincipal } from '../../tools/REPLTool/codeModeTools.js'
 import { getCwd } from '../cwd.js'
+import { getPreparedFileMutationSet } from '../fileAuthorization.js'
 import { expandPath } from '../path.js'
 import { getSourcedAutoModeInstructions } from '../settings/settings.js'
 import { buildContextualReview, contextualReviewerProfile, sendContextualReview } from './contextualReviewer.js'
@@ -25,15 +28,27 @@ import { getConfiguredAutoModeModel } from './yoloClassifier.js'
 
 type Input = Record<string, unknown>
 type ReviewMode = 'shadow' | 'experimental'
-const readOnlyTools = new Set(['Read', 'Glob', 'Grep', 'LS', 'ListPeers', 'TaskList', 'TaskGet'])
+const readOnlyTools = new Set(['Read', 'Glob', 'Grep', 'LS', 'ListPeers', 'ReadPeer',
+  'ListProjects', 'TaskList', 'TaskGet', 'TaskOutput', 'ToolSearch'])
+
+function isMcpTool(tool: Tool): boolean {
+  return Boolean(tool.isMcp || tool.mcpInfo)
+}
 
 export function mayChangeState(tool: Tool | undefined): boolean {
-  return !tool || Boolean(tool.isMcp || tool.mcpInfo) || !readOnlyTools.has(tool.name)
+  return !tool || isMcpTool(tool) || !readOnlyTools.has(tool.name)
+}
+
+function needsContextualFileReview(tool: Tool): boolean {
+  return !isMcpTool(tool) && (tool.name === 'Edit' || tool.name === 'Write' ||
+    isFilePatchToolName(tool.name) || tool.name === NOTEBOOK_EDIT_TOOL_NAME)
 }
 const toolEffects: Readonly<Record<string, string>> = {
   Bash: 'Execute the complete shell command in the effective working directory.',
   Edit: 'Replace matching text in the resolved file.',
   Write: 'Create or overwrite the resolved file.',
+  [FILE_PATCH_TOOL_NAME]: 'Apply the complete patch, including each file addition, edit, move, or deletion.',
+  [NOTEBOOK_EDIT_TOOL_NAME]: 'Insert, replace, or delete the specified cell in the notebook.',
   Read: 'Read data from the resolved file.',
   REPL: 'Admit the complete submitted source to the isolated Script interpreter. Each child is authorized separately.',
   Agent: 'Launch an agent with the specified assignment and capabilities.',
@@ -44,10 +59,12 @@ const toolEffects: Readonly<Record<string, string>> = {
 
 function projectAction(tool: Tool, input: Input, context: ToolUseContext) {
   const cwd = getCwd()
-  const effect = toolEffects[tool.name]
+  const mcp = isMcpTool(tool)
+  const effectKey = isFilePatchToolName(tool.name) ? FILE_PATCH_TOOL_NAME : tool.name
+  const effect = !mcp && Object.hasOwn(toolEffects, effectKey) ? toolEffects[effectKey] : undefined
   const parameters = { ...input }
   let execution: Input | undefined
-  if (!tool.isMcp && tool.name === 'Bash') {
+  if (!mcp && tool.name === 'Bash') {
     // Descriptions describe the agent's intent. Execution flags are engine data.
     const { description: _description, ...bash } = input as BashToolInput
     return { cwd, effect, input: bash, execution: {
@@ -56,22 +73,30 @@ function projectAction(tool: Tool, input: Input, context: ToolUseContext) {
       workLifetime: input.work_lifetime ?? 'finite',
     } }
   }
-  if (!tool.isMcp && ['Read', 'Edit', 'Write'].includes(tool.name) && typeof input.file_path === 'string') {
-    const path = expandPath(input.file_path, cwd)
-    parameters.file_path = path
+  const fileParameter = tool.name === NOTEBOOK_EDIT_TOOL_NAME ? 'notebook_path' : 'file_path'
+  if (!mcp && (['Read', 'Edit', 'Write'].includes(tool.name) || tool.name === NOTEBOOK_EDIT_TOOL_NAME) &&
+      typeof input[fileParameter] === 'string') {
+    const path = expandPath(input[fileParameter], cwd)
+    parameters[fileParameter] = path
     let target = path
     try { target = realpathSync(path) } catch {
       try { target = join(realpathSync(dirname(path)), basename(path)) } catch { /* parent may also be new */ }
     }
     execution = { target, ...(tool.name === 'Write' && { operation: existsSync(path) ? 'overwrite' : 'create' }) }
   }
-  if (!tool.isMcp && tool.name === 'REPL') {
+  if (!mcp && isFilePatchToolName(tool.name)) {
+    const prepared = getPreparedFileMutationSet(context, tool.name, input)
+    if (prepared) execution = { targets: [...prepared.byPath].map(([path, target]) => ({
+      path, resolved: target.actualPath ?? target.canonicalPath,
+    })) }
+  }
+  if (!mcp && tool.name === 'REPL') {
     execution = { background: input.run_in_background === true, interpreter: context.agentId ?? 'session' }
   }
-  if (tool.isMcp) {
+  if (mcp) {
     execution = { server: tool.mcpInfo?.serverName, serverTool: tool.mcpInfo?.toolName }
   }
-  return { cwd, input: parameters, effect: tool.isMcp ? undefined : effect, execution }
+  return { cwd, input: parameters, effect, execution }
 }
 
 function containsCredentialMaterial(value: string): boolean {
@@ -100,13 +125,14 @@ export async function createContextualAttempt(
 ) {
   const mode = readMode()
   if (!mode) return undefined
+  const mcp = isMcpTool(tool)
   // The engine's typed question receipt authorizes its display and answer.
   // Any action proposed in response still goes through its own permission check.
-  if (!tool.isMcp && !tool.mcpInfo && tool.name === ASK_USER_QUESTION_TOOL_NAME) return undefined
+  if (!mcp && tool.name === ASK_USER_QUESTION_TOOL_NAME) return undefined
   const snapshot = structuredClone(input)
   const action = projectAction(tool, snapshot, context)
   const peerParent = await resolveContextualPeerParent(context,
-    tool.name === 'Announce' && !tool.isMcp && !tool.mcpInfo ? context.lookupLegacyPeerCreator : undefined)
+    !mcp && tool.name === 'Announce' ? context.lookupLegacyPeerCreator : undefined)
   const authority = readContextualAuthority(context, peerParent)
   const policy: ToolPermissionContext = structuredClone(context.getAppState().toolPermissionContext)
   const instructions = getSourcedAutoModeInstructions()
@@ -114,9 +140,8 @@ export async function createContextualAttempt(
   const { cellId, generation } = assistant.codeMode ?? {}
   // Script admission grants the isolated interpreter a single invocation.
   // The calls it submits carry their own delegated mutation gate.
-  const delegatedMutation = authority.delegated && mayChangeState(tool) && (tool.isMcp || tool.name !== 'REPL')
-  const useLegacyMcpReviewer = mode === 'experimental' && tool.isMcp === true &&
-    tool.mcpInfo !== undefined && !authority.delegated
+  const delegatedMutation = authority.delegated && mayChangeState(tool) && (mcp || tool.name !== 'REPL')
+  const useLegacyReviewer = mode === 'experimental' && !action.effect && !authority.delegated
   const attemptId = randomUUID()
   const startedAt = Date.now()
   let review: Promise<PermissionDecision> | undefined
@@ -126,16 +151,23 @@ export async function createContextualAttempt(
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
   let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
+  let boundProjection: { value: unknown } | undefined
+
+  function currentProjection(): unknown {
+    try { return tool.toAutoClassifierInputForUse?.(input, toolUseId) }
+    catch { return undefined }
+  }
 
   function current(candidate: Input, releasedContext: ToolUseContext): boolean {
     const latest = readContextualAuthority(releasedContext, peerParent)
-    const liveMcp = tool.isMcp && releasedContext.options.getMcpRuntimeSnapshot?.()
+    const liveMcp = mcp && releasedContext.options.getMcpRuntimeSnapshot?.()
     const principalContext = liveMcp ? { ...releasedContext, options: { ...releasedContext.options, mcpClients: [...liveMcp.clients] } } : releasedContext
     return !latest.pendingOperatorInput && !latest.stopped && isDeepStrictEqual(latest, authority) &&
       isDeepStrictEqual(candidate, snapshot) &&
       isDeepStrictEqual(releasedContext.getAppState().toolPermissionContext, policy) &&
       isDeepStrictEqual(getSourcedAutoModeInstructions(), instructions) &&
       codeModeToolPrincipal(tool, principalContext) === principal &&
+      (!boundProjection || isDeepStrictEqual(currentProjection(), boundProjection.value)) &&
       isDeepStrictEqual(projectAction(tool, candidate, releasedContext), action)
   }
 
@@ -143,7 +175,7 @@ export async function createContextualAttempt(
     if (mode !== 'experimental') return
     lastOutcome = outcome
     const event: AutoModeReview = { type: 'tool.review', toolUseId, attemptId, startedAt, outcome,
-      ...(!useLegacyMcpReviewer && { reviewer }),
+      ...(!useLegacyReviewer && { reviewer }),
       ...(outcome !== 'reviewing' && { completedAt: Math.max(startedAt, Date.now()) }),
       ...(reason && { reason }) }
     persistAutoModeReview(event)
@@ -178,10 +210,24 @@ export async function createContextualAttempt(
     if (delegatedMutation && !authority.verifiedSource) {
       return ask('This helper has no verified user assignment for the requested action.')
     }
-    if (!action.effect) return ask('Auto Mode cannot verify the effects of this tool.')
+    let effect = action.effect
+    if (!effect && !mcp) {
+      try {
+        effect = (await tool.description(input, {
+          isNonInteractiveSession: context.options.isNonInteractiveSession,
+          toolPermissionContext: policy,
+          tools: context.options.tools,
+        })).trim()
+      } catch { /* Missing effect information requires a human decision. */ }
+      if (!current(input, context)) return stale('The assignment or action changed before review.')
+    }
+    if (!effect) return ask('Auto Mode cannot verify the effects of this tool.')
+    const resolvedAction = currentProjection()
+    if (resolvedAction !== undefined) boundProjection = { value: structuredClone(resolvedAction) }
     const source = context.autoModeInstructionContext ?? undefined
     const evidence = {
-      action: { ...action, effect: action.effect, attempt: toolUseId, actor: authority.actor,
+      action: { ...action, effect, attempt: toolUseId, actor: authority.actor,
+        ...(boundProjection && { execution: { ...action.execution, resolvedAction: boundProjection.value } }),
         tool: tool.name, ...(cellId && generation && { script: { cellId, generation, source: context.contextualParentScriptSource } }) },
       assignment: authority.assignment,
       conversation: authority.conversation,
@@ -218,9 +264,10 @@ export async function createContextualAttempt(
   }
 
   return {
-    id: toolUseId, mode, delegatedMutation, useLegacyMcpReviewer, get requiresHuman() { return requiresHuman },
+    id: toolUseId, mode, delegatedMutation, useLegacyReviewer, reviewFileMutation: needsContextualFileReview(tool),
+    get requiresHuman() { return requiresHuman },
     review: () => review ??= reviewHeldAction(),
-    checkLegacyMcpReview(projection: unknown): PermissionDecision | undefined {
+    checkLegacyReview(projection: unknown): PermissionDecision | undefined {
       if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
       if (!current(input, context)) return stale('The assignment or action changed before review.')
       const evidence = { action, projection, conversation: authority.conversation,
@@ -228,6 +275,8 @@ export async function createContextualAttempt(
       if (containsCredentialMaterial(JSON.stringify(evidence)) || containsCredentialMaterial(JSON.stringify(instructions))) {
         return ask('The action or its context may contain credentials.')
       }
+      const resolvedAction = currentProjection()
+      if (resolvedAction !== undefined) boundProjection = { value: structuredClone(resolvedAction) }
     },
     requireHuman(reason: string) { return ask(reason) },
     recordHuman(candidate: Input, replyContext: ToolUseContext) {
