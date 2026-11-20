@@ -9,7 +9,7 @@ import type { PermissionDecision } from '../../types/permissions.js'
 import { recordToolReview } from '../../app-runtime/toolActivity.js'
 import { persistAutoModeReview } from '../../app-runtime/autoModeReviewPersistence.js'
 import type { AutoModeReview } from '../../app-runtime/autoModeReviewContract.js'
-import { scanForSecrets } from '../../services/teamMemorySync/secretScanner.js'
+import { redactSecrets, scanForSecrets } from '../../services/teamMemorySync/secretScanner.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import { isFilePatchToolName, FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
@@ -24,7 +24,9 @@ import { expandPath } from '../path.js'
 import { getSourcedAutoModeInstructions } from '../settings/settings.js'
 import { buildContextualReview, contextualReviewerProfile, sendContextualReview } from './contextualReviewer.js'
 import { CONTEXTUAL_REVIEW_VERSION } from './contextualReviewPrompt.js'
-import { readContextualAuthority, resolveContextualPeerParent } from './contextualAuthority.js'
+import { readContextualAuthority, recentShellRuns, resolveContextualPeerParent } from './contextualAuthority.js'
+import { createDenialTrackingState, DENIAL_LIMITS, persistDenialState, recordDenial, recordSuccess } from './denialTracking.js'
+import type { ContextualEvidence } from './contextualReviewPrompt.js'
 import { recordAutoModeOutcome } from './autoModeMeta.js'
 import { collectPermissionDecisionContexts } from './permissionDecisionContext.js'
 import { getConfiguredAutoModeModel } from './yoloClassifier.js'
@@ -103,40 +105,74 @@ function containsCredentialMaterial(value: string): boolean {
     scanForSecrets(value).length > 0
 }
 
+// Keep the surrounding instruction (including any withdrawal). Unrecognized
+// formats still take the existing human-only path in the final payload scan.
+function redactOldText(text: string): string {
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/iu.test(text)) return text
+  return redactSecrets(text)
+    .replace(/\b(?:sk-(?:ant-|proj-)?[a-z0-9_-]{15,}|gh[pousr]_[a-z0-9]{20,}|eyJ[a-z0-9_-]{15,}\.[a-z0-9_-]{10,}(?:\.[a-z0-9_-]+)?)/giu, '[…]')
+}
+
+function redactHistory(rows: ContextualEvidence['conversation']) {
+  const latest = rows.findLast(row => row.origin === 'operator')
+  return rows.map(row => row === latest ? row : { ...row, text: redactOldText(row.text),
+    ...(row.proposal && { proposal: { ...row.proposal, text: redactOldText(row.proposal.text) } }) })
+}
+
 // Roster text is visible to other sessions. Only ordinary development vocabulary
 // and workspace paths take the automatic route; open-ended prose goes to review.
 const scopeWords = new Set((
-  'a the this and or for to of in on with from under before after only may will ' +
+  'a the this and or for to of in on with from under before after only may will no ' +
   'work working inspect inspecting investigate investigating check checking read reading review reviewing ' +
   'fix fixing update updating change changing add adding remove removing edit editing implement implementing ' +
   'run running verify verifying test testing debug debugging build building clean cleaning refactor refactoring ' +
   'docs documentation source code project workspace shared local native sandbox sandboxed browser chrome codex cat ' +
   'launch launches layout renderer desktop app ui api tool tools script scripts runner helper helpers ' +
-  'regression tests checks file files config configuration component components module modules permission permissions'
+  'regression tests checks file files config configuration component components module modules permission permissions ' +
+  'changes edits writes reads paths scoped read-only focused overlapping existing unrelated preserve isolated ' +
+  'offline checks coordination peer session engine runtime sidecar implementation smoke fixtures validation ' +
+  'implement notifications dock badge end decision os active queued corrections queue policy owner map ' +
+  'sidebar tab activity selectors indicators include subagents working plan audit integration results'
 ).split(' '))
 
 function routineScopeNotice(input: Input, cwd: string): boolean {
-  if (input.note !== undefined || typeof input.doing !== 'string' ||
-      !/^[a-z0-9_ .,;/-]+$/iu.test(input.doing) || containsCredentialMaterial(JSON.stringify(input))) return false
-  const namedPaths = Array.isArray(input.touches) ? input.touches : []
-  if (!input.doing.split(/[ ,;]+/u).every(word => !word || scopeWords.has(word.toLowerCase().replace(/\.$/u, '')) ||
-      namedPaths.includes(word) || word.split(/[-/]/u).every(part => scopeWords.has(part.toLowerCase())))) return false
-  if (input.touches === undefined) return true
-  if (!Array.isArray(input.touches)) return false
-  return input.touches.every(touch => {
-    if (typeof touch !== 'string' || isAbsolute(touch) || touch.split('/').some(part => part.startsWith('.')) ||
-        !/^[a-z0-9_./ -]+$/iu.test(touch)) return false
-    // A scope can name an area, e.g. "app/renderer browser test files".
-    const inWorkspace = (path: string) => {
+  if (typeof input.doing !== 'string' || containsCredentialMaterial(JSON.stringify(input))) return false
+  const touches = input.touches ?? []
+  if (!Array.isArray(touches)) return false
+  let root: string
+  try { root = realpathSync(cwd) } catch { return false }
+  const inWorkspace = (path: string) => {
+    const rel = relative(root, path)
+    return rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel) && !rel.split('/').some(part => part.startsWith('.'))
+  }
+  const components = new Set<string>()
+  const validTouches = touches.every(touch => {
+    if (typeof touch !== 'string' || !/^[a-z0-9_./ *~-]+$/iu.test(touch) || touch.split('/').includes('..')) return false
+    const checkedPath = (entry: string) => {
+      const path = expandPath(entry, cwd)
+      if (!inWorkspace(path)) return false
+      // A conventional test/source glob is a displayed scope, never expanded.
+      const literal = /^\*(?:\.(?:layout|test|spec))?\.(?:[jt]sx?|css|md|json|py|txt)$/iu.test(basename(path))
+        ? dirname(path) : path
       try {
-        const rel = relative(realpathSync(cwd), realpathSync(resolve(cwd, path)))
-        return rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel)
+        if (!inWorkspace(realpathSync(literal))) return false
+        const name = relative(root, literal).replace(/([a-z])([A-Z])/gu, '$1 $2')
+        for (const part of name.toLowerCase().split(/[^a-z]+/u)) if (part.length > 1) components.add(part)
+        return true
       } catch { return false }
     }
-    if (inWorkspace(touch)) return true
+    if (checkedPath(touch)) return true
     const [area, ...words] = touch.split(/ +/u)
-    return words.length > 0 && inWorkspace(area!) && words.every(word => scopeWords.has(word.toLowerCase()))
+    return words.length > 0 && checkedPath(area!) && words.every(word => scopeWords.has(word.toLowerCase()))
   })
+  if (!validTouches) return false
+  const routineText = (text: unknown) => typeof text === 'string' && /^[a-z0-9_ .,;:()/*~+-]+$/iu.test(text) &&
+    text.split(/[ ,;:()]+/u).every(token => {
+      const word = token.replace(/\.$/u, '')
+      return !word || touches.includes(word) || word.toLowerCase().split(/[-/]/u)
+        .every(part => scopeWords.has(part) || components.has(part))
+    })
+  return routineText(input.doing) && (input.note === undefined || routineText(input.note))
 }
 
 function readMode(): ReviewMode | undefined {
@@ -178,6 +214,11 @@ export async function createContextualAttempt(
   const delegatedMutation = authority.delegated && mayChangeState(tool, snapshot) && (mcp || tool.name !== 'REPL')
   const latestOperator = authority.conversation.findLast(row => row.origin === 'operator' && row.id)
   const newOperatorTurn = latestOperator && !context.messages.some(row => row.uuid === latestOperator.id)
+  const followUps = [...authority.pendingConversation, ...(newOperatorTurn && latestOperator ? [latestOperator] : [])]
+  // A queued restriction may cover a read as well as a write. Route it to the
+  // reviewer for scope; a normal question can drain with an already-approved read.
+  const possibleReadWithdrawal = followUps.some(({ text }) =>
+    /\b(?:stop|cancel|pause|hold off|off limits|off-limits|withdraw|revoke|leave .{0,60} alone)\b|\b(?:do not|don['’]t|never|avoid|no (?:more|further))\s+(?:read|access|open|inspect|search|look|use|run|touch|scroll|take|capture)/iu.test(text))
   let reviewedInstructions = false
   let attemptId = randomUUID()
   let startedAt = Date.now()
@@ -232,7 +273,7 @@ export async function createContextualAttempt(
   function needsInstructionReview(): boolean {
     // A busy prompt drains at the end of the tool round. Reads already allowed
     // under this snapshot may finish it; later authority changes still fence release.
-    return (mayChangeState(tool, snapshot) && !reviewedInstructions && (newOperatorTurn || authority.pendingConversation.length > 0)) ||
+    return (!reviewedInstructions && (possibleReadWithdrawal || mayChangeState(tool, snapshot) && followUps.length > 0)) ||
       !isDeepStrictEqual(readContextualAuthority(context, peerParent), authority)
   }
 
@@ -263,7 +304,11 @@ export async function createContextualAttempt(
     const audience = /\b(?:privat\w*|confidential\w*|secret\w*|disclos\w*|announc\w*|roster|peers?|share|sharing|broadcast|notify|quiet\w*|tell|mention|between us|to yourself)\b/iu
     const workspace = workspaceInstructionsForReview(context.autoModeInstructionContext) ?? ''
     const standingNoticeRule = /(?:do not|never|must not|avoid|ask before|only|don't)[^.!?\n]{0,100}\b(?:announc\w*|roster|post to peers|share with peers)\b|\b(?:announc\w*|roster)\b[^.!?\n]{0,80}(?:forbidden|prohibited|approval|private)/iu
-    if ([...operatorText, authority.assignment?.text ?? ''].some(text => audience.test(text) || /\bpost(?:ing)?\b/iu.test(text)) ||
+    const mayRestrictNotice = (text: string) => {
+      const scoped = text.replace(/\b(?:tell me|mention (?:it |this )?to me|private (?:method|field|function|class))\b/giu, '')
+      return audience.test(scoped) || /\b(?:post(?:ing)?|silently|silent|under wraps|nothing else)\b/iu.test(scoped)
+    }
+    if ([...operatorText, authority.assignment?.text ?? ''].some(mayRestrictNotice) ||
         restrictions.some(text => audience.test(text)) || standingNoticeRule.test(workspace) ||
         !routineScopeNotice(input, action.cwd)) return undefined
     actionAllowed = true
@@ -311,10 +356,10 @@ export async function createContextualAttempt(
     if (delegatedMutation && !authority.verifiedSource) {
       return ask('This helper has no verified user assignment for the requested action.')
     }
-    let effect = action.effect
-    if (!effect) {
+    let toolDescription: string | undefined
+    if (!action.effect) {
       try {
-        effect = (await tool.description(input, {
+        toolDescription = (await tool.description(input, {
           isNonInteractiveSession: context.options.isNonInteractiveSession,
           toolPermissionContext: policy,
           tools: context.options.tools,
@@ -322,7 +367,7 @@ export async function createContextualAttempt(
       } catch { /* The reviewer still receives the tool principal and complete arguments. */ }
       if (!refreshInstructions()) return stale('The assignment or action changed before review.')
     }
-    effect ||= 'Invoke the named tool with the supplied arguments. Its description is unavailable.'
+    const effect = action.effect ?? 'Invoke the named tool with the supplied arguments.'
     const resolvedAction = currentProjection()
     if (resolvedAction !== undefined) boundProjection = { value: structuredClone(resolvedAction) }
     const source = workspaceInstructionsForReview(context.autoModeInstructionContext)
@@ -332,7 +377,13 @@ export async function createContextualAttempt(
     const changedLines = path && previous && isCompleteUnboundedRead(previous) && typeof input.content === 'string'
       ? getPatchFromContents({ filePath: path, oldContent: previous.content, newContent: input.content }).flatMap(hunk => hunk.lines)
       : undefined
+    const conversation = [...authority.conversation, ...authority.pendingConversation]
+    const runs = recentShellRuns(context.getCurrentAutoModeMessages?.() ?? context.messages, conversation, context.contextualWorkerAssignment?.excluded)
     const evidence = {
+      ...(toolDescription && { toolDescription }),
+      ...(!mcp && tool.name === 'Bash' && typeof input.description === 'string' && { agentStatedPurpose: input.description }),
+      ...(runs.length && { recentShellRuns: runs.map(run => run.proposedCommand && containsCredentialMaterial(run.proposedCommand)
+        ? { ...run, proposedCommand: undefined } : run) }),
       action: { ...action, effect, attempt: toolUseId, actor: authority.actor,
         execution: { ...action.execution,
           ...(changedLines?.length && { changeSinceCompleteRead: {
@@ -341,12 +392,13 @@ export async function createContextualAttempt(
           } }),
           ...(boundProjection && { resolvedAction: boundProjection.value }) },
         tool: tool.name, ...(cellId && generation && { script: { cellId, generation, source: context.contextualParentScriptSource } }) },
-      assignment: authority.assignment,
-      conversation: [...authority.conversation, ...authority.pendingConversation],
+      assignment: authority.assignment?.parent
+        ? { ...authority.assignment, parent: redactHistory(authority.assignment.parent) } : authority.assignment,
+      conversation: redactHistory(conversation),
       priorDecisions: collectPermissionDecisionContexts(context.messages).slice(-16).map(decision => ({
         action: decision.toolName, outcome: decision.outcome,
       })),
-      workspaceInstructions: source,
+      workspaceInstructions: source && redactOldText(source),
     }
     const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
     const built = buildContextualReview(evidence, profile, instructions)
@@ -372,11 +424,19 @@ export async function createContextualAttempt(
     const reason = containsCredentialMaterial(rationale) ? 'Auto Mode reviewed the proposed action.' : rationale
     if (decision === 'ask') return ask(reason)
     const decisionReason = { type: 'classifier' as const, classifier: 'auto-mode', reason }
-    emit(decision === 'allow' ? 'allowed' : 'blocked', reason)
     if (decision === 'deny') {
+      if (mode === 'experimental') {
+        const state = recordDenial(context.localDenialTracking ?? context.getAppState().denialTracking ?? createDenialTrackingState())
+        persistDenialState(context, state)
+        if (!policy.shouldAvoidPermissionPrompts && state.consecutiveDenials >= DENIAL_LIMITS.maxConsecutive) {
+          return ask(`${state.consecutiveDenials} consecutive actions received a deny. Latest reason: ${reason}`)
+        }
+      }
+      emit('blocked', reason)
       if (mode === 'experimental') recordAutoModeOutcome(toolUseId, 'automode-blocked')
       return { behavior: 'deny', message: reason, decisionReason }
     }
+    emit('allowed', reason)
     actionAllowed = true
     return { behavior: 'allow', updatedInput: input, decisionReason }
   }
@@ -400,6 +460,10 @@ export async function createContextualAttempt(
       if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation && !actionAllowed)) {
         stale('The approval no longer matches the current action, assignment or permissions.')
         return false
+      }
+      if (mode === 'experimental') {
+        const state = releasedContext.localDenialTracking ?? releasedContext.getAppState().denialTracking
+        if (state?.consecutiveDenials) persistDenialState(releasedContext, recordSuccess(state))
       }
       used = true
       return true

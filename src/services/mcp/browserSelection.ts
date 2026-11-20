@@ -17,7 +17,7 @@ export function admitBrowserSelection(connection: ConnectedMCPServer, tool: stri
   const config = connection.config
   if (connection.name !== 'codex-computer-use' || connection.serverInfo?.name !== 'codex-computer-use-mcp' ||
       config.scope !== 'user' || (config.type !== undefined && config.type !== 'stdio') ||
-      !isAbsolute(config.command) || basename(config.command) !== 'node' ||
+      !('command' in config) || !('args' in config) || !isAbsolute(config.command) || basename(config.command) !== 'node' ||
       config.args.length !== 1 || config.args[0] !== join(homedir(), '.local/share/codex-computer-use-mcp/local/dist/mcp-server.js') ||
       tool !== 'js' || usedRealms.has(connection.client) || !isBrowserSelection(args)) return false
   selected.set(attempt, connection.client)

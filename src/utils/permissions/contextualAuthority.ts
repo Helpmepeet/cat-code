@@ -115,6 +115,45 @@ function conversationEvidence(
   return evidence
 }
 
+// Only typed Bash results paired to their originating call describe execution.
+export function recentShellRuns(messages: readonly Message[], conversation: Conversation, excluded?: ReadonlySet<string>) {
+  const operatorIds = new Set(conversation.filter(row => row.origin === 'operator').map(row => row.id))
+  type Run = NonNullable<ContextualEvidence['recentShellRuns']>[number]
+  const calls = new Map<string, { uuid: string; metadata: Omit<Run, 'outcome'> }>()
+  const runs: Run[] = []
+  let afterOperatorId: string | undefined
+  for (const row of messages) {
+    if (excluded?.has(row.uuid)) continue
+    if (operatorIds.has(row.uuid)) afterOperatorId = row.uuid
+    if (row.type === 'assistant' && isLiveAssistant(row) && !row.codeMode) {
+      for (const block of row.message.content) {
+        if (block.type !== 'tool_use' || block.name !== 'Bash') continue
+        const input = block.input
+        if (!input || typeof input !== 'object' || !('command' in input) || typeof input.command !== 'string') continue
+        calls.set(block.id, { uuid: row.uuid, metadata: { attempt: block.id, afterOperatorId,
+          ...(input.command.length <= 2048 && { proposedCommand: input.command }) } })
+      }
+    }
+    if (row.type !== 'user' || row.origin || row.isMeta || row.isVirtual || row.isCompactSummary ||
+        row.isVisibleInTranscriptOnly || !row.sourceToolAssistantUUID || !Array.isArray(row.message.content)) continue
+    const result = row.toolUseResult
+    if (!result || typeof result !== 'object' || !('interrupted' in result) || typeof result.interrupted !== 'boolean' ||
+        !('stdout' in result) || typeof result.stdout !== 'string' || !('stderr' in result) || typeof result.stderr !== 'string') continue
+    for (const block of row.message.content) {
+      if (block.type !== 'tool_result') continue
+      const call = calls.get(block.tool_use_id)
+      if (call?.uuid !== row.sourceToolAssistantUUID || (block.is_error && !result.interrupted)) continue
+      runs.push({ ...call.metadata,
+        ...('dangerouslyDisableSandbox' in result && typeof result.dangerouslyDisableSandbox === 'boolean' &&
+          { sandboxOverrideRequested: result.dangerouslyDisableSandbox }),
+        outcome: result.interrupted ? 'interrupted'
+        : 'backgroundTaskId' in result && result.backgroundTaskId ? 'background' : 'completed' })
+      calls.delete(block.tool_use_id)
+    }
+  }
+  return runs.slice(-8)
+}
+
 function stopped(messages: readonly Message[], evidence: Conversation): boolean {
   const lastOperator = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
   for (let index = messages.length - 1; index >= 0; index--) {

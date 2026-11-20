@@ -94,11 +94,44 @@ for (const withdrawal of [false, true]) {
   }, 30_000)
 }
 
-test('four contextual denials hold their actions and a subsequent ask takes a human answer', async () => {
+test('the third consecutive model denial goes to a human and approval resets the streak', async () => {
   const proof = await run('native-denials-then-ask')
   expect(proof.requests).toHaveLength(5)
-  expect(proof.prompts.map((request: any) => request.tool_use_id)).toEqual(['action-4'])
-  expect(proof.effect).toBe('effect')
+  expect(proof.prompts.map((request: any) => request.tool_use_id)).toEqual(['action-2', 'action-4'])
+  expect(proof.prompts.every((p: any) => p.human_only === true)).toBe(true)
+  expect(proof.requests[2].content.recentShellRuns).toBeUndefined()
+  expect(proof.requests[3].content.recentShellRuns).toEqual([expect.objectContaining({ attempt: 'action-2', outcome: 'completed' })])
+  expect(proof.effect).toBe('effecteffect')
+}, 30_000)
+
+test('three denials without an interactive approver keep every command held', async () => {
+  const proof = await run('native-denials-headless')
+  expect(proof.requests).toHaveLength(5)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBeNull()
+}, 30_000)
+
+for (const stopped of [true, false]) {
+  test(`a queued ${stopped ? 'withdrawal' : 'summary request'} reaches an already-permitted browser read`, async () => {
+    const proof = await run(`native-browser-read-queued-${stopped ? 'stop' : 'summary'}`)
+    expect(proof.browserCalls).toBe(stopped ? 0 : 1)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(stopped ? ['BrowserRead'] : [])
+  }, 30_000)
+}
+
+test('a completed one-time check reaches review of a new restricted check without output or old credentials', async () => {
+  const proof = await run('native-two-checks')
+  const { content } = proof.requests.at(-1)
+  const answer = content.conversation.find((row: any) => row.text.includes('Run the launch check once.'))
+  expect(answer?.origin).toBe('operator')
+  expect(content.recentShellRuns).toEqual([{ attempt: 'action-1', afterOperatorId: answer.id,
+    proposedCommand: 'cat a.txt | tee -a effects.txt', sandboxOverrideRequested: true, outcome: 'completed' }])
+  expect(content.action.execution.sandboxOverrideRequested).toBe(false)
+  expect(content.agentStatedPurpose).toBe('Verify the restricted failure path')
+  expect(content.conversation.some((row: any) => row.text.startsWith('Do not push.'))).toBe(true)
+  expect(JSON.stringify(proof.requests)).not.toContain('A'.repeat(36))
+  expect(JSON.stringify(content)).not.toContain('"old"')
+  expect(proof.effect).toBe('oldchecked')
 }, 30_000)
 
 for (const [scenario, tool] of [['main-peer-create', 'CreatePeer'], ['main-peer-send', 'SendToPeer']] as const) {
@@ -167,7 +200,7 @@ for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
       expect(proof.prompts).toHaveLength(0)
       expect(proof.requests).toContainEqual(expect.objectContaining({
         contextual: true, content: expect.objectContaining({ action: expect.objectContaining({
-          tool: 'mcp__fixture__records', effect: 'Synthetic records integration tool', input: { key: 'sample' },
+          tool: 'mcp__fixture__records', effect: 'Invoke the named tool with the supplied arguments.', input: { key: 'sample' },
           execution: expect.objectContaining({ server: 'fixture', serverTool: 'records' }),
         }) }),
       }))
@@ -208,14 +241,14 @@ for (const scenario of ['mcp-browser-select', 'mcp-browser-extra', 'mcp-browser-
   }, 30_000)
 }
 
-for (const scenario of ['native-scope-notice', 'native-scope-notice-sensitive', 'native-scope-notice-private',
+for (const scenario of ['native-scope-notice', 'native-scope-notice-note', 'native-scope-notice-sensitive', 'native-scope-notice-private',
   'native-fingerprint', 'native-fingerprint-rule', 'native-scope-notice-ask', 'native-fingerprint-write', 'native-helper-goal', 'native-helper-symbol']) {
   test(scenario, async () => {
     const proof = await run(scenario)
     const held = ['native-scope-notice-sensitive', 'native-fingerprint-write'].includes(scenario)
     expect(proof.requests.length).toBe(held ? 1 : 0)
     expect(proof.prompts).toHaveLength(scenario === 'native-scope-notice-ask' ? 1 : 0)
-    if (scenario === 'native-scope-notice') expect(proof.postedNotices).toHaveLength(1)
+    if (scenario === 'native-scope-notice' || scenario === 'native-scope-notice-note') expect(proof.postedNotices).toHaveLength(1)
     if (scenario === 'native-scope-notice-private' || scenario === 'native-scope-notice-ask') expect(proof.postedNotices).toHaveLength(0)
     if (scenario.startsWith('native-fingerprint') && scenario !== 'native-fingerprint-write') {
       const result = proof.transcript.find((row: any) =>

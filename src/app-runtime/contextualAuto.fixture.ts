@@ -7,11 +7,12 @@ const root = process.env.CONTEXTUAL_AUTO_TEST_ROOT!
 const scenario = process.env.CONTEXTUAL_AUTO_TEST_SCENARIO!
 const legacyNotice = scenario.startsWith('legacy-notice-')
 const backgroundWithdrawal = scenario === 'background-withdrawal'
-const repeatedDenials = scenario === 'native-denials-then-ask'
+const repeatedDenials = scenario.startsWith('native-denials-')
 const cleanup = scenario.startsWith('native-cleanup-')
 const keepSetting = scenario === 'native-cleanup-withdrawal'
 const followUp = keepSetting ? 'Keep the old setting in local.mjs until tomorrow.' : 'Also give me a short summary after the checks.'
-const questionReply = scenario === 'question-reply'
+const twoChecks = scenario === 'native-two-checks'
+const questionReply = scenario === 'question-reply' || twoChecks
 const lateCorrection = scenario === 'direct-late-correction'
 const credentialSettings = scenario === 'direct-credential-settings'
 const compacted = scenario.startsWith('compacted-')
@@ -23,8 +24,9 @@ const browserAction = scenario.startsWith('native-browser')
 const scopeNotice = scenario.startsWith('native-scope-notice')
 const fingerprint = scenario.startsWith('native-fingerprint')
 const helperRead = scenario === 'native-helper-goal' || scenario === 'native-helper-symbol'
+const queuedBrowserRead = scenario.startsWith('native-browser-read-queued')
 const browserPeer = scenario === 'native-browser-peer'
-const browserRead = scenario === 'native-browser-read' || scenario === 'native-browser-screenshot'
+const browserRead = scenario.startsWith('native-browser-read') || scenario === 'native-browser-screenshot'
 const browserReadTool = scenario === 'native-browser-screenshot' ? 'BrowserScreenshot' : 'BrowserRead'
 const browserScroll = scenario === 'native-browser-scroll'
 const browserTarget = browserScroll ? 'scroll on localhost:3000' : 'click button Save changes on localhost:3000'
@@ -62,8 +64,8 @@ if (loadSkill) {
 const action = (name: string) => ({ name: 'Edit', input: { file_path: join(cwd, name + '.txt'), old_string: 'old', new_string: 'new' } })
 const command = { name: 'Bash', input: { command: 'printf effect >> effects.txt', work_lifetime: 'finite', run_in_background: false } }
 const question = { name: 'AskUserQuestion', input: { questions: [
-  { question: 'How should I handle this file?', options: [
-    { label: 'Inspect', description: 'Leave the file untouched.' },
+  { question: twoChecks ? 'May I run the launch check outside the sandbox once?' : 'How should I handle this file?', options: [
+    { label: 'Inspect', description: twoChecks ? 'Run the launch check once.' : 'Leave the file untouched.' },
     { label: 'Edit', description: 'Update the file.' },
   ], multiSelect: false },
 ] } }
@@ -88,6 +90,7 @@ const code = scenario === 'skip-queued'
     : `await tools.call(${JSON.stringify(command)}); output("after approval");`
 const submitted = scopeNotice ? { name: 'Announce', input: {
   doing: 'Fix native Chrome launches from sandboxed tests; may edit test helpers.', touches: ['a.txt'],
+  ...(scenario === 'native-scope-notice-note' && { note: 'Read only, no edits.', touches: ['./a.txt', join(cwd, 'a.txt'), '*.test.ts'] }),
   ...(scenario === 'native-scope-notice-sensitive' && { note: 'Personal information for the work log' }),
 } } : helperRead ? scenario === 'native-helper-goal' ? { name: 'GetGoal', input: {} } :
   { name: 'LSP', input: { operation: 'documentSymbol', filePath: 'a.txt', line: 1, character: 1 } } :
@@ -156,7 +159,7 @@ mock.module('../services/api/client.js', () => ({
       const review = { tool, content, startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
       const operatorText = contextual ? content.conversation.filter((entry: any) => entry.origin === 'operator').map((entry: any) => entry.text) : []
-      const verdict = repeatedDenials ? (requests.length <= 4 ? 'deny' : 'ask')
+      const verdict = twoChecks ? 'allow' : repeatedDenials ? (requests.length <= 4 ? 'deny' : 'ask')
         : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
         : operatorText.some((text: string) => text === 'Stop. Leave all files untouched.' ||
           text === 'Stop. Do not access the records.' || text === 'Stop the background task. Leave the file untouched.' ||
@@ -196,15 +199,25 @@ mock.module('../services/api/client.js', () => ({
     }
     const index = modelCalls++
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
-    const main = scenario === 'mcp-browser-used' ? (index === 0
+    const invocation = twoChecks ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
+    let check
+    if (twoChecks && index > 0) {
+      check = index === 1
+        ? { name: 'Bash', input: { command: 'cat a.txt | tee -a effects.txt', description: 'Verify the launch path', dangerouslyDisableSandbox: true } }
+        : { name: 'Bash', input: { command: 'CHROME_BIN=/usr/bin/false printf checked >> effects.txt', description: 'Verify the restricted failure path' } }
+    }
+    const main = check ?? (scenario === 'mcp-browser-used' ? (index === 0
       ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? command : cleanupCall || (legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : index === 0 ? submitted
       : questionReply ? command
-      : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } })
+      : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }))
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
+      if (queuedBrowserRead && index === 0) {
+        const { enqueue } = await import('../utils/messageQueueManager.js')
+        enqueue({ mode: 'prompt', value: scenario.endsWith('-stop') ? 'Stop. Do not access the records.' : 'Also summarize the results afterwards.' })
+      }
       if (cleanupCall === cleanupActions.at(-1) && cleanup) {
         const { enqueue } = await import('../utils/messageQueueManager.js')
         enqueue({ mode: 'prompt', value: followUp })
@@ -234,12 +247,13 @@ const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
-if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || scenario.startsWith('trial-')) {
+if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto', isAutoModeAvailable: true,
+  ...(scenario === 'native-denials-headless' && { shouldAvoidPermissionPrompts: true }),
   ...(scenario === 'native-fingerprint-rule' && { alwaysDenyRules: { session: ['Read(./a.txt)'] } }),
   ...(scenario === 'native-scope-notice-ask' && { alwaysAskRules: { session: ['Announce'] } }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
@@ -279,11 +293,11 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
     return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
-      backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || scenario.startsWith('trial-'))
+      backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-'))
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
-  initialMessages: compacted ? [
+  initialMessages: twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
       ...(scenario === 'compacted-relay-marker' && { summarizedRelayedInput: true }) }),
   ] : initial,
@@ -461,6 +475,7 @@ if (surface === 'desktop') {
   if (helperRead) await controller.submit('Inspect the goal and symbols.', {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true },
   })
+  else if (scenario === 'native-scope-notice-note') await controller.submit('Inspect the private method and tell me what you find.')
   else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
     'Investigate the Chrome crash. Keep this investigation private.' : 'Investigate and fix the Chrome crash.')
   else if (cleanup) await controller.submit('yep. up to you')
