@@ -19,6 +19,13 @@ export function runLayoutBrowser(file: string, profile: string, width: number): 
   diagnostics: string
 } {
   if (!layoutBrowser) throw new Error('No layout browser available')
+  // Full Chrome needs macOS application registration even in headless mode.
+  if (process.platform === 'darwin' && process.env.CODEX_SANDBOX === 'seatbelt') {
+    throw new Error(
+      'Chrome layout checks did not run: the Codex macOS sandbox blocks Chrome startup. ' +
+      'Rerun the affected tests with one-time outside-sandbox approval or from a normal Terminal.',
+    )
+  }
   if (browserVersion === undefined) {
     const version = spawnSync(layoutBrowser, ['--version'], {
       encoding: 'utf8', timeout: 5000, maxBuffer: 16_384,
