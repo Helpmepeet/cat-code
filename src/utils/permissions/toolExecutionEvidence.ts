@@ -6,6 +6,8 @@ const MAX_APPROVAL_FEEDBACK_CHARS = 16_384
 
 export type ToolExecutionEvidence = {
   toolUseId: string
+  /** Set once the final Bash invocation is released to the tool. */
+  bashDispatch?: { sandboxOverrideRequested: boolean }
   /** Null records that the input changed and its exact value is unavailable. */
   finalInput?: Record<string, unknown> | null
   /** Passed by final-input authorization only when bound to a human receipt. */

@@ -1,4 +1,3 @@
-import { getEffectiveAutoMode } from '../../src/utils/permissions/permissions.js'
 import { z } from '../../node_modules/zod/v4'
 import { buildTool, type Tool, type ToolUseContext } from '../../src/Tool.js'
 import { parseBrowserArgs, type BrowserRequestArgs, type BrowserRequestValues } from '../shared/browserPane.js'
@@ -49,7 +48,7 @@ export function createBrowserTools(requestHost: PeerHostRequester = requestPeerH
           if (descriptions.size > 128) descriptions.delete(descriptions.keys().next().value!)
         }
         if (verb === 'browser.act' && 'action' in input && input.action === 'scroll' &&
-            getEffectiveAutoMode(context.getAppState().toolPermissionContext)) {
+            context.contextualAutoAttempt?.mode === 'experimental') {
           return { behavior: 'allow' as const, updatedInput: input }
         }
         return { behavior: 'passthrough' as const, message: result.value.description }

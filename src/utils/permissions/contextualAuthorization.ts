@@ -51,6 +51,7 @@ const toolEffects: Readonly<Record<string, string>> = {
   [FILE_PATCH_TOOL_NAME]: 'Apply the complete patch, including each file addition, edit, move, or deletion.',
   [NOTEBOOK_EDIT_TOOL_NAME]: 'Insert, replace, or delete the specified cell in the notebook.',
   Read: 'Read data from the resolved file.',
+  LSP: 'Read the file and send its full contents to the configured language server if it has not opened the document, then request the specified operation.',
   REPL: 'Admit the complete submitted source to the isolated Script interpreter. Each child is authorized separately.',
   Agent: 'Launch an agent with the specified assignment and capabilities.',
   CreatePeer: 'Create a new peer and deliver the specified opening assignment.',
@@ -215,10 +216,14 @@ export async function createContextualAttempt(
   const latestOperator = authority.conversation.findLast(row => row.origin === 'operator' && row.id)
   const newOperatorTurn = latestOperator && !context.messages.some(row => row.uuid === latestOperator.id)
   const followUps = [...authority.pendingConversation, ...(newOperatorTurn && latestOperator ? [latestOperator] : [])]
-  // A queued restriction may cover a read as well as a write. Route it to the
-  // reviewer for scope; a normal question can drain with an already-approved read.
-  const possibleReadWithdrawal = followUps.some(({ text }) =>
-    /\b(?:stop|cancel|pause|hold off|off limits|off-limits|withdraw|revoke|leave .{0,60} alone)\b|\b(?:do not|don['’]t|never|avoid|no (?:more|further))\s+(?:read|access|open|inspect|search|look|use|run|touch|scroll|take|capture)/iu.test(text))
+  // An additive request for the result or a workspace change can drain after
+  // an already-approved read. Review other follow-ups for scoped withdrawals.
+  const mayAffectRead = followUps.some(({ text }) => {
+    const instruction = text.trim()
+    const summary = /^(?:please\s+)?(also\s+)?(?:summarize(?:\s+the\s+(?:work|results|findings))?|(?:give (?:me|us)|include|provide)\s+(?:a\s+)?(?:(?:short|brief)\s+)?summary)(\s+(?:afterwards?|when (?:you(?:'re| are)|it(?:'s| is)) done|after the (?:checks|read|work)))?[.!?]?$/iu.exec(instruction)
+    if (summary?.[1] || summary?.[2]) return false
+    return !/^(?:oh,\s+)?(?:please\s+)?(?:work in|switch to|use)\s+(?:the\s+)?[a-z0-9][a-z0-9_-]*\s+workspace(?:\.\s+use (?:the\s+)?peer ses+ion feature)?[.!?]?$/iu.test(instruction)
+  })
   let reviewedInstructions = false
   let attemptId = randomUUID()
   let startedAt = Date.now()
@@ -273,7 +278,7 @@ export async function createContextualAttempt(
   function needsInstructionReview(): boolean {
     // A busy prompt drains at the end of the tool round. Reads already allowed
     // under this snapshot may finish it; later authority changes still fence release.
-    return (!reviewedInstructions && (possibleReadWithdrawal || mayChangeState(tool, snapshot) && followUps.length > 0)) ||
+    return (!reviewedInstructions && (mayAffectRead || mayChangeState(tool, snapshot) && followUps.length > 0)) ||
       !isDeepStrictEqual(readContextualAuthority(context, peerParent), authority)
   }
 
@@ -292,9 +297,10 @@ export async function createContextualAttempt(
     if (mcp || tool.name !== 'Announce' || !authority.verifiedSource ||
         (authority.delegated && !authority.assignment?.parentAnchor) ||
         authority.stopped || authority.pendingOperatorInput || needsInstructionReview()) return undefined
-    const operatorText = [...(authority.assignment?.parent ?? []), ...authority.conversation]
-      .filter(row => row.origin === 'operator').map(row => row.text)
-    const restrictions = instructions.flatMap(row => [...(row.soft_deny ?? []), ...(row.hard_deny ?? [])])
+    const operatorRows = [...(authority.assignment?.parent ?? []), ...authority.conversation].filter(row => row.origin === 'operator')
+    const operatorText = operatorRows.flatMap(row => row.proposal ? [row.proposal.text, row.text] : [row.text])
+    const settings = instructions.flatMap(row =>
+      [...(row.allow ?? []), ...(row.soft_deny ?? []), ...(row.hard_deny ?? []), ...(row.environment ?? [])])
     if (/(?:^|[.!?]\s+)(?:keep (?:this|this (?:task|work|investigation)) private|(?:do not|don't) (?:announce (?:this|this task)|post (?:a |the )?scope notice))[.!]?$/iu.test(operatorText.at(-1) ?? '')) {
       const reason = 'You asked to keep this work off the workspace roster.'
       return { behavior: 'deny', message: reason, decisionReason: { type: 'other', reason } }
@@ -303,13 +309,16 @@ export async function createContextualAttempt(
     // posting policy concerns a different destination from the workspace roster.
     const audience = /\b(?:privat\w*|confidential\w*|secret\w*|disclos\w*|announc\w*|roster|peers?|share|sharing|broadcast|notify|quiet\w*|tell|mention|between us|to yourself)\b/iu
     const workspace = workspaceInstructionsForReview(context.autoModeInstructionContext) ?? ''
-    const standingNoticeRule = /(?:do not|never|must not|avoid|ask before|only|don't)[^.!?\n]{0,100}\b(?:announc\w*|roster|post to peers|share with peers)\b|\b(?:announc\w*|roster)\b[^.!?\n]{0,80}(?:forbidden|prohibited|approval|private)/iu
+    // Audience limits apply to the roster even when they never name the tool.
+    // Treat uncertain recipients as a reason to review the actual notice.
+    const audienceLimit = /\b(?:discree\w*|discretion|privacy|visibility|embargo\w*|under wraps|in confidence|(?:your|our|my) eyes only|to yourself|between (?:the )?(?:two of us|you and me|us)|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to|leave|leaves) (?:of )?(?:this|our|the current) (?:chat|conversation|session))\b/iu
+    const standingNoticeRule = /(?:do not|never|must not|avoid|ask before|only|don't)[^.!?\n]{0,100}\b(?:announc\w*|roster|peers?|shar\w*|disclos\w*|post|publici\w*)\b|\b(?:announc\w*|roster|shar\w*|post)\b[^.!?\n]{0,80}(?:forbidden|prohibited|approval|private)/iu
     const mayRestrictNotice = (text: string) => {
       const scoped = text.replace(/\b(?:tell me|mention (?:it |this )?to me|private (?:method|field|function|class))\b/giu, '')
-      return audience.test(scoped) || /\b(?:post(?:ing)?|silently|silent|under wraps|nothing else)\b/iu.test(scoped)
+      return audience.test(scoped) || audienceLimit.test(scoped) || /\b(?:post(?:ing)?|silently|silent|nothing else)\b/iu.test(scoped)
     }
-    if ([...operatorText, authority.assignment?.text ?? ''].some(mayRestrictNotice) ||
-        restrictions.some(text => audience.test(text)) || standingNoticeRule.test(workspace) ||
+    if ([...operatorText, authority.assignment?.text ?? '', ...settings].some(mayRestrictNotice) ||
+        audienceLimit.test(workspace) || standingNoticeRule.test(workspace) ||
         !routineScopeNotice(input, action.cwd)) return undefined
     actionAllowed = true
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }

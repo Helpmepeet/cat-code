@@ -1864,6 +1864,12 @@ async function checkPermissionsAndCallTool(
     if (contextualAttempt?.mode === 'experimental' && !contextualAttempt.release(callInput, executionContext)) {
       throw new Error('The approval no longer matches the current action, assignment or permissions.')
     }
+    if (contextualAttempt?.mode === 'experimental' && tool.name === BASH_TOOL_NAME && !isMcpTool(tool)) {
+      toolExecutionEvidence = {
+        ...toolExecutionEvidence, toolUseId: toolUseID,
+        bashDispatch: { sandboxOverrideRequested: callInput.dangerouslyDisableSandbox === true },
+      }
+    }
     const rawResult = await tool.call(
       callInput,
       executionContext,

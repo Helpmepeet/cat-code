@@ -1884,9 +1884,18 @@ export function checkWorkspaceFingerprint(
   policy: ToolPermissionContext,
 ): PermissionResult | undefined {
   if (input.dangerouslyDisableSandbox || input.run_in_background || input.work_lifetime === 'service') return
-  const match = /^git hash-object --no-filters -- (?:([A-Za-z0-9_./-]+)|'([^'\r\n]+)'|"([A-Za-z0-9_./ -]+)")$/u.exec(input.command)
+  const match = /^git hash-object --no-filters -- (?:([A-Za-z0-9_./-]+)|'([A-Za-z0-9_./ -]+)'|"([A-Za-z0-9_./ -]+)")$/u.exec(input.command)
   if (!match || match[0] !== input.command) return
-  const file = resolve(getCwd(), (match[1] ?? match[2] ?? match[3])!)
+  const operand = (match[1] ?? match[2] ?? match[3])!
+  // Permission checks normalize the path. A parent component after a symlink
+  // can resolve differently when Git opens the original operand.
+  if (
+    operand.includes('//') ||
+    operand.endsWith('/') ||
+    operand !== operand.trim() ||
+    operand.split('/').includes('..')
+  ) return
+  const file = resolve(getCwd(), operand)
   const read = checkReadPermissionForTool(FileReadTool, { file_path: file }, policy)
   if (read.behavior === 'deny' || (read.behavior === 'ask' && read.decisionReason?.type === 'rule')) return read
   if (read.behavior !== 'allow' || !pathInAllowedWorkingPath(file, policy)) return

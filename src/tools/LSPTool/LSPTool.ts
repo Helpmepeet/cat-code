@@ -149,6 +149,11 @@ export const LSPTool = buildTool({
   isReadOnly() {
     return true
   },
+  toAutoClassifierInputForUse(input) {
+    const filePath = expandPath(input.filePath)
+    const server = getLspServerManager()?.getServerForFile(filePath)
+    return { ...input, filePath, languageServer: server?.name ?? null }
+  },
   getPath({ filePath }): string {
     return expandPath(filePath)
   },

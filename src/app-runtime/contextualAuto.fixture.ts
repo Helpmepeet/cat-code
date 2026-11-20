@@ -11,7 +11,9 @@ const repeatedDenials = scenario.startsWith('native-denials-')
 const cleanup = scenario.startsWith('native-cleanup-')
 const keepSetting = scenario === 'native-cleanup-withdrawal'
 const followUp = keepSetting ? 'Keep the old setting in local.mjs until tomorrow.' : 'Also give me a short summary after the checks.'
-const twoChecks = scenario === 'native-two-checks'
+const twoChecks = scenario.startsWith('native-two-checks')
+const failedFirstCheck = twoChecks && scenario.endsWith('-failed')
+const scriptedFirstCheck = scenario === 'native-two-checks-script-failed'
 const questionReply = scenario === 'question-reply' || twoChecks
 const lateCorrection = scenario === 'direct-late-correction'
 const credentialSettings = scenario === 'direct-credential-settings'
@@ -22,9 +24,18 @@ const directPatch = scenario === 'native-patch'
 const loadSkill = scenario === 'native-skill'
 const browserAction = scenario.startsWith('native-browser')
 const scopeNotice = scenario.startsWith('native-scope-notice')
+const privateNoticeInstructions: Record<string, string> = {
+  'native-scope-notice-chat': 'Keep the scope inside this chat.',
+  'native-scope-notice-discreet': 'Work discreetly.',
+}
+const privateNoticePolicy = scenario === 'native-scope-notice-policy'
+const privateNoticeWorkspace = scenario === 'native-scope-notice-workspace'
 const fingerprint = scenario.startsWith('native-fingerprint')
-const helperRead = scenario === 'native-helper-goal' || scenario === 'native-helper-symbol'
+const helperSymbol = scenario.startsWith('native-helper-symbol')
+const outsideSymbol = scenario === 'native-helper-symbol-outside'
+const helperRead = scenario === 'native-helper-goal' || helperSymbol
 const queuedBrowserRead = scenario.startsWith('native-browser-read-queued')
+const queuedReadWithdrawal = 'Please skip the browser read and give me the summary.'
 const browserPeer = scenario === 'native-browser-peer'
 const browserRead = scenario.startsWith('native-browser-read') || scenario === 'native-browser-screenshot'
 const browserReadTool = scenario === 'native-browser-screenshot' ? 'BrowserScreenshot' : 'BrowserRead'
@@ -56,6 +67,8 @@ const effect = () => readFile(join(cwd, 'effects.txt'), 'utf8').catch(() => null
 const hookMarker = join(cwd, 'permission-hook-ran')
 const reviewUnavailable = scenario.endsWith('-unavailable')
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
+if (outsideSymbol) await writeFile(join(root, 'symbols.txt'), 'outside')
+if (scenario === 'native-fingerprint-parent') await mkdir(join(cwd, 'nested'))
 if (loadSkill) {
   const skillDir = join(configuration, 'skills', 'fixture-auto-skill')
   await mkdir(skillDir, { recursive: true })
@@ -93,8 +106,9 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   ...(scenario === 'native-scope-notice-note' && { note: 'Read only, no edits.', touches: ['./a.txt', join(cwd, 'a.txt'), '*.test.ts'] }),
   ...(scenario === 'native-scope-notice-sensitive' && { note: 'Personal information for the work log' }),
 } } : helperRead ? scenario === 'native-helper-goal' ? { name: 'GetGoal', input: {} } :
-  { name: 'LSP', input: { operation: 'documentSymbol', filePath: 'a.txt', line: 1, character: 1 } } :
-  fingerprint ? { name: 'Bash', input: { command: scenario === 'native-fingerprint-write' ? 'git hash-object -w -- a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
+  { name: 'LSP', input: { operation: 'documentSymbol', filePath: outsideSymbol ? join(root, 'symbols.txt') : 'a.txt', line: 1, character: 1 } } :
+  fingerprint ? { name: 'Bash', input: { command: scenario === 'native-fingerprint-write' ? 'git hash-object -w -- a.txt' :
+    scenario === 'native-fingerprint-parent' ? 'git hash-object --no-filters -- nested/../a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
@@ -112,6 +126,13 @@ if (scenario === 'hook-edit' || scenario.startsWith('direct-')) {
     PreToolUse: [{ matcher: scenario === 'hook-edit' ? 'Edit' : 'Bash', hooks: [hook(event)] }],
     PermissionRequest: [{ matcher: 'Bash', hooks: [{ ...hook(approve), command: `touch permission-hook-ran && ${hook(approve).command}` }] }],
   } }))
+}
+if (privateNoticeWorkspace) await writeFile(join(cwd, 'CLAUDE.md'), 'Do not post the task outside this chat.')
+if (privateNoticePolicy) {
+  await mkdir(configuration, { recursive: true })
+  await writeFile(join(configuration, 'settings.json'), JSON.stringify({
+    autoMode: { environment: ['Task visibility is limited to this session.'] },
+  }))
 }
 const cleanupEdits = [
   ['routes.mjs', 'export const pages = ["/commercial", "/board"];', 'export const pages = ["/board"];'],
@@ -162,9 +183,10 @@ mock.module('../services/api/client.js', () => ({
       const verdict = twoChecks ? 'allow' : repeatedDenials ? (requests.length <= 4 ? 'deny' : 'ask')
         : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
         : operatorText.some((text: string) => text === 'Stop. Leave all files untouched.' ||
-          text === 'Stop. Do not access the records.' || text === 'Stop the background task. Leave the file untouched.' ||
+          text === queuedReadWithdrawal || text === 'Stop. Do not access the records.' ||
+          text === 'Stop the background task. Leave the file untouched.' ||
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
-        : scenario === 'mcp-deny' ? 'deny'
+        : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
         : tool === 'REPL' ? 'allow'
         : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction || directPatch ? 'deny'
         : lateCorrection ? 'allow'
@@ -202,8 +224,14 @@ mock.module('../services/api/client.js', () => ({
     const invocation = twoChecks ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
     let check
     if (twoChecks && index > 0) {
+      const first = { name: 'Bash', input: {
+        command: failedFirstCheck ? 'cat a.txt | tee -a effects.txt; exit 3' : 'cat a.txt | tee -a effects.txt',
+        description: 'Verify the launch path', dangerouslyDisableSandbox: true,
+      } }
       check = index === 1
-        ? { name: 'Bash', input: { command: 'cat a.txt | tee -a effects.txt', description: 'Verify the launch path', dangerouslyDisableSandbox: true } }
+        ? scriptedFirstCheck
+          ? { name: 'REPL', input: { code: `await tools.call({...${JSON.stringify(first)}, nothrow: true})`, description: 'Verify the launch path' } }
+          : first
         : { name: 'Bash', input: { command: 'CHROME_BIN=/usr/bin/false printf checked >> effects.txt', description: 'Verify the restricted failure path' } }
     }
     const main = check ?? (scenario === 'mcp-browser-used' ? (index === 0
@@ -216,7 +244,7 @@ mock.module('../services/api/client.js', () => ({
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
       if (queuedBrowserRead && index === 0) {
         const { enqueue } = await import('../utils/messageQueueManager.js')
-        enqueue({ mode: 'prompt', value: scenario.endsWith('-stop') ? 'Stop. Do not access the records.' : 'Also summarize the results afterwards.' })
+        enqueue({ mode: 'prompt', value: scenario.endsWith('-stop') ? queuedReadWithdrawal : 'Also summarize the results afterwards.' })
       }
       if (cleanupCall === cleanupActions.at(-1) && cleanup) {
         const { enqueue } = await import('../utils/messageQueueManager.js')
@@ -332,14 +360,19 @@ if (localMcp) {
   const { connectToServer, fetchToolsForClient } = await import('../services/mcp/client.js')
   const fixtureServer = new URL('./codeModeMcpLocalServer.fixture.ts', import.meta.url)
   const adapter = join(root, '.local/share/codex-computer-use-mcp/local/dist/mcp-server.js')
+  const preload = join(root, 'browser-preload.cjs')
   if (selectBrowser) {
     await mkdir(dirname(adapter), { recursive: true })
-    await writeFile(adapter, `import(${JSON.stringify(fixtureServer.href)});`)
+    await writeFile(adapter, `if (process.env.FIXTURE_BROWSER_PRELOAD && !globalThis.fixtureBrowserPreloaded) process.exit(1);
+import(${JSON.stringify(fixtureServer.href)});`)
   }
+  const browserPreload = scenario === 'mcp-browser-preload'
+  if (browserPreload) await writeFile(preload, 'globalThis.fixtureBrowserPreloaded = true;')
   const client = await connectToServer(selectBrowser ? 'codex-computer-use' : 'fixture', {
     type: 'stdio', command: selectBrowser ? Bun.which('node')! : process.execPath,
     args: [selectBrowser ? adapter : fixtureServer.pathname],
-    env: { HOME: root, CODE_MODE_TEST_ROOT: root, ...(selectBrowser && { FIXTURE_BROWSER: '1' }) },
+    env: { HOME: root, CODE_MODE_TEST_ROOT: root, ...(selectBrowser && { FIXTURE_BROWSER: '1' }),
+      ...(browserPreload && { NODE_OPTIONS: `--require "${preload}"`, FIXTURE_BROWSER_PRELOAD: '1' }) },
     scope: selectBrowser && scenario !== 'mcp-browser-impostor' ? 'user' : 'local',
   })
   if (client.type !== 'connected') throw new Error('Local MCP fixture failed to connect')
@@ -363,6 +396,15 @@ if (scopeNotice) {
     postedNotices.push(args)
     return { ok: true, value: { postedAt: Date.now() } } as never
   })]
+}
+if (helperSymbol) {
+  const server = new URL('./contextualAutoLspServer.fixture.ts', import.meta.url).pathname
+  mock.module('../services/lsp/config.js', () => ({ getAllLspServers: async () => ({ servers: {
+    'fixture-symbols': { command: process.execPath, args: [server], extensionToLanguage: { '.txt': 'plaintext' } },
+  } }) }))
+  const lsp = await import('../services/lsp/manager.js')
+  lsp.initializeLspServerManager()
+  await lsp.waitForInitialization()
 }
 if (helperRead) {
   const { GetGoalTool } = await import('../tools/GetGoalTool/GetGoalTool.js')
@@ -476,6 +518,7 @@ if (surface === 'desktop') {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true },
   })
   else if (scenario === 'native-scope-notice-note') await controller.submit('Inspect the private method and tell me what you find.')
+  else if (privateNoticeInstructions[scenario]) await controller.submit(privateNoticeInstructions[scenario]!)
   else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
     'Investigate the Chrome crash. Keep this investigation private.' : 'Investigate and fix the Chrome crash.')
   else if (cleanup) await controller.submit('yep. up to you')
@@ -599,3 +642,4 @@ await writeFile(join(root, 'evidence.json'), JSON.stringify({
 }))
 controller.dispose()
 await cleanupMcp?.()
+if (helperSymbol) await (await import('../services/lsp/manager.js')).shutdownLspServerManager()

@@ -134,6 +134,21 @@ test('a completed one-time check reaches review of a new restricted check withou
   expect(proof.effect).toBe('oldchecked')
 }, 30_000)
 
+for (const route of ['direct', 'script'] as const) {
+  test(`a failed privileged ${route} check records its dispatch without sending shell output`, async () => {
+    const proof = await run(route === 'direct' ? 'native-two-checks-failed' : 'native-two-checks-script-failed')
+    const { content } = proof.requests.at(-1)
+    const answer = content.conversation.find((row: any) => row.text.includes('Run the launch check once.'))
+    const firstCheck = proof.requests.find((request: any) => request.content.action.input.dangerouslyDisableSandbox === true)
+    expect(content.recentShellRuns).toEqual([{
+      attempt: firstCheck.content.action.attempt, afterOperatorId: answer.id, proposedCommand: 'cat a.txt | tee -a effects.txt; exit 3',
+      sandboxOverrideRequested: true, outcome: 'dispatched',
+    }])
+    expect(JSON.stringify(content)).not.toContain('"old"')
+    expect(proof.effect).toBe('oldchecked')
+  }, 30_000)
+}
+
 for (const [scenario, tool] of [['main-peer-create', 'CreatePeer'], ['main-peer-send', 'SendToPeer']] as const) {
   test(`${tool} reaches contextual review before it can affect a peer session`, async () => {
     const proof = await run(scenario)
@@ -232,7 +247,7 @@ for (const scenario of ['native-browser-read', 'native-browser-screenshot', 'nat
   expect(proof.browserCalls).toBe(1)
 }, 30_000)
 
-for (const scenario of ['mcp-browser-select', 'mcp-browser-extra', 'mcp-browser-impostor', 'mcp-browser-used']) {
+for (const scenario of ['mcp-browser-select', 'mcp-browser-extra', 'mcp-browser-impostor', 'mcp-browser-used', 'mcp-browser-preload']) {
   test(scenario, async () => {
     const proof = await run(scenario)
     expect(proof.requests).toHaveLength(scenario === 'mcp-browser-used' ? 2 : scenario === 'mcp-browser-select' ? 0 : 1)
@@ -241,11 +256,31 @@ for (const scenario of ['mcp-browser-select', 'mcp-browser-extra', 'mcp-browser-
   }, 30_000)
 }
 
+test('review of an outside-workspace LSP read identifies the receiving server', async () => {
+  const proof = await run('native-helper-symbol-outside')
+  const [review] = proof.requests
+  expect(review?.content.action.execution.resolvedAction).toMatchObject({
+    languageServer: 'fixture-symbols', operation: 'documentSymbol', filePath: expect.stringMatching(/symbols\.txt$/),
+  })
+  const result = proof.transcript.find((row: any) => row.toolUseResult?.operation === 'documentSymbol')
+  expect(result?.toolUseResult.result).toContain('symbol_from_outside')
+}, 30_000)
+
+for (const source of ['chat', 'discreet', 'policy', 'workspace']) {
+  test(`an audience restriction from ${source} holds a routine roster notice for review`, async () => {
+    const proof = await run(`native-scope-notice-${source}`)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(['Announce'])
+    if (source === 'workspace') expect(proof.requests[0].content.workspaceInstructions).toContain('outside this chat')
+    expect(proof.postedNotices).toHaveLength(0)
+  }, 30_000)
+}
+
 for (const scenario of ['native-scope-notice', 'native-scope-notice-note', 'native-scope-notice-sensitive', 'native-scope-notice-private',
-  'native-fingerprint', 'native-fingerprint-rule', 'native-scope-notice-ask', 'native-fingerprint-write', 'native-helper-goal', 'native-helper-symbol']) {
+  'native-fingerprint', 'native-fingerprint-rule', 'native-scope-notice-ask', 'native-fingerprint-write',
+  'native-fingerprint-parent', 'native-helper-goal', 'native-helper-symbol']) {
   test(scenario, async () => {
     const proof = await run(scenario)
-    const held = ['native-scope-notice-sensitive', 'native-fingerprint-write'].includes(scenario)
+    const held = ['native-scope-notice-sensitive', 'native-fingerprint-write', 'native-fingerprint-parent'].includes(scenario)
     expect(proof.requests.length).toBe(held ? 1 : 0)
     expect(proof.prompts).toHaveLength(scenario === 'native-scope-notice-ask' ? 1 : 0)
     if (scenario === 'native-scope-notice' || scenario === 'native-scope-notice-note') expect(proof.postedNotices).toHaveLength(1)
@@ -254,9 +289,15 @@ for (const scenario of ['native-scope-notice', 'native-scope-notice-note', 'nati
       const result = proof.transcript.find((row: any) =>
         row.message?.content?.some?.((block: any) => block.tool_use_id === 'action-0'))
       expect(Boolean(result?.message.content[0].is_error)).toBe(scenario === 'native-fingerprint-rule')
-      if (scenario === 'native-fingerprint') expect(result.toolUseResult.stdout.trim()).toMatch(/^[a-f0-9]{40}$/)
+      if (scenario === 'native-fingerprint' || scenario === 'native-fingerprint-parent') {
+        expect(result.toolUseResult.stdout.trim()).toMatch(/^[a-f0-9]{40}$/)
+      }
     }
-    if (scenario.startsWith('native-helper-')) expect(proof.transcript.some((row: any) =>
+    if (scenario === 'native-helper-symbol') {
+      const result = proof.transcript.find((row: any) => row.toolUseResult?.operation === 'documentSymbol')
+      expect(result?.toolUseResult.result).toContain('symbol_from_old')
+    }
+    if (scenario === 'native-helper-goal') expect(proof.transcript.some((row: any) =>
       row.sourceToolAssistantUUID && row.message?.content?.some?.((block: any) => block.type === 'tool_result'))).toBe(true)
   }, 30_000)
 }

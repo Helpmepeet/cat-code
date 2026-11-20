@@ -55,7 +55,6 @@ import { permissionRuleValueToString } from '../../utils/permissions/permissionR
 import {
   createPermissionRequestMessage,
   getRuleByContentsForTool,
-  getEffectiveAutoMode,
 } from '../../utils/permissions/permissions.js'
 import {
   parsePermissionRule,
@@ -2604,9 +2603,9 @@ export async function bashToolHasPermission(
       compoundCommandHasCd,
       astSubcommands !== null,
     )
-    if (result.behavior === 'passthrough' && getEffectiveAutoMode(appState.toolPermissionContext)) {
+    if (result.behavior === 'passthrough' && context.contextualAutoAttempt?.mode === 'experimental') {
       const fingerprint = checkWorkspaceFingerprint(input, compoundCommandHasCd, appState.toolPermissionContext)
-      if (fingerprint) return fingerprint
+      if (fingerprint && fingerprint.behavior !== 'passthrough') return fingerprint
     }
     // If command wasn't allowed, attach pending classifier check.
     // At this point, 'ask' can only come from bashCommandIsSafe (security check inside

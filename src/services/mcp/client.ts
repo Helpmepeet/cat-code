@@ -1,4 +1,10 @@
-import { admitBrowserSelection, bindBrowserSelection, checkBrowserDispatch } from './browserSelection.js'
+import {
+  admitBrowserSelection,
+  bindBrowserSelection,
+  checkBrowserDispatch,
+  isDirectBrowserAdapterLaunch,
+  registerDirectBrowserAdapter,
+} from './browserSelection.js'
 import { createCombinedAbortSignal } from '../../utils/combinedAbortSignal.js'
 import { feature } from 'bun:bundle'
 import { isCuaDriverMcpServer } from '../../utils/cuaDriver/guard.js'
@@ -835,6 +841,7 @@ export const connectToServer = memoize(
       | undefined
     try {
       let transport
+      let directBrowserAdapter = false
 
       // If we have the session ingress JWT, we will connect via the session ingress rather than
       // to remote MCP's directly.
@@ -1223,18 +1230,19 @@ export const connectToServer = memoize(
         transport = clientTransport
         logMCPDebug(name, `In-process Computer Use MCP server started`)
       } else if (serverRef.type === 'stdio' || !serverRef.type) {
-        const finalCommand =
-          process.env.CLAUDE_CODE_SHELL_PREFIX || serverRef.command
-        const finalArgs = process.env.CLAUDE_CODE_SHELL_PREFIX
+        const shellPrefix = process.env.CLAUDE_CODE_SHELL_PREFIX
+        const finalCommand = shellPrefix || serverRef.command
+        const finalArgs = shellPrefix
           ? [[serverRef.command, ...serverRef.args].join(' ')]
-          : serverRef.args
+          : [...serverRef.args]
+        const env = { ...subprocessEnv(), ...serverRef.env } as Record<string, string>
+        directBrowserAdapter = isDirectBrowserAdapterLaunch(
+          name, serverRef.scope, finalCommand, finalArgs, env, shellPrefix,
+        )
         const stdioTransport = new StdioClientTransport({
           command: finalCommand,
           args: finalArgs,
-          env: {
-            ...subprocessEnv(),
-            ...serverRef.env,
-          } as Record<string, string>,
+          env,
           stderr: 'pipe', // prevents error output from the MCP server from printing to the UI
         })
         transport = stdioTransport
@@ -1750,6 +1758,7 @@ export const connectToServer = memoize(
         config: serverRef,
         cleanup: wrappedCleanup,
       }
+      if (directBrowserAdapter) registerDirectBrowserAdapter(connected)
       await publishMcpConnectionAcquisition(acquisition, connected)
       return connected
     } catch (error) {
