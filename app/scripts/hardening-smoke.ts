@@ -341,6 +341,8 @@ async function runProductionHardeningSmoke(
       'getWorkspaceFileAvailability',
       'checkWorkspaceFileAvailability',
       'getExternalAppIcon',
+      'captureComputerWindow',
+      'openComputerCaptureSettings',
       // P4-35 — the file sink (operator ruling 2026-07-30). The renderer requests
       // main's native save dialog and cannot name a destination (HC1/HC3).
       'saveTextToFile',

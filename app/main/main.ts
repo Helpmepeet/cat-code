@@ -313,6 +313,8 @@ import { openWorkspaceFile, resolveWorkspaceFile, type OpenWorkspaceFileTarget, 
 import { createExternalAppIconService } from './externalAppIcons.js'
 import { createExternalAppIconHandler } from './externalAppIconRequest.js'
 import { CH_HOST_EXTERNAL_APP_ICON } from '../shared/ipcChannels.js'
+import { CH_COMPUTER_WINDOW_CAPTURE, CH_COMPUTER_CAPTURE_SETTINGS } from '../shared/ipcChannels.js'
+import { captureComputerWindow, createComputerWindowCaptureHandler } from './computerWindowCapture.js'
 import { launchEditorApp } from './editorLauncher.js'
 import { createWorkspaceFileAvailabilityChecker } from './workspaceFileAvailability.js'
 import {
@@ -4837,6 +4839,31 @@ function registerHostControlPlane(): void {
     )
   })
   const externalAppIcons = createExternalAppIconService()
+  ipcMain.handle(CH_COMPUTER_WINDOW_CAPTURE, createComputerWindowCaptureHandler<IpcMainInvokeEvent>({
+    trusted: trustedPreviewSender,
+    mac: process.platform === 'darwin',
+    capture: (target, ask) => captureComputerWindow(target, ask, path => {
+      const image = nativeImage.createFromPath(path)
+      if (image.isEmpty()) return { status: 'unavailable' }
+      const { width, height } = image.getSize()
+      const scale = Math.min(1, 1280 / Math.max(width, height))
+      const resized = scale === 1 ? image : image.resize({
+        width: Math.max(1, Math.round(width * scale)),
+        height: Math.max(1, Math.round(height * scale)),
+      })
+      const jpeg = resized.toJPEG(78)
+      if (!jpeg.length || jpeg.length > 512 * 1024) return { status: 'unavailable' }
+      const pixels = resized.resize({ width: 16, height: 12 }).toBitmap()
+      const fingerprint = Array.from({ length: 192 }, (_, i) =>
+        Math.round((pixels[i * 4]! + pixels[i * 4 + 1]! + pixels[i * 4 + 2]!) / 3))
+      return { status: 'captured', dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`, fingerprint }
+    }),
+  }))
+  ipcMain.handle(CH_COMPUTER_CAPTURE_SETTINGS, async (event, ...args: unknown[]) => {
+    if (process.platform === 'darwin' && trustedPreviewSender(event) && args.length === 0) {
+      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+    }
+  })
   ipcMain.handle(CH_HOST_EXTERNAL_APP_ICON, createExternalAppIconHandler<IpcMainInvokeEvent>({
     isTrustedSender: isMainWindowSender,
     read: (target, path) => externalAppIcons.read(target, path),

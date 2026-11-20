@@ -4,6 +4,7 @@ import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { BrowserRequestArgs, BrowserRequestValues } from './browserPane.js'
 import type { BrowserPaneSnapshot, BrowserPaneEvent, BrowserPaneLayout, BrowserPaneCommand, BrowserPaneCommandResult } from './browserPanePresentation.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
+import type { ComputerWindowCaptureRequest, ComputerWindowCapture } from './computerWindowCapture.js'
 import type { ProjectMetadata } from './projectMetadata.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
 /**
@@ -4412,6 +4413,8 @@ export type CatCodeBridge = {
   checkWorkspaceFileAvailability(appSessionId: SessionId, path: string): Promise<WorkspaceFileAvailabilityResult>
   /** Main-owned installed-app imagery; default file association uses the same file policy. */
   getExternalAppIcon(request: ExternalAppIconRequest): Promise<ExternalAppIcon>
+  captureComputerWindow(request: ComputerWindowCaptureRequest): Promise<ComputerWindowCapture>
+  openComputerCaptureSettings(): Promise<void>
   /**
    * Main owns the native chooser and keeps the chosen path private. Image
    * selections return bounded bytes; other files return opaque tokens.

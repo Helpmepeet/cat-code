@@ -23,6 +23,7 @@ import type { LidModeView } from '../shared/lidClosed.js'
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH_HOST_EXTERNAL_APP_ICON } from '../shared/ipcChannels.js'
+import { CH_COMPUTER_WINDOW_CAPTURE, CH_COMPUTER_CAPTURE_SETTINGS } from '../shared/ipcChannels.js'
 import { parseNotificationPreferences, type NotificationPreferences } from '../shared/notificationPreferences.js'
 import type { NotificationVisibilityBridge, NotificationVisibility } from '../shared/notificationVisibility.js'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
@@ -770,6 +771,13 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   getExternalAppIcon(request) {
     sendGuard.assertAllowed(request)
     return ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)
+  },
+  captureComputerWindow(request) {
+    sendGuard.assertAllowed(request)
+    return ipcRenderer.invoke(CH_COMPUTER_WINDOW_CAPTURE, request)
+  },
+  openComputerCaptureSettings() {
+    return ipcRenderer.invoke(CH_COMPUTER_CAPTURE_SETTINGS)
   },
   reportNotificationVisibility(value: NotificationVisibility): void {
     sendGuard.assertAllowed(value)
