@@ -12,6 +12,9 @@ const lateCorrection = scenario === 'direct-late-correction'
 const credentialSettings = scenario === 'direct-credential-settings'
 const compacted = scenario.startsWith('compacted-')
 const mainEdit = scenario === 'main-inspect-only'
+const localMcp = scenario.startsWith('mcp-')
+const mcpAction = { name: 'mcp__fixture__records', input: { key: 'sample' } }
+const mcpWithdrawal = scenario === 'mcp-withdrawal'
 const peerAction = scenario === 'main-peer-create'
   ? { name: 'CreatePeer', input: { prompt: 'Update the file.' } }
   : scenario === 'main-peer-send'
@@ -53,7 +56,7 @@ const code = scenario === 'skip-queued'
     : scenario === 'hook-edit' ? `const name = "a" + ".txt"; await tools.call({name:"Edit",input:{file_path:name,old_string:"old",new_string:"new"}});`
     : routed ? `const pending = ${JSON.stringify(candidate)}; await tools.call(pending); output("helper completed");`
     : `await tools.call(${JSON.stringify(command)}); output("after approval");`
-const submitted = peerAction ?? (questionReply ? question
+const submitted = localMcp ? mcpAction : peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || mainEdit || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
     : { name: 'REPL', input: { code, description: 'Run isolated fixture',
@@ -97,6 +100,10 @@ mock.module('../services/api/client.js', () => ({
       return (async () => {
         await Bun.sleep(2)
         if (tool === 'Edit') await invalidateParent?.()
+        if (localMcp && !contextual && mcpWithdrawal) {
+          const { enqueue } = await import('../utils/messageQueueManager.js')
+          enqueue({ mode: 'prompt', value: 'Stop. Do not access the records.' })
+        }
         if (tool === 'Bash' && lateCorrection) {
           const { enqueue } = await import('../utils/messageQueueManager.js')
           enqueue({ mode: 'prompt', value: 'Stop. Leave all files untouched.' })
@@ -110,7 +117,9 @@ mock.module('../services/api/client.js', () => ({
         return { id: 'classifier', type: 'message', role: 'assistant', model: body.model,
           content: contextual
             ? [{ type: 'text', text: scenario === 'direct-invalid' ? 'unparseable result' : JSON.stringify({ decision: verdict, risk: 'medium', rationale: 'Isolated review decision.' }) }]
-            : [{ type: 'tool_use', id: 'verdict', name: body.tool_choice.name, input: { shouldBlock: false, reason: 'Isolated baseline allowance.' } }],
+            : [{ type: 'tool_use', id: 'verdict', name: body.tool_choice.name, input: scenario === 'mcp-deny'
+              ? { shouldBlock: true, thinking: 'Isolated review.', reason: 'Access exceeds the requested scope.' }
+              : { shouldBlock: false, reason: 'Isolated baseline allowance.' } }],
           stop_reason: contextual ? 'end_turn' : 'tool_use', stop_sequence: null,
           usage: { input_tokens: 20, output_tokens: 10 } }
       })()
@@ -149,7 +158,7 @@ const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
-if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || scenario.startsWith('trial-')) {
+if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || mcpWithdrawal || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
@@ -192,7 +201,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
     return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
-      backgroundWithdrawal || lateCorrection || scenario.startsWith('trial-'))
+      backgroundWithdrawal || lateCorrection || mcpWithdrawal || scenario.startsWith('trial-'))
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
@@ -204,6 +213,19 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
 }
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
+let cleanupMcp: (() => Promise<void>) | undefined
+if (localMcp) {
+  const { connectToServer, fetchToolsForClient } = await import('../services/mcp/client.js')
+  const client = await connectToServer('fixture', {
+    type: 'stdio', command: process.execPath,
+    args: [new URL('./codeModeMcpLocalServer.fixture.ts', import.meta.url).pathname],
+    env: { HOME: root, CODE_MODE_TEST_ROOT: root }, scope: 'local',
+  })
+  if (client.type !== 'connected') throw new Error('Local MCP fixture failed to connect')
+  cleanupMcp = client.cleanup
+  const mcpTools = await fetchToolsForClient(client)
+  config.getMcpRuntimeSnapshot = () => ({ clients: [client], tools: mcpTools, commands: [], resources: {} })
+}
 let peerRequests = 0
 if (peerAction) {
   const { createCreatePeerTool } = await import('../../app/sidecar/createPeerTool.js')
@@ -310,7 +332,10 @@ async function awaitHook() {
 }
 
 if (surface === 'desktop') {
-  if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
+  if (localMcp) await controller.submit('Look up the sample record.', scenario === 'mcp-peer-only' ? {
+    origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
+  } : undefined)
+  else if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
     kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
   } })
   else await controller.submit(routed ? assignment : mainEdit ? 'Inspect a.txt. Leave it untouched.' :
@@ -414,7 +439,10 @@ if (lateCorrection || backgroundWithdrawal || scenario.startsWith('trial-')) {
 }
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
   scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
+  ...(localMcp && { mcpCalls: await readFile(join(root, 'mcp-calls.jsonl'), 'utf8')
+    .then(text => text.trim().split('\n').map(line => JSON.parse(line)), () => []) }),
   wallMs: scriptWallMs, executions, effect: await effect(), files:
     Object.fromEntries(await Promise.all(['a', 'b', 'c', 'hooked'].map(async name => [name, await readFile(join(cwd, name + '.txt'), 'utf8')]))),
 }))
 controller.dispose()
+await cleanupMcp?.()

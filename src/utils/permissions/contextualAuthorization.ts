@@ -115,6 +115,8 @@ export async function createContextualAttempt(
   // Script admission grants the isolated interpreter a single invocation.
   // The calls it submits carry their own delegated mutation gate.
   const delegatedMutation = authority.delegated && mayChangeState(tool) && (tool.isMcp || tool.name !== 'REPL')
+  const useLegacyMcpReviewer = mode === 'experimental' && tool.isMcp === true &&
+    tool.mcpInfo !== undefined && !authority.delegated
   const attemptId = randomUUID()
   const startedAt = Date.now()
   let review: Promise<PermissionDecision> | undefined
@@ -140,7 +142,8 @@ export async function createContextualAttempt(
   function emit(outcome: AutoModeReview['outcome'], reason?: string) {
     if (mode !== 'experimental') return
     lastOutcome = outcome
-    const event: AutoModeReview = { type: 'tool.review', toolUseId, attemptId, startedAt, outcome, reviewer,
+    const event: AutoModeReview = { type: 'tool.review', toolUseId, attemptId, startedAt, outcome,
+      ...(!useLegacyMcpReviewer && { reviewer }),
       ...(outcome !== 'reviewing' && { completedAt: Math.max(startedAt, Date.now()) }),
       ...(reason && { reason }) }
     persistAutoModeReview(event)
@@ -215,8 +218,17 @@ export async function createContextualAttempt(
   }
 
   return {
-    id: toolUseId, mode, delegatedMutation, get requiresHuman() { return requiresHuman },
+    id: toolUseId, mode, delegatedMutation, useLegacyMcpReviewer, get requiresHuman() { return requiresHuman },
     review: () => review ??= reviewHeldAction(),
+    checkLegacyMcpReview(projection: unknown): PermissionDecision | undefined {
+      if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
+      if (!current(input, context)) return stale('The assignment or action changed before review.')
+      const evidence = { action, projection, conversation: authority.conversation,
+        workspaceInstructions: context.autoModeInstructionContext, script: context.contextualParentScriptSource }
+      if (containsCredentialMaterial(JSON.stringify(evidence)) || containsCredentialMaterial(JSON.stringify(instructions))) {
+        return ask('The action or its context may contain credentials.')
+      }
+    },
     requireHuman(reason: string) { return ask(reason) },
     recordHuman(candidate: Input, replyContext: ToolUseContext) {
       if (requiresHuman && current(candidate, replyContext)) humanAllowed = true

@@ -939,7 +939,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         }
       }
 
-      if (attempt?.mode === 'experimental') {
+      if (attempt?.mode === 'experimental' && !attempt.useLegacyMcpReviewer) {
         const decision = await reviewContextually()
         if (decision.behavior === 'allow') persistDenialState(context, recordSuccess(denialState))
         else if (decision.behavior === 'deny' && decision.decisionReason?.type === 'classifier') {
@@ -971,11 +971,20 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       const action = formatActionForClassifier(tool.name, input, {
         executionOrigin: getInlineCommandExecutionOrigin(tool.name, input, context, toolUseID),
       }, classifierInputForUse)
+      // The existing classifier can review MCP calls without a native effect
+      // projection. Keep the held-action checks around its decision.
+      const legacyMcpReview = attempt?.useLegacyMcpReviewer ? attempt : undefined
+      const blocked = legacyMcpReview?.checkLegacyMcpReview(action)
+      if (blocked) {
+        observation?.markRoute('guard')
+        return blocked
+      }
+      const liveMessages = legacyMcpReview && context.getCurrentAutoModeMessages?.()
       setClassifierChecking(toolUseID)
       let classifierResult
       try {
         classifierResult = await classifyYoloAction(
-          context.messages,
+          liveMessages ? [...liveMessages] : context.messages,
           action,
           context.options.tools,
           appState.toolPermissionContext,

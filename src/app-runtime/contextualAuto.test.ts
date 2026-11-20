@@ -10,7 +10,7 @@ async function run(scenario: string) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cat-contextual-auto-')))
   try {
     await Promise.all([mkdir(join(root, 'config')), mkdir(join(root, 'workspace'))])
-    const trial = scenario.startsWith('trial-')
+    const trial = scenario.startsWith('trial-') || scenario.startsWith('mcp-')
     const runtimeArgs = trial ? resolveSidecarLaunch({
       mainDir: new URL('../../app/main/', import.meta.url).pathname,
       packaged: false,
@@ -125,6 +125,27 @@ for (const contextual of [true, false]) {
         reviewer: expect.objectContaining({ kind: 'contextual', verdict: 'allow',
           profile: expect.objectContaining({ provider: 'openai', model: 'gpt-6-luna' }) }) }))
     } else expect(proof.savedReviews.every((row: any) => row.reviewer === undefined)).toBe(true)
+  }, 30_000)
+}
+
+for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
+  test(`desktop Auto Mode holds a real MCP search through ${outcome}`, async () => {
+    const proof = await run(`mcp-${outcome}`)
+    expect(proof.mcpCalls).toHaveLength(outcome === 'allow' ? 1 : 0)
+    if (outcome === 'peer-only') {
+      expect(proof.requests).toHaveLength(0)
+      expect(proof.prompts).toEqual([expect.objectContaining({ human_only: true, tool_name: 'mcp__fixture__records' })])
+    } else {
+      expect(proof.prompts).toHaveLength(0)
+      expect(proof.requests).toContainEqual(expect.objectContaining({
+        contextual: false, content: expect.stringContaining('mcp__fixture__records'),
+      }))
+    }
+    if (outcome === 'withdrawal') {
+      const held = proof.reviewEvents.find((row: any) => row.outcome === 'inconclusive')
+      expect(held?.reason).toContain('no longer matches')
+      expect(held.reviewer).toBeUndefined()
+    }
   }, 30_000)
 }
 
