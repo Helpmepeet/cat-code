@@ -61,4 +61,14 @@ The install is complete only when `/Applications/Cat Code.app` is the sole visib
 
 On failure, preserve recovery artifacts and report the actual installed/rollback state. An interrupted-install lock or extra visible production app requires inspection; do not bypass the lock or sweep another session's artifacts. Do not report success while duplicate-app or registration checks fail. Launcher caches can refresh later, so distinguish filesystem/registration checks from an observed launcher UI.
 
+## Close out temporary files
+
+When you create a temporary checkout or download directory, record its exact path and carry that ownership record into any retry. The installer cleans up scratch it creates on a successful default build-and-install, but `--bundle` does not clean up caller-owned files. Before removing anything, save a small check record outside scratch with the full source SHA, bundle identity, completed checks and results, and any delivery run IDs.
+
+- After a verified install, remove the exact scratch directories owned by this run, including the recorded checkout from a successful retry. Confirm they are gone. Keep the installed app and its rollback copy.
+- For a successful build-only request, move the intact verified bundle to the requested output location or a dedicated artifact directory outside scratch. Verify it there, record the output path, and remove the run's checkout, dependencies, and staging files.
+- If blocked or failed, keep what diagnosis or retry needs. Report each retained path, why it is needed, and the retry command when available. Do not delete the bundle, checkout, or evidence that command still needs.
+
+Do not delete scratch by wildcard, name, or age. Confirm ownership, leave the directory before removing it, and check that no process is using it. Leave unrelated, unowned, and in-use paths alone and report any cleanup you could not complete.
+
 Report the selected route (GitHub download, reused local artifact, new local build, or already-installed no-op), installed path and SHA, CI/delivery run links when used, retained rollback path, and whether the app was launched or observed running. State which checks actually ran now, which successful results were reused and their source/artifact, and any failures, skips, or missing evidence. Never claim the full suite did or did not run without checking the actual record. For local builds, report whether the commit is pushed and its CI result if known; a local pass is not a GitHub CI pass, and a pre-existing failure is not automatically harmless. Leave unrelated working-tree edits untouched.
