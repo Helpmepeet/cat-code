@@ -671,7 +671,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     // allow. Only an explicit permission rule can skip review for the lead.
     const changesPeerSession = !tool.isMcp && !tool.mcpInfo &&
       (tool.name === 'CreatePeer' || tool.name === 'SendToPeer')
-    if (attempt.delegatedMutation || ((changesPeerSession || attempt.reviewFileMutation) &&
+    if (attempt.delegatedMutation || (changesPeerSession &&
         result.behavior === 'allow' && result.decisionReason?.type !== 'rule')) return await reviewContextually()
   }
   observation?.markRoute('base')
@@ -838,6 +838,8 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         }
       }
 
+      const isAllowlisted = !tool.isMcp && !tool.mcpInfo &&
+        classifierDecisionModule!.isAutoModeAllowlistedTool(tool.name)
       // Before running the auto mode classifier, check if acceptEdits mode would
       // allow this action. This avoids expensive classifier API calls for safe
       // operations like file edits in the working directory.
@@ -848,11 +850,10 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // Announce publishes peer text; file-edit approval cannot approve that text.
       if (
         result.behavior === 'ask' &&
+        !isAllowlisted &&
         tool.name !== AGENT_TOOL_NAME &&
         tool.name !== REPL_TOOL_NAME &&
-        tool.name !== 'Announce' &&
-        // A workspace path alone cannot establish task scope for an edit.
-        !(attempt?.mode === 'experimental' && attempt.reviewFileMutation)
+        tool.name !== 'Announce'
       ) {
         try {
           const parsedInput = tool.inputSchema.parse(input)
@@ -910,7 +911,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
 
       // Allowlisted tools are safe and don't need YOLO classification.
       // This uses the safe-tool allowlist to skip unnecessary classifier API calls.
-      if (classifierDecisionModule!.isAutoModeAllowlistedTool(tool.name)) {
+      if (isAllowlisted) {
         observation?.markRoute('allowlist')
         const newDenialState = recordSuccess(denialState)
         persistDenialState(context, newDenialState)
@@ -939,19 +940,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         }
       }
 
-      if (attempt?.mode === 'experimental' && !attempt.useLegacyReviewer) {
-        const decision = await reviewContextually()
-        if (decision.behavior === 'allow') persistDenialState(context, recordSuccess(denialState))
-        else if (decision.behavior === 'deny' && decision.decisionReason?.type === 'classifier') {
-          const updated = recordDenial(denialState)
-          persistDenialState(context, updated)
-          if (shouldFallbackToPrompting(updated)) {
-            // Escalate repeated denials through the existing user-facing approval surface.
-            return attempt.requireHuman('Auto Mode repeatedly denied actions in this chat. ' + decision.message)
-          }
-        }
-        return decision
-      }
+      if (attempt?.mode === 'experimental') return reviewContextually()
       if (attempt?.mode === 'shadow') {
         const candidate = await attempt.review()
         logForDebugging(`[contextual-auto-review] shadow disposition=${candidate.behavior}`)
@@ -960,38 +949,20 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // Run the auto mode classifier
       // Outcomes are no longer passed in here: they render inline, beneath the
       // call each one reports, so the classifier can correlate them by id.
-      const legacyReview = attempt?.useLegacyReviewer ? attempt : undefined
       let classifierInputForUse: unknown
       try {
         classifierInputForUse = tool.toAutoClassifierInputForUse?.(input, toolUseID)
-        if (legacyReview && (classifierInputForUse === undefined || classifierInputForUse === '')) {
-          classifierInputForUse = tool.toAutoClassifierInput(input)
-        }
       } catch (e) {
-        logForDebugging(
-          `toAutoClassifierInputForUse failed for ${tool.name}: ${errorMessage(e)}`,
-        )
-      }
-      if (legacyReview && (classifierInputForUse == null || classifierInputForUse === '')) {
-        // The legacy codec treats an empty projection as an exemption.
-        classifierInputForUse = input
+        logForDebugging(`toAutoClassifierInputForUse failed for ${tool.name}: ${errorMessage(e)}`)
       }
       const action = formatActionForClassifier(tool.name, input, {
         executionOrigin: getInlineCommandExecutionOrigin(tool.name, input, context, toolUseID),
       }, classifierInputForUse)
-      // Tools without a specialized projection can use the existing classifier.
-      // The final action is still bound to its input, principal, and authority.
-      const blocked = legacyReview?.checkLegacyReview(action)
-      if (blocked) {
-        observation?.markRoute('guard')
-        return blocked
-      }
-      const liveMessages = legacyReview && context.getCurrentAutoModeMessages?.()
       setClassifierChecking(toolUseID)
       let classifierResult
       try {
         classifierResult = await classifyYoloAction(
-          liveMessages ? [...liveMessages] : context.messages,
+          context.messages,
           action,
           context.options.tools,
           appState.toolPermissionContext,

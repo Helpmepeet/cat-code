@@ -1320,6 +1320,17 @@ async function checkPermissionsAndCallTool(
   )
   let permissionDecision = resolved.decision
   processedInput = resolved.input
+  // A queued instruction can cross a file permission, model verdict, hook or
+  // human reply. Reassess only the pending action with the new operator text.
+  if (permissionDecision.behavior === 'allow' && contextualAttempt?.mode === 'experimental' &&
+      contextualAttempt.needsInstructionReview()) {
+    const updated = await contextualAttempt.reviewFollowUp()
+    if (updated.behavior !== 'allow') {
+      permissionDecision = updated.behavior === 'ask'
+        ? await canUseTool(tool, processedInput, toolUseContext, assistantMessage, toolUseID, updated)
+        : updated
+    }
+  }
   const permissionDurationMs = Date.now() - permissionStart
   // In auto mode, canUseTool awaits the classifier (side_query) — if that's
   // slow the collapsed view shows "Running…" with no (Ns) tick since

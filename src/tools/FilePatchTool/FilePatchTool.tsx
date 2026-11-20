@@ -137,53 +137,34 @@ export const FilePatchTool = buildTool({
   async checkPermissions(input, context) {
     const operations = normalizeOperations(input)
     const appState = context.getAppState()
-    let firstDenied: ReturnType<typeof checkSingleFileWritePermissions> | undefined
-    for (const operation of operations) {
-      const pathsToCheck = [operation.path]
-      if (operation.type === 'update' && operation.moveTo) {
-        pathsToCheck.push(operation.moveTo)
-      }
-      for (const filePath of pathsToCheck) {
+    const prepared = getPreparedFileMutationSet(context, FILE_PATCH_TOOL_NAME, input)
+    let firstAsk: Extract<ReturnType<typeof checkSingleFileWritePermissions>, { behavior: 'ask' }> | undefined
+    let requiredAsk: typeof firstAsk
+    for (const filePath of mutationPathsForOperations(operations)) {
+      const target = prepared?.byPath.get(filePath)
+      const resolvedPaths = target ? new Set([target.canonicalPath, target.actualPath ?? target.canonicalPath]) : []
+      // The named path and the prepared destination can carry different rules.
+      for (const path of [undefined, ...resolvedPaths]) {
         const decision = checkSingleFileWritePermissions(
           FilePatchTool,
-          { file_path: filePath },
+          { file_path: path ?? filePath },
           context,
+          path === undefined ? undefined : [path],
         )
-        if (decision.behavior !== 'allow' && firstDenied === undefined) {
-          firstDenied = decision
-        }
-        const prepared = getPreparedFileMutationSet(
-          context,
-          FILE_PATCH_TOOL_NAME,
-          input,
-        )?.byPath.get(filePath)
-        if (prepared) {
-          const actualPaths = [
-            ...new Set([
-              prepared.canonicalPath,
-              prepared.actualPath ?? prepared.canonicalPath,
-            ]),
-          ]
-          for (const actualPath of actualPaths) {
-            const actualDecision = checkSingleFileWritePermissions(
-              FilePatchTool,
-              { file_path: actualPath },
-              context,
-              [actualPath],
-            )
-            if (
-              actualDecision.behavior !== 'allow' &&
-              firstDenied === undefined
-            ) {
-              firstDenied = actualDecision
-            }
+        if (decision.behavior === 'deny') return decision
+        if (decision.behavior === 'ask') {
+          firstAsk ??= decision
+          const reason = decision.decisionReason
+          if (reason?.type === 'safetyCheck' && !reason.classifierApprovable) {
+            requiredAsk = decision
+          } else if (reason?.type === 'rule') {
+            requiredAsk ??= decision
           }
         }
       }
     }
-    if (firstDenied !== undefined) {
-      return firstDenied
-    }
+    const ask = requiredAsk ?? firstAsk
+    if (ask) return ask
     const canonicalInput =
       context.preparedExecution?.toolName === FILE_PATCH_TOOL_NAME
         ? context.preparedExecution.input

@@ -56,6 +56,8 @@ const SAFE_YOLO_ALLOWLISTED_TOOLS = new Set([
   GLOB_TOOL_NAME,
   LSP_TOOL_NAME,
   TOOL_SEARCH_TOOL_NAME,
+  'BrowserRead',
+  'BrowserScreenshot',
   LIST_MCP_RESOURCES_TOOL_NAME,
   'ReadMcpResourceTool', // no exported constant
   // Task management (metadata only)

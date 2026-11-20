@@ -434,11 +434,11 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
   },
 
   async checkPermissions(
-    { skill, args },
+    input,
     context,
   ): Promise<PermissionDecision> {
     // Skills are just skill names, no arguments
-    const trimmed = skill.trim()
+    const trimmed = input.skill.trim()
 
     // Remove leading slash if present (for compatibility)
     const commandName = trimmed.startsWith('/') ? trimmed.substring(1) : trimmed
@@ -501,7 +501,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
       if (slug !== null) {
         return {
           behavior: 'allow',
-          updatedInput: { skill, args },
+          updatedInput: input,
           decisionReason: undefined,
         }
       }
@@ -517,7 +517,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
       if (ruleMatches(ruleContent)) {
         return {
           behavior: 'allow',
-          updatedInput: { skill, args },
+          updatedInput: input,
           decisionReason: {
             type: 'rule',
             rule,
@@ -536,7 +536,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
     ) {
       return {
         behavior: 'allow',
-        updatedInput: { skill, args },
+        updatedInput: input,
         decisionReason: undefined,
       }
     }
@@ -576,7 +576,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
       message: `Execute skill: ${commandName}`,
       decisionReason: undefined,
       suggestions,
-      updatedInput: { skill, args },
+      updatedInput: input,
       metadata: commandObj ? { command: commandObj } : undefined,
     }
   },

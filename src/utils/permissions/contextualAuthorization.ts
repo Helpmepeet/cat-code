@@ -15,6 +15,9 @@ import { isFilePatchToolName, FILE_PATCH_TOOL_NAME } from '../../tools/FilePatch
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
 import { getBashExecutionSettings, type BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { codeModeToolPrincipal } from '../../tools/REPLTool/codeModeTools.js'
+import { workspaceInstructionsForReview } from '../claudemd.js'
+import { getPatchFromContents } from '../diff.js'
+import { isCompleteUnboundedRead } from '../fileStateCache.js'
 import { getCwd } from '../cwd.js'
 import { getPreparedFileMutationSet } from '../fileAuthorization.js'
 import { expandPath } from '../path.js'
@@ -29,7 +32,7 @@ import { getConfiguredAutoModeModel } from './yoloClassifier.js'
 type Input = Record<string, unknown>
 type ReviewMode = 'shadow' | 'experimental'
 const readOnlyTools = new Set(['Read', 'Glob', 'Grep', 'LS', 'ListPeers', 'ReadPeer',
-  'ListProjects', 'TaskList', 'TaskGet', 'TaskOutput', 'ToolSearch'])
+  'ListProjects', 'TaskList', 'TaskGet', 'TaskOutput', 'ToolSearch', 'BrowserRead', 'BrowserScreenshot'])
 
 function isMcpTool(tool: Tool): boolean {
   return Boolean(tool.isMcp || tool.mcpInfo)
@@ -39,10 +42,6 @@ export function mayChangeState(tool: Tool | undefined): boolean {
   return !tool || isMcpTool(tool) || !readOnlyTools.has(tool.name)
 }
 
-function needsContextualFileReview(tool: Tool): boolean {
-  return !isMcpTool(tool) && (tool.name === 'Edit' || tool.name === 'Write' ||
-    isFilePatchToolName(tool.name) || tool.name === NOTEBOOK_EDIT_TOOL_NAME)
-}
 const toolEffects: Readonly<Record<string, string>> = {
   Bash: 'Execute the complete shell command in the effective working directory.',
   Edit: 'Replace matching text in the resolved file.',
@@ -100,7 +99,7 @@ function projectAction(tool: Tool, input: Input, context: ToolUseContext) {
 }
 
 function containsCredentialMaterial(value: string): boolean {
-  return /\b(?:sk-(?:ant-|proj-)?[a-z0-9_-]{15,}|gh[pousr]_[a-z0-9]{20,}|eyJ[a-z0-9_-]{15,}\.[a-z0-9_-]{10,}|(?:authorization:\s*bearer|(?:access_token|api[_-]?key|password)(?:\\?["'])?\s*[:=])\s*(?:\\?["'])?[^\s"'\\]{8,})|(?:^|[/~])\.(?:ssh|aws|credentials\.json)(?:\/|["'\s]|$)|-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(value) ||
+  return /\b(?:sk-(?:ant-|proj-)?[a-z0-9_-]{15,}|gh[pousr]_[a-z0-9]{20,}|eyJ[a-z0-9_-]{15,}\.[a-z0-9_-]{10,}|(?:authorization:\s*bearer|(?:access_token|api[_-]?key|password)(?:\\?["'])?\s*[:=])\s*(?:\\?["'])?[^\s"'\\]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(value) ||
     scanForSecrets(value).length > 0
 }
 
@@ -111,7 +110,7 @@ function readMode(): ReviewMode | undefined {
   const selected = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE_SESSION_ID
   if (value === 'legacy' || (selected && selected !== session)) return undefined
   if (value === 'shadow' || value === 'experimental') return value
-  return session ? 'experimental' : undefined
+  return 'experimental'
 }
 
 export type ContextualAutoAttempt = NonNullable<Awaited<ReturnType<typeof createContextualAttempt>>>
@@ -133,7 +132,7 @@ export async function createContextualAttempt(
   const action = projectAction(tool, snapshot, context)
   const peerParent = await resolveContextualPeerParent(context,
     !mcp && tool.name === 'Announce' ? context.lookupLegacyPeerCreator : undefined)
-  const authority = readContextualAuthority(context, peerParent)
+  let authority = readContextualAuthority(context, peerParent)
   const policy: ToolPermissionContext = structuredClone(context.getAppState().toolPermissionContext)
   const instructions = getSourcedAutoModeInstructions()
   const principal = codeModeToolPrincipal(tool, context)
@@ -141,9 +140,11 @@ export async function createContextualAttempt(
   // Script admission grants the isolated interpreter a single invocation.
   // The calls it submits carry their own delegated mutation gate.
   const delegatedMutation = authority.delegated && mayChangeState(tool) && (mcp || tool.name !== 'REPL')
-  const useLegacyReviewer = mode === 'experimental' && !action.effect && !authority.delegated
-  const attemptId = randomUUID()
-  const startedAt = Date.now()
+  const latestOperator = authority.conversation.findLast(row => row.origin === 'operator' && row.id)
+  const newOperatorTurn = latestOperator && !context.messages.some(row => row.uuid === latestOperator.id)
+  let reviewedInstructions = false
+  let attemptId = randomUUID()
+  let startedAt = Date.now()
   let review: Promise<PermissionDecision> | undefined
   let modelAllowed = false
   let requiresHuman = false
@@ -158,12 +159,10 @@ export async function createContextualAttempt(
     catch { return undefined }
   }
 
-  function current(candidate: Input, releasedContext: ToolUseContext): boolean {
-    const latest = readContextualAuthority(releasedContext, peerParent)
+  function unchangedAction(candidate: Input, releasedContext: ToolUseContext): boolean {
     const liveMcp = mcp && releasedContext.options.getMcpRuntimeSnapshot?.()
     const principalContext = liveMcp ? { ...releasedContext, options: { ...releasedContext.options, mcpClients: [...liveMcp.clients] } } : releasedContext
-    return !latest.pendingOperatorInput && !latest.stopped && isDeepStrictEqual(latest, authority) &&
-      isDeepStrictEqual(candidate, snapshot) &&
+    return isDeepStrictEqual(candidate, snapshot) &&
       isDeepStrictEqual(releasedContext.getAppState().toolPermissionContext, policy) &&
       isDeepStrictEqual(getSourcedAutoModeInstructions(), instructions) &&
       codeModeToolPrincipal(tool, principalContext) === principal &&
@@ -171,11 +170,39 @@ export async function createContextualAttempt(
       isDeepStrictEqual(projectAction(tool, candidate, releasedContext), action)
   }
 
+  function current(candidate: Input, releasedContext: ToolUseContext): boolean {
+    const latest = readContextualAuthority(releasedContext, peerParent)
+    return !latest.stopped && !latest.pendingOperatorInput && isDeepStrictEqual(latest, authority) &&
+      unchangedAction(candidate, releasedContext)
+  }
+
+  // Only the operator's words can be refreshed. A change of tool, principal,
+  // policy or assignment still invalidates the attempt.
+  function refreshInstructions(): boolean {
+    const latest = readContextualAuthority(context, peerParent)
+    if (latest.stopped || latest.pendingOperatorInput || !unchangedAction(input, context) ||
+        latest.actor !== authority.actor || latest.verifiedSource !== authority.verifiedSource ||
+        !isDeepStrictEqual(latest.assignment, authority.assignment) ||
+        !isDeepStrictEqual(latest.conversation.slice(0, authority.conversation.length), authority.conversation)) return false
+    // While the queue drains, the same message can briefly be absent from
+    // both views. Its withdrawal must not disappear from a second review.
+    const visible = [...latest.pendingConversation, ...latest.conversation]
+    if (authority.pendingConversation.some(entry => !visible.some(row =>
+      row.origin === 'operator' && row.text === entry.text && (!entry.id || row.id === entry.id || row.submittedId === entry.id)))) return false
+    authority = latest
+    return true
+  }
+
+  function needsInstructionReview(): boolean {
+    return (!reviewedInstructions && (newOperatorTurn || authority.pendingConversation.length > 0)) ||
+      !isDeepStrictEqual(readContextualAuthority(context, peerParent), authority)
+  }
+
   function emit(outcome: AutoModeReview['outcome'], reason?: string) {
     if (mode !== 'experimental') return
     lastOutcome = outcome
     const event: AutoModeReview = { type: 'tool.review', toolUseId, attemptId, startedAt, outcome,
-      ...(!useLegacyReviewer && { reviewer }),
+      reviewer,
       ...(outcome !== 'reviewing' && { completedAt: Math.max(startedAt, Date.now()) }),
       ...(reason && { reason }) }
     persistAutoModeReview(event)
@@ -184,6 +211,7 @@ export async function createContextualAttempt(
 
   function ask(reason: string, outcome: 'asking' | 'inconclusive' = 'asking'): PermissionDecision {
     requiresHuman = true
+    humanAllowed = false
     if (mode === 'experimental') {
       emit(outcome, reason)
       recordAutoModeOutcome(toolUseId, outcome === 'inconclusive' ? 'automode-unavailable' : 'unanswered')
@@ -204,33 +232,56 @@ export async function createContextualAttempt(
     }
   }
 
-  async function reviewHeldAction(): Promise<PermissionDecision> {
+  function renewReview() {
+    if (lastOutcome) {
+      emit('inconclusive', 'New instructions require a fresh review of this action.')
+      attemptId = randomUUID()
+      startedAt = Date.now()
+      reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
+      lastOutcome = undefined
+    }
+    modelAllowed = false
+  }
+
+  async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
     if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
-    if (!current(input, context)) return stale('The assignment or action changed before review.')
+    if (!refreshInstructions()) return stale('The assignment or action changed before review.')
+    reviewedInstructions = true
     if (delegatedMutation && !authority.verifiedSource) {
       return ask('This helper has no verified user assignment for the requested action.')
     }
     let effect = action.effect
-    if (!effect && !mcp) {
+    if (!effect) {
       try {
         effect = (await tool.description(input, {
           isNonInteractiveSession: context.options.isNonInteractiveSession,
           toolPermissionContext: policy,
           tools: context.options.tools,
         })).trim()
-      } catch { /* Missing effect information requires a human decision. */ }
-      if (!current(input, context)) return stale('The assignment or action changed before review.')
+      } catch { /* The reviewer still receives the tool principal and complete arguments. */ }
+      if (!refreshInstructions()) return stale('The assignment or action changed before review.')
     }
-    if (!effect) return ask('Auto Mode cannot verify the effects of this tool.')
+    effect ||= 'Invoke the named tool with the supplied arguments. Its description is unavailable.'
     const resolvedAction = currentProjection()
     if (resolvedAction !== undefined) boundProjection = { value: structuredClone(resolvedAction) }
-    const source = context.autoModeInstructionContext ?? undefined
+    const source = workspaceInstructionsForReview(context.autoModeInstructionContext)
+    const path = !mcp && tool.name === 'Write' && typeof input.file_path === 'string'
+      ? expandPath(input.file_path, action.cwd) : undefined
+    const previous = path && context.readFileState.get(path)
+    const changedLines = path && previous && isCompleteUnboundedRead(previous) && typeof input.content === 'string'
+      ? getPatchFromContents({ filePath: path, oldContent: previous.content, newContent: input.content }).flatMap(hunk => hunk.lines)
+      : undefined
     const evidence = {
       action: { ...action, effect, attempt: toolUseId, actor: authority.actor,
-        ...(boundProjection && { execution: { ...action.execution, resolvedAction: boundProjection.value } }),
+        execution: { ...action.execution,
+          ...(changedLines?.length && { changeSinceCompleteRead: {
+            addedLines: changedLines.filter(line => line.startsWith('+')).length,
+            removedLines: changedLines.filter(line => line.startsWith('-')).length,
+          } }),
+          ...(boundProjection && { resolvedAction: boundProjection.value }) },
         tool: tool.name, ...(cellId && generation && { script: { cellId, generation, source: context.contextualParentScriptSource } }) },
       assignment: authority.assignment,
-      conversation: authority.conversation,
+      conversation: [...authority.conversation, ...authority.pendingConversation],
       priorDecisions: collectPermissionDecisionContexts(context.messages).slice(-16).map(decision => ({
         action: decision.toolName, outcome: decision.outcome,
       })),
@@ -242,13 +293,19 @@ export async function createContextualAttempt(
     if (containsCredentialMaterial(JSON.stringify(evidence)) || containsCredentialMaterial(JSON.stringify(instructions))) {
       return ask('The action or its context may contain credentials.')
     }
-    reviewer = { ...reviewer, profile: { provider: profile.provider, model: profile.model,
+    reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION, profile: { provider: profile.provider, model: profile.model,
       effort: profile.effort, promptDigest: built.promptDigest } }
     emit('reviewing')
     const result = await sendContextualReview({ ...built.options, agentId: context.agentId }, context.abortController.signal)
     if (result.status === 'valid') reviewer = { ...reviewer, verdict: result.verdict.decision }
-    if (!current(input, context)) return stale(context.abortController.signal.aborted
-      ? 'The review was cancelled.' : 'The assignment or action changed during review.')
+    if (!current(input, context)) {
+      if (canRefresh && refreshInstructions()) {
+        renewReview()
+        return reviewHeldAction(false)
+      }
+      return stale(context.abortController.signal.aborted
+        ? 'The review was cancelled.' : 'The assignment or action changed during review.')
+    }
     if (result.status !== 'valid') return ask('Auto Mode could not complete this review.', 'inconclusive')
     const { decision, rationale } = result.verdict
     const reason = containsCredentialMaterial(rationale) ? 'Auto Mode reviewed the proposed action.' : rationale
@@ -264,23 +321,17 @@ export async function createContextualAttempt(
   }
 
   return {
-    id: toolUseId, mode, delegatedMutation, useLegacyReviewer, reviewFileMutation: needsContextualFileReview(tool),
+    id: toolUseId, mode, delegatedMutation,
     get requiresHuman() { return requiresHuman },
     review: () => review ??= reviewHeldAction(),
-    checkLegacyReview(projection: unknown): PermissionDecision | undefined {
-      if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
-      if (!current(input, context)) return stale('The assignment or action changed before review.')
-      const evidence = { action, projection, conversation: authority.conversation,
-        workspaceInstructions: context.autoModeInstructionContext, script: context.contextualParentScriptSource }
-      if (containsCredentialMaterial(JSON.stringify(evidence)) || containsCredentialMaterial(JSON.stringify(instructions))) {
-        return ask('The action or its context may contain credentials.')
-      }
-      const resolvedAction = currentProjection()
-      if (resolvedAction !== undefined) boundProjection = { value: structuredClone(resolvedAction) }
+    needsInstructionReview,
+    reviewFollowUp() {
+      renewReview()
+      return reviewHeldAction()
     },
     requireHuman(reason: string) { return ask(reason) },
     recordHuman(candidate: Input, replyContext: ToolUseContext) {
-      if (requiresHuman && current(candidate, replyContext)) humanAllowed = true
+      if (requiresHuman && unchangedAction(candidate, replyContext)) humanAllowed = true
     },
     isCurrent: current,
     release(candidate: Input, releasedContext: ToolUseContext): boolean {

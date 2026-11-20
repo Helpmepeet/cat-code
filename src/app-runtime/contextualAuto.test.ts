@@ -27,7 +27,7 @@ async function run(scenario: string) {
         ...(trial
           ? { CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna', CATCODE_SIDECAR_SESSION_ID: 'desktop-session',
               ...(scenario === 'trial-legacy' && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'legacy' }) }
-          : { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'experimental' }),
+          : {}),
         CONTEXTUAL_AUTO_TEST_ROOT: root, CONTEXTUAL_AUTO_TEST_SCENARIO: scenario,
       },
     })
@@ -69,10 +69,40 @@ for (const state of ['host-identity', 'relay-marker']) {
   }, 30_000)
 }
 
-test('an ordinary main-session edit still reaches the contextual reviewer after an inspect-only request', async () => {
-  const proof = await run('main-inspect-only')
-  expect(proof.requests).toEqual([expect.objectContaining({ tool: 'Edit', contextual: true })])
-  expect(proof.files.a).toBe('old')
+for (const [scenario, expectedReviews] of [
+  ['native-edit', []], ['native-edit-script', ['REPL']], ['native-patch', []],
+] as const) {
+  test(`${scenario} makes the workspace edit without reviewing the file tool`, async () => {
+    const proof = await run(scenario)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(expectedReviews)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.files.a).toBe(scenario === 'native-patch' ? 'new\n' : 'new')
+  }, 30_000)
+}
+
+for (const withdrawal of [false, true]) {
+  test(`cleanup keeps applied changes and ${withdrawal ? 'honors a scoped withdrawal' : 'finishes its project check after a follow-up'}`, async () => {
+    const proof = await run(withdrawal ? 'native-cleanup-withdrawal' : 'native-cleanup-followup')
+    expect(proof.pageExists).toBe(false)
+    expect(proof.cleanupFiles.slice(0, 3)).toEqual([
+      'export const pages = ["/board"];', 'export const landing = "/board";', 'export const paths = ["/board"];',
+    ])
+    expect(proof.cleanupFiles[3]).toBe(withdrawal ? 'export const settings = { commercialDir: "photos" };' : 'export const settings = {};')
+    expect(proof.effect).toBe(withdrawal ? null : 'checked')
+    expect(proof.prompts).toHaveLength(0)
+    const edits = proof.requests.filter((r: any) => r.tool === 'Edit')
+    expect(edits).toHaveLength(1)
+    expect(edits[0].content.action.input.file_path).toEndWith('/local.mjs')
+    expect(edits[0].content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator',
+      text: 'yep. up to you', proposal: expect.objectContaining({ text: expect.stringContaining('edit-table') }) }))
+  }, 30_000)
+}
+
+test('four contextual denials hold their actions and a subsequent ask takes a human answer', async () => {
+  const proof = await run('native-denials-then-ask')
+  expect(proof.requests).toHaveLength(5)
+  expect(proof.prompts.map((request: any) => request.tool_use_id)).toEqual(['action-4'])
+  expect(proof.effect).toBe('effect')
 }, 30_000)
 
 for (const [scenario, tool] of [['main-peer-create', 'CreatePeer'], ['main-peer-send', 'SendToPeer']] as const) {
@@ -83,7 +113,7 @@ for (const [scenario, tool] of [['main-peer-create', 'CreatePeer'], ['main-peer-
   }, 30_000)
 }
 
-test('typed desktop question answers reach the reviewer as operator evidence without releasing a follow-up edit', async () => {
+test('typed desktop question answers reach the reviewer as operator evidence without releasing a follow-up command', async () => {
   const proof = await run('question-reply')
   expect(proof.prompts).toEqual([expect.objectContaining({ tool_name: 'AskUserQuestion' })])
   expect(proof.prompts[0].human_only).toBeUndefined()
@@ -91,7 +121,7 @@ test('typed desktop question answers reach the reviewer as operator evidence wit
   expect(proof.requests[0].content.conversation).toContainEqual(expect.objectContaining({
     origin: 'operator', text: expect.stringContaining('Leave the file untouched.'),
   }))
-  expect(proof.files.a).toBe('old')
+  expect(proof.effect).toBeNull()
 }, 30_000)
 
 test('a credential in sourced Auto Mode settings holds the action without a provider request', async () => {
@@ -107,8 +137,10 @@ for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
     const review = proof.requests.find((request: any) => request.tool === 'Bash')
     expect(review?.contextual).toBe(true)
     expect(proof.effect).toBeNull()
-    const expected = { toolUseId: review.content.action.attempt, outcome: 'inconclusive',
-      reason: 'The assignment or action changed during review.', reviewer: expect.objectContaining({ verdict: 'allow' }) }
+    const latest = proof.requests.filter((request: any) => request.tool === 'Bash').at(-1)
+    expect(latest.content.conversation.at(-1)).toMatchObject({ origin: 'operator', text: expect.stringContaining('Stop') })
+    const expected = { toolUseId: review.content.action.attempt, outcome: 'blocked',
+      reviewer: expect.objectContaining({ verdict: 'deny' }) }
     expect(proof.reviewEvents).toContainEqual(expect.objectContaining(expected))
     expect(proof.savedReviews).toContainEqual(expect.objectContaining(expected))
   }, 30_000)
@@ -138,13 +170,16 @@ for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
     } else {
       expect(proof.prompts).toHaveLength(0)
       expect(proof.requests).toContainEqual(expect.objectContaining({
-        contextual: false, content: expect.stringContaining('mcp__fixture__records'),
+        contextual: true, content: expect.objectContaining({ action: expect.objectContaining({
+          tool: 'mcp__fixture__records', effect: 'Synthetic records integration tool', input: { key: 'sample' },
+          execution: expect.objectContaining({ server: 'fixture', serverTool: 'records' }),
+        }) }),
       }))
     }
     if (outcome === 'withdrawal') {
-      const held = proof.reviewEvents.find((row: any) => row.outcome === 'inconclusive')
-      expect(held?.reason).toContain('no longer matches')
-      expect(held.reviewer).toBeUndefined()
+      expect(proof.requests.at(-1).content.conversation.at(-1)).toMatchObject({
+        origin: 'operator', text: 'Stop. Do not access the records.',
+      })
     }
   }, 30_000)
 }
@@ -154,22 +189,25 @@ for (const delegated of [false, true]) {
     const proof = await run(delegated ? 'native-browser-peer' : 'native-browser')
     expect(proof.prompts).toHaveLength(0)
     expect(proof.browserCalls).toBe(1)
-    const review = proof.requests.find((request: any) => request.contextual === delegated)
-    if (delegated) {
-      expect(review?.content.action).toMatchObject({ tool: 'BrowserAct',
-        execution: { resolvedAction: 'click button Save changes on localhost:3000' } })
-      expect(review.content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator' }))
-    } else {
-      expect(review?.content).toContain('click button Save changes on localhost:3000')
-    }
+    const review = proof.requests.find((request: any) => request.contextual)
+    expect(review?.content.action).toMatchObject({ tool: 'BrowserAct',
+      execution: { resolvedAction: 'click button Save changes on localhost:3000' } })
+    expect(review.content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator' }))
   }, 30_000)
 }
 
-test('a GPT file patch reaches contextual review when the user asked to inspect only', async () => {
-  const proof = await run('native-patch')
+for (const scenario of ['native-browser-read', 'native-browser-screenshot']) test(`${scenario} runs without an Auto Mode review`, async () => {
+  const proof = await run(scenario)
   expect(proof.prompts).toHaveLength(0)
-  expect(proof.requests).toContainEqual(expect.objectContaining({ tool: 'apply_patch', contextual: true }))
-  expect(proof.files.a).toBe('old')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.browserCalls).toBe(1)
+}, 30_000)
+
+test('desktop Auto Mode loads an ordinary skill without optional arguments or a review', async () => {
+  const proof = await run('native-skill')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(JSON.stringify(proof.transcript)).toContain('AUTO_SKILL_INSTRUCTIONS_LOADED')
 }, 30_000)
 
 for (const entry of ['direct', 'script']) {

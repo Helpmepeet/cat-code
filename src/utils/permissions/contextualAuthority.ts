@@ -46,6 +46,12 @@ function conversationEvidence(
         proposals.set(message.uuid, proposals.has(message.uuid) ? null : proposal)
       }
       if (isLiveAssistant(message)) {
+        // The first spoken response records the option the agent selected.
+        // It can explain a delegated choice, but cannot grant permission.
+        if (evidence.at(-1)?.proposal) {
+          const response = proposals.get(message.uuid)
+          if (response) evidence.push({ origin: 'assistant', id: message.uuid, text: response.text })
+        }
         for (const block of message.message.content) {
           if (block.type !== 'tool_use') continue
           const input = block.input
@@ -102,6 +108,7 @@ function conversationEvidence(
       (queued && 'priorAssistantContext' in queued ? queued.priorAssistantContext : undefined))
     const prior = reply ? proposals.get(reply.messageUuid) : undefined
     evidence.push({ origin: 'operator', id: message.uuid, text: content,
+      ...(queued?.source_uuid && { submittedId: queued.source_uuid }),
       ...(prior && reply && prior.binding.textHash === reply.textHash &&
         { proposal: { id: reply.messageUuid, text: prior.text } }) })
   }
@@ -276,13 +283,35 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
     ...(worker ? { text: worker.text, sender: worker.sender } : peer ? { text: peer.text, sender: peer.actor } : {}),
     ...(parent && { parent, parentAnchor: anchor }),
   } : undefined
+  // Keep the operator's actual follow-up available while the main query is
+  // draining its queue. Unreadable inputs still fence the pending action.
+  const pending = getCommandQueueSnapshot().filter(command => command.mode === 'prompt' &&
+    (command.agentId === undefined || command.agentId === context.agentId) && !command.isMeta &&
+    isOperatorOrigin(command.origin))
+  const pendingConversation: ConversationEntry[] = []
+  let unreadable = false
+  for (const command of pending) {
+    if (command.priority === 'now' || Object.keys(command.pastedContents ?? {}).length ||
+        (Array.isArray(command.value) && command.value.some(block => block.type !== 'text'))) {
+      unreadable = true
+      continue
+    }
+    const text = typeof command.value === 'string' ? command.value :
+      command.value.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+    if (!text.trim()) unreadable = true
+    else {
+      const reply = parsePriorAssistantContext(command.priorAssistantContext)
+      const matches = reply && messages.filter(row => row.uuid === reply.messageUuid &&
+        row.type === 'assistant' && !row.isVirtual && !row.codeMode && !worker?.excluded.has(row.uuid))
+      const prior = matches?.length === 1 ? readAssistantProposal(matches[0]!) : null
+      pendingConversation.push({ origin: 'operator', id: command.uuid, text,
+        ...(reply && prior?.binding.textHash === reply.textHash && { proposal: { id: reply.messageUuid, text: prior.text } }) })
+    }
+  }
   return {
-    actor, delegated, assignment, conversation,
+    actor, delegated, assignment, conversation, pendingConversation,
     verifiedSource: Boolean(parent || conversation.some(record => record.origin === 'operator' && record.id)),
-    pendingOperatorInput: Boolean(peerParent?.pendingOperatorInput) ||
-      getCommandQueueSnapshot().some(command => command.mode === 'prompt' &&
-        (command.agentId === undefined || command.agentId === context.agentId) && !command.isMeta &&
-        isOperatorOrigin(command.origin)),
+    pendingOperatorInput: Boolean(peerParent?.pendingOperatorInput) || unreadable,
     stopped: context.abortController.signal.aborted || worker?.parentSignal.aborted === true ||
       stopped(messages, conversation) || Boolean(parentMessages && parentEvidence && stopped(parentMessages, parentEvidence)),
   }

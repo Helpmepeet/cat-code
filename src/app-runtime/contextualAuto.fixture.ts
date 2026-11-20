@@ -7,17 +7,25 @@ const root = process.env.CONTEXTUAL_AUTO_TEST_ROOT!
 const scenario = process.env.CONTEXTUAL_AUTO_TEST_SCENARIO!
 const legacyNotice = scenario.startsWith('legacy-notice-')
 const backgroundWithdrawal = scenario === 'background-withdrawal'
+const repeatedDenials = scenario === 'native-denials-then-ask'
+const cleanup = scenario.startsWith('native-cleanup-')
+const keepSetting = scenario === 'native-cleanup-withdrawal'
+const followUp = keepSetting ? 'Keep the old setting in local.mjs until tomorrow.' : 'Also give me a short summary after the checks.'
 const questionReply = scenario === 'question-reply'
 const lateCorrection = scenario === 'direct-late-correction'
 const credentialSettings = scenario === 'direct-credential-settings'
 const compacted = scenario.startsWith('compacted-')
-const mainEdit = scenario === 'main-inspect-only'
+const mainEdit = scenario === 'native-edit' || scenario === 'native-edit-script'
+const mainEditScript = scenario === 'native-edit-script'
 const directPatch = scenario === 'native-patch'
+const loadSkill = scenario === 'native-skill'
 const browserAction = scenario.startsWith('native-browser')
 const browserPeer = scenario === 'native-browser-peer'
+const browserRead = scenario === 'native-browser-read' || scenario === 'native-browser-screenshot'
+const browserReadTool = scenario === 'native-browser-screenshot' ? 'BrowserScreenshot' : 'BrowserRead'
 const browserTarget = 'click button Save changes on localhost:3000'
 const nativeAction = browserAction
-  ? { name: 'BrowserAct', input: { action: 'click', ref: 'g1-e12' } }
+  ? browserRead ? { name: browserReadTool, input: {} } : { name: 'BrowserAct', input: { action: 'click', ref: 'g1-e12' } }
   : directPatch
     ? { name: 'apply_patch', input: { input: '*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch' } }
     : undefined
@@ -39,6 +47,11 @@ const effect = () => readFile(join(cwd, 'effects.txt'), 'utf8').catch(() => null
 const hookMarker = join(cwd, 'permission-hook-ran')
 const reviewUnavailable = scenario.endsWith('-unavailable')
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
+if (loadSkill) {
+  const skillDir = join(configuration, 'skills', 'fixture-auto-skill')
+  await mkdir(skillDir, { recursive: true })
+  await writeFile(join(skillDir, 'SKILL.md'), '---\nname: fixture-auto-skill\ndescription: Isolated Auto Mode skill\n---\nAUTO_SKILL_INSTRUCTIONS_LOADED')
+}
 const action = (name: string) => ({ name: 'Edit', input: { file_path: join(cwd, name + '.txt'), old_string: 'old', new_string: 'new' } })
 const command = { name: 'Bash', input: { command: 'printf effect >> effects.txt', work_lifetime: 'finite', run_in_background: false } }
 const question = { name: 'AskUserQuestion', input: { questions: [
@@ -63,10 +76,12 @@ const code = scenario === 'skip-queued'
       'measure-background': 'output("background fixture");',
     } as Record<string, string>)[scenario]!
     : scenario === 'hook-edit' ? `const name = "a" + ".txt"; await tools.call({name:"Edit",input:{file_path:name,old_string:"old",new_string:"new"}});`
+    : mainEditScript ? `await ${call('a')};`
     : routed ? `const pending = ${JSON.stringify(candidate)}; await tools.call(pending); output("helper completed");`
     : `await tools.call(${JSON.stringify(command)}); output("after approval");`
-const submitted = localMcp ? mcpAction : nativeAction ?? peerAction ?? (questionReply ? question
-  : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || mainEdit || scenario.startsWith('trial-')
+const submitted = localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
+  : nativeAction ?? peerAction ?? (questionReply ? question
+  : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
     : { name: 'REPL', input: { code, description: 'Run isolated fixture',
         ...((scenario === 'measure-background' || backgroundWithdrawal) && { run_in_background: true }) } })
@@ -82,6 +97,33 @@ if (scenario === 'hook-edit' || scenario.startsWith('direct-')) {
     PreToolUse: [{ matcher: scenario === 'hook-edit' ? 'Edit' : 'Bash', hooks: [hook(event)] }],
     PermissionRequest: [{ matcher: 'Bash', hooks: [{ ...hook(approve), command: `touch permission-hook-ran && ${hook(approve).command}` }] }],
   } }))
+}
+const cleanupEdits = [
+  ['routes.mjs', 'export const pages = ["/commercial", "/board"];', 'export const pages = ["/board"];'],
+  ['login.mjs', 'export const landing = "/commercial";', 'export const landing = "/board";'],
+  ['test-script.mjs', 'export const paths = ["/commercial", "/board"];', 'export const paths = ["/board"];'],
+  ['local.mjs', 'export const settings = { commercialDir: "photos" };', 'export const settings = {};'],
+] as const
+const cleanupActions = cleanupEdits.map(([name, old_string, new_string]) => ({
+  name: 'Edit', input: { file_path: join(cwd, name), old_string, new_string },
+}))
+const cleanupPlan = [
+  { name: 'Read', input: { file_path: join(cwd, 'commercial.mjs') } },
+  { name: 'apply_patch', input: { input: '*** Begin Patch\n*** Delete File: commercial.mjs\n*** End Patch' } },
+  ...cleanupActions,
+  { name: 'Bash', input: { command: 'node check.mjs' } },
+]
+if (cleanup) {
+  await writeFile(join(cwd, 'commercial.mjs'), 'export default function commercial() {}\n')
+  for (const [name, content] of cleanupEdits) await writeFile(join(cwd, name), content)
+  await writeFile(join(cwd, 'check.mjs'), `import assert from 'node:assert/strict';
+import { existsSync, writeFileSync } from 'node:fs';
+assert.equal(existsSync('commercial.mjs'), false);
+import { pages } from './routes.mjs'; import { landing } from './login.mjs';
+import { paths } from './test-script.mjs'; import { settings } from './local.mjs';
+assert.deepEqual(pages, ['/board']); assert.deepEqual(paths, pages);
+assert.equal(landing, pages[0]); assert.deepEqual(settings, {});
+writeFileSync('effects.txt', 'checked');`)
 }
 const requests: { tool: string; content: any; startedAt: number; elapsedMs: number; model: string; provider: string; contextual: boolean }[] = []
 let modelCalls = 0
@@ -101,7 +143,14 @@ mock.module('../services/api/client.js', () => ({
       const tool = contextual ? content.action.tool : /<pending_action>\n(\S+)/.exec(content)?.[1] ?? 'unknown'
       const review = { tool, content, startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
-      const verdict = tool === 'REPL' ? 'allow'
+      const operatorText = contextual ? content.conversation.filter((entry: any) => entry.origin === 'operator').map((entry: any) => entry.text) : []
+      const verdict = repeatedDenials ? (requests.length <= 4 ? 'deny' : 'ask')
+        : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
+        : operatorText.some((text: string) => text === 'Stop. Leave all files untouched.' ||
+          text === 'Stop. Do not access the records.' || text === 'Stop the background task. Leave the file untouched.' ||
+          text === 'Leave the file untouched. Only inspect it.') ? 'deny'
+        : scenario === 'mcp-deny' ? 'deny'
+        : tool === 'REPL' ? 'allow'
         : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction || directPatch ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
@@ -109,11 +158,11 @@ mock.module('../services/api/client.js', () => ({
       return (async () => {
         await Bun.sleep(2)
         if (tool === 'Edit') await invalidateParent?.()
-        if (localMcp && !contextual && mcpWithdrawal) {
+        if (localMcp && mcpWithdrawal && requests.length === 1) {
           const { enqueue } = await import('../utils/messageQueueManager.js')
           enqueue({ mode: 'prompt', value: 'Stop. Do not access the records.' })
         }
-        if (tool === 'Bash' && lateCorrection) {
+        if (tool === 'Bash' && lateCorrection && requests.length === 1) {
           const { enqueue } = await import('../utils/messageQueueManager.js')
           enqueue({ mode: 'prompt', value: 'Stop. Leave all files untouched.' })
         }
@@ -134,14 +183,19 @@ mock.module('../services/api/client.js', () => ({
       })()
     }
     const index = modelCalls++
-    const invocation = index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply) && index === 1
-    const main = legacyNotice
+    const cleanupCall = cleanup ? cleanupPlan[index] : undefined
+    const invocation = repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply) && index === 1
+    const main = repeatedDenials ? command : cleanupCall || (legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : index === 0 ? submitted
-      : questionReply ? action('a')
-      : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }
+      : questionReply ? command
+      : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } })
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
+      if (cleanupCall === cleanupActions.at(-1) && cleanup) {
+        const { enqueue } = await import('../utils/messageQueueManager.js')
+        enqueue({ mode: 'prompt', value: followUp })
+      }
       if (invocation) {
         yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `action-${index}`, name: main.name, input: {} } }
         yield { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(main.input) } }
@@ -167,7 +221,7 @@ const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
-if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || mcpWithdrawal || scenario.startsWith('trial-')) {
+if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
@@ -210,7 +264,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
     return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
-      backgroundWithdrawal || lateCorrection || mcpWithdrawal || scenario.startsWith('trial-'))
+      backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || scenario.startsWith('trial-'))
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
@@ -223,14 +277,18 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
 let browserCalls = 0
-if (nativeAction) {
+if (loadSkill) {
+  const { SkillTool } = await import('../tools/SkillTool/SkillTool.js')
+  config.tools = [...config.tools, SkillTool]
+}
+if (nativeAction || cleanup) {
   if (browserAction) {
     const { createBrowserTools } = await import('../../app/sidecar/browserTools.js')
     config.tools = [...config.tools, ...createBrowserTools((async verb => {
       if (verb === 'browser.describe') return { ok: true, value: {
         description: browserTarget, url: 'http://localhost:3000/settings',
       } }
-      if (verb !== 'browser.act') throw new Error('Unexpected browser fixture request')
+      if (verb !== (browserRead ? (browserReadTool === 'BrowserRead' ? 'browser.read' : 'browser.screenshot') : 'browser.act')) throw new Error('Unexpected browser fixture request')
       browserCalls++
       return { ok: true, value: {} }
     }) as import('../../app/sidecar/peerHostRequester.js').PeerHostRequester)]
@@ -300,6 +358,12 @@ if (legacyNotice) {
     return { ok: true, value: { postedAt: Date.now() } } as never
   })]
 }
+const { createAssistantMessage } = await import('../utils/messages.js')
+if (cleanup) {
+  const proposal = createAssistantMessage({ content: 'Remove the leftover /commercial page and check the cleanup, or plan the edit-table flattening?' })
+  proposal.message.model = 'claude-sonnet-5-5'
+  config.initialMessages = [proposal]
+}
 const session = createQueryEngineAppSession(config)
 const controller = createQueryEngineSessionController(session)
 const prompts: unknown[] = []
@@ -335,7 +399,7 @@ controller.subscribe(event => {
       const { enqueue } = await import('../utils/messageQueueManager.js')
       enqueue({ mode: 'prompt', value: 'Leave the file untouched. Only inspect it.' })
     }
-    if (scenario === 'wait-approve' || scenario === 'wait-correction' || scenario === 'direct-allow' || scenario === 'direct-mutated' || scenario === 'direct-unavailable' || scenario === 'direct-invalid') {
+    if (repeatedDenials || scenario === 'wait-approve' || scenario === 'wait-correction' || scenario === 'direct-allow' || scenario === 'direct-mutated' || scenario === 'direct-unavailable' || scenario === 'direct-invalid') {
       const response = { behavior: 'allow' as const, updatedInput: scenario === 'direct-mutated' ? { ...request.input, run_in_background: true } : request.input }
       controller.respondToPermissionRequest(requestId, response)
       controller.respondToPermissionRequest(requestId, response)
@@ -359,15 +423,18 @@ async function awaitHook() {
 }
 
 if (surface === 'desktop') {
-  if (localMcp) await controller.submit('Look up the sample record.', scenario === 'mcp-peer-only' ? {
+  if (cleanup) await controller.submit('yep. up to you')
+  else if (localMcp) await controller.submit('Look up the sample record.', scenario === 'mcp-peer-only' ? {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   } : undefined)
-  else if (nativeAction) await controller.submit(browserAction ? 'Click Save in the browser.' : 'Inspect a.txt and leave it untouched.',
+  else if (nativeAction) await controller.submit(browserAction
+    ? browserRead ? 'Read the browser page.' : 'Click Save in the browser.'
+    : 'Update a.txt from old to new.',
     browserPeer ? { origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId } } : undefined)
   else if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
     kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
   } })
-  else await controller.submit(routed ? assignment : mainEdit ? 'Inspect a.txt. Leave it untouched.' :
+  else await controller.submit(routed || mainEdit ? assignment : loadSkill ? 'Use the fixture-auto-skill.' :
     peerAction ? 'Inspect a.txt yourself. Do not create or contact another session.' :
     'Run the isolated action and report the result.', routed ? {
       origin: { kind: 'peer', name: 'Lead', appSessionId: 'fixture-lead', creationPrompt: true, ...(parentReference && { assignment: parentReference }) },
@@ -468,6 +535,7 @@ if (lateCorrection || backgroundWithdrawal || scenario.startsWith('trial-')) {
 }
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
   scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
+  ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),
   ...(browserAction && { browserCalls }),
   ...(localMcp && { mcpCalls: await readFile(join(root, 'mcp-calls.jsonl'), 'utf8')
     .then(text => text.trim().split('\n').map(line => JSON.parse(line)), () => []) }),

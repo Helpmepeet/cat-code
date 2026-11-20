@@ -60,6 +60,22 @@ describe('FilePatchTool.getPath', () => {
 })
 
 describe('FilePatchTool.checkPermissions boundary', () => {
+  for (const behavior of ['deny', 'ask'] as const) {
+    test(`a later path's explicit ${behavior} rule takes precedence over a generic prompt`, async () => {
+      const outside = '/tmp/cat-code-fp-permtest-outside/target.ts'
+      const restricted = join(getCwd(), 'cat-code-fp-permtest-restricted.ts')
+      const rules = { session: ['Edit(cat-code-fp-permtest-restricted.ts)'] }
+      const policy = permissionContext('auto')
+      if (behavior === 'deny') policy.alwaysDenyRules = rules
+      else policy.alwaysAskRules = rules
+      const decision = await FilePatchTool.checkPermissions(
+        { ops: [{ type: 'delete', path: outside }, { type: 'delete', path: restricted }] },
+        toolUseContext(policy),
+      )
+      expect(decision).toMatchObject({ behavior, decisionReason: { type: 'rule' } })
+    })
+  }
+
   test('acceptEdits does NOT auto-allow a patch to a path outside working dirs', async () => {
     const outside = '/tmp/cat-code-fp-permtest-outside/target.ts'
     const decision = await FilePatchTool.checkPermissions(

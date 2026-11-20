@@ -57,7 +57,8 @@ export async function sendContextualReview(
   try {
     const response = await send({ ...options, signal: deadline })
     const text = response.content.filter(block => block.type === 'text').map(block => block.text).join('')
-    const verdict = response.stop_reason === 'max_tokens' ? undefined : parseContextualVerdict(text)
+    const verdict = response.stop_reason === 'end_turn' || response.stop_reason === 'stop_sequence'
+      ? parseContextualVerdict(text) : undefined
     result = verdict ? { status: 'valid', verdict } : { status: 'invalid' }
   } catch {
     result = { status: 'unavailable' }
