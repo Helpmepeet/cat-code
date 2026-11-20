@@ -5,7 +5,6 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { createTranscriptState, projectServerFrames, selectFocusedLiveState, selectNestedTranscriptRows, selectTranscriptRows } from './transcriptProjector.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import { TranscriptModeContext } from './transcriptMode.js'
-import { ToolInspector } from './ToolInspector.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -223,20 +222,21 @@ test('a historical launch shows an unknown outcome until a matching terminal rec
   expect(label(tree.container)).toBe('completed')
 })
 
-test('foreground Script card and inspector show child calls before the final receipt', async () => {
+test('foreground Script card and its source show child calls before the final receipt', async () => {
   const data = fixture('foreground-inspector')
   data.submitted()
   const inspectorView = () => {
     const script = data.rows().find(row => row.kind === 'tool-use' && row.toolName === 'REPL')
     if (script?.kind !== 'tool-use') throw new Error('Missing Script row')
-    return <>{view(data)}<ToolInspector row={script} /></>
+    return view(data)
   }
   const tree = await harness.mount(inspectorView())
+  const fold = tree.container.querySelector('.code-mode-script .code-mode-fold-head')!
+  if (fold.getAttribute('aria-expanded') === 'false') await act(async () => { fold.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
   expect(tree.container.querySelector('button[aria-label="Select line 1, executed"]')).toBeNull()
   data.child()
   await tree.render(inspectorView())
   expect(tree.container.querySelector('.code-mode-member')?.textContent).toContain('/repo/a')
-  expect(tree.container.querySelector('.code-mode-panel-facts')?.textContent).toContain('1 call')
   expect(tree.container.querySelector<HTMLButtonElement>('button[aria-label="Select line 1, executed"]')?.title).toContain('running')
 })
 

@@ -1,5 +1,4 @@
 import { SidePaneNavigation } from './SidePaneNavigation.js'
-import { CodeModeInspector } from './CodeModeInspector.js'
 
 /**
  * The full-output panel: a tool call's complete output, docked beside the
@@ -96,9 +95,6 @@ export function ToolInspector({
   onClose?: () => void
 }): ReactNode {
   if (!row) return null
-  if (row.toolName === 'REPL') {
-    return <CodeModeInspector key={row.toolUseId} row={row} onClose={back?.onBack ?? onClose} />
-  }
   return (
     <OutputPanel
       row={row}
