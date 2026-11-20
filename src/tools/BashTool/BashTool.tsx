@@ -1301,7 +1301,7 @@ async function* runShellCommand({
         totalLines: lastTotalLines,
         totalBytes: lastTotalBytes,
         taskId: shellCommand.taskOutput.taskId,
-        ...(timeout ? {
+        ...(input.timeout ? {
           timeoutMs
         } : undefined)
       };

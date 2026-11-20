@@ -79,14 +79,10 @@ function requester(answer: unknown): {
   return { requestHost, asked }
 }
 
-/**
- * A context carrying only what this tool reads. The cast is on the SHAPE of a
- * 40-field engine context, not on any value the tool interprets: `getAppState`
- * is the single member `CreatePeer` touches.
- */
+/** The engine provides a message list even when there is no assignment history. */
 function contextWithEffort(effortValue: AppState['effortValue']): ToolUseContext {
   const state: AppState = { ...getDefaultAppState(), effortValue }
-  return { getAppState: () => state } as unknown as ToolUseContext
+  return { getAppState: () => state, messages: [] } as ToolUseContext
 }
 
 const previousOverride = getMainLoopModelOverride()
