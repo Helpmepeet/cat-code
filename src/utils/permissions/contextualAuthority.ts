@@ -3,6 +3,8 @@ import { validateUuid } from '../uuid.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import type { Attachment } from '../attachments.js'
+import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { SYNTHETIC_MODEL } from '../messages.js'
 import { getCommandQueueSnapshot } from '../messageQueueManager.js'
 import { queuedCommandOrigin } from '../taskNotification.js'
 import { positionPermissionDecisionContexts } from './permissionDecisionContext.js'
@@ -12,7 +14,11 @@ import type { ContextualEvidence } from './contextualReviewPrompt.js'
 type Conversation = ContextualEvidence['conversation']
 type ConversationEntry = Conversation[number]
 
-function conversationEvidence(messages: readonly Message[], excluded?: ReadonlySet<string>): ConversationEntry[] {
+function conversationEvidence(
+  messages: readonly Message[],
+  excluded?: ReadonlySet<string>,
+  includeWorkerRequests = false,
+): ConversationEntry[] {
   const proposals = new Map<string, ReturnType<typeof readAssistantProposal>>()
   const evidence: ConversationEntry[] = []
   const permissionHistory = positionPermissionDecisionContexts(messages)
@@ -22,6 +28,17 @@ function conversationEvidence(messages: readonly Message[], excluded?: ReadonlyS
       if (message.isVirtual || message.codeMode) continue
       const proposal = readAssistantProposal(message)
       proposals.set(message.uuid, proposals.has(message.uuid) ? null : proposal)
+      if (includeWorkerRequests && !message.isApiErrorMessage && !message.isInternalNoResponseSentinel &&
+          !message.discardedStreamMessageId && message.message.model !== SYNTHETIC_MODEL) {
+        for (const block of message.message.content) {
+          if (block.type !== 'tool_use' || (block.name !== AGENT_TOOL_NAME && block.name !== LEGACY_AGENT_TOOL_NAME)) continue
+          const input = block.input
+          if (input && typeof input === 'object' && 'prompt' in input && typeof input.prompt === 'string') {
+            // The request records whom the assistant addressed, even if launch was refused or rewritten.
+            evidence.push({ origin: 'assistant', id: block.id, recipient: 'requested worker', text: input.prompt })
+          }
+        }
+      }
       continue
     }
     for (const refusal of permissionHistory.get(message) ?? []) {
@@ -68,6 +85,7 @@ function stopped(messages: readonly Message[]): boolean {
 
 export type ContextualWorkerAssignment = {
   text: string
+  sender: string
   excluded: ReadonlySet<string>
   parentMessages: () => readonly Message[]
   anchor?: string
@@ -123,18 +141,22 @@ export function workerAssignment(
   text: string,
 ): ContextualWorkerAssignment {
   const parentMessages = () => parent.getCurrentAutoModeMessages?.() ?? parent.messages
-  const anchor = conversationEvidence(parent.messages, parent.contextualWorkerAssignment?.excluded)
-    .findLast(record => record.origin === 'operator' && record.id)?.id
-  return { text, excluded: new Set(initialMessages.map(message => message.uuid)),
+  const evidence = conversationEvidence(parent.messages, parent.contextualWorkerAssignment?.excluded)
+  const anchor = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
+  const sender = parent.agentId ?? (evidence.some(record => record.origin === 'peer') ? 'peer-session' : 'main')
+  return { text, sender, excluded: new Set(initialMessages.map(message => message.uuid)),
     parentMessages, anchor, parentSignal: parent.abortController.signal }
 }
 
 export function readContextualAuthority(context: ToolUseContext, peerParent?: PeerParentEvidence) {
   const worker = context.contextualWorkerAssignment
   const messages = context.getCurrentAutoModeMessages?.() ?? context.messages
-  const conversation = conversationEvidence(messages, worker?.excluded)
+  const conversation = conversationEvidence(messages, worker?.excluded, true)
   const peer = conversation.find(record => record.origin === 'peer')
   const actor = context.agentId ?? (peer ? 'peer-session' : 'main')
+  for (const entry of conversation) {
+    if (entry.origin === 'assistant') entry.actor = actor
+  }
   const parentMessages = worker?.parentMessages() ?? (peerParent?.isCurrent() ? peerParent.messages : undefined)
   const parentEvidence = parentMessages ? conversationEvidence(parentMessages) : undefined
   // The launch captures the anchor before crossing into the assistant-authored
@@ -145,7 +167,7 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
   const delegated = Boolean(context.agentId || peer || peerParent)
   const assignment: ContextualEvidence['assignment'] = delegated ? {
     actor, origin: worker ? 'worker-launch' : 'peer',
-    ...(worker ? { text: worker.text } : peer ? { text: peer.text } : {}),
+    ...(worker ? { text: worker.text, sender: worker.sender } : peer ? { text: peer.text } : {}),
     ...(parent && { parent }),
   } : undefined
   return {

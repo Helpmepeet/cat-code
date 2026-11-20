@@ -42,6 +42,7 @@ export type ContextualEvidence = {
   }[]
   assignment?: {
     actor: string
+    sender?: string
     origin: 'worker-launch' | 'peer' | 'operator'
     text?: string
     parent?: ContextualEvidence['conversation']
