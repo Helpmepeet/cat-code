@@ -67,7 +67,17 @@ export function computerPicture(step: ComputerStep, capture?: ComputerWindowCapt
 function sameScreen(a: ComputerPicture, b: ComputerPicture): boolean {
   if (a.app !== b.app) return false
   if (a.fingerprint && b.fingerprint && a.fingerprint.length === b.fingerprint.length) {
-    return a.fingerprint.every((sample, index) => Math.abs(sample - b.fingerprint![index]!) <= 3)
+    const next = b.fingerprint
+    let total = 0
+    let largeChanges = 0
+    for (const [index, sample] of a.fingerprint.entries()) {
+      const delta = Math.abs(sample - next[index]!)
+      total += delta
+      if (delta > 24) largeChanges++
+    }
+    // Allow a local loading indicator to change, but reject broad shifts
+    // even if most of the window (such as a settings sidebar) stays fixed.
+    return total <= next.length * 8 && largeChanges <= next.length / 8
   }
   return a.src === b.src
 }

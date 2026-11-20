@@ -113,7 +113,7 @@ test('pictureless groups use the plain list layout without changing failed row s
   expect(selectedReason()).toBe('Window closed')
   await tree.render(view(true))
   expect(group().hasAttribute('data-has-picture')).toBe(true)
-  expect(group().querySelector('.computer-pane-thumbnail')).not.toBeNull()
+  expect(group().querySelector('.computer-pane-thumbnail[aria-current="true"]')).not.toBeNull()
   expect(selectedReason()).toBe('Window closed')
 })
 

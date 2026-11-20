@@ -43,6 +43,26 @@ test('same-screen captures share a thumbnail, but changed screens start a new gr
   expect(groups.map(group => group.picture?.stepId)).toEqual(['b', 'd'])
 })
 
+test('System Settings loading and populated values group, while page-wide changes split', () => {
+  const steps = selectComputerSteps(['loading', 'refresh', 'values', 'general', 'brighter'].map(id =>
+    ({ ...computerFixture(id, false), input: { code: 'cua.getApp("System Settings")' } })))
+  const loading = Array.from({ length: 16 * 12 }, (_, i) => i % 16 < 5 ? 92 : 160)
+  const refresh = loading.map((value, i) => i >= 120 && i < 124 ? value + 7 : value)
+  const values = refresh.map((value, i) => i >= 120 && i < 132 ? value - 55 : value)
+  // A different page updates 32 samples; its mean delta is under 8,
+  // so the large-change count is what separates it.
+  const general = values.map((value, i) => i >= 16 && i < 80 && i % 16 >= 8 ? value - 30 : value)
+  // A broad but lower contrast change is caught by the mean alone.
+  const brighter = general.map(value => value + 9)
+  const captures = new Map<string, ComputerWindowCapture>()
+  for (const [index, fingerprint] of [loading, refresh, values, general, brighter].entries()) {
+    const { id } = steps[index]!
+    captures.set(id, { status: 'captured', dataUrl: id, fingerprint })
+  }
+  expect(groupComputerSteps(steps, captures).map(group => group.steps.map(step => step.id)))
+    .toEqual([['loading', 'refresh', 'values'], ['general'], ['brighter']])
+})
+
 test('nested computer steps retain stable IDs and titles, deduplicate, and use last capture', () => {
   const first = computerFixture('one')
   const pending = computerFixture('two', false)

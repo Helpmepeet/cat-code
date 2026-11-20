@@ -64,7 +64,7 @@ export function ComputerPane({ steps, captures, selectedId, onSelect, onClose, o
     </div>}
     <div className="computer-pane-steps" aria-label="Computer steps">
       {groups.map(group => <div className="computer-pane-group" data-has-picture={group.picture ? true : undefined} key={group.steps[0]!.id}>
-        {group.picture && <button type="button" className="computer-pane-thumbnail" aria-label={`Show screenshot: ${group.steps.find(step => step.id === group.picture?.stepId)?.title ?? 'Computer'}`}
+        {group.picture && <button type="button" className="computer-pane-thumbnail" aria-current={screen?.stepId === group.picture.stepId ? 'true' : undefined} aria-label={`Show screenshot: ${group.steps.find(step => step.id === group.picture?.stepId)?.title ?? 'Computer'}`}
           onClick={() => onSelect(group.picture!.stepId)}><img src={group.picture.src} alt="" loading="lazy" decoding="async" /></button>}
         <div className="computer-pane-group-rows">
           {group.steps.map(step => <button type="button" key={step.id} ref={step === current ? currentRef : undefined} className="computer-pane-step" aria-current={step === current ? 'true' : undefined} onClick={() => onSelect(step.id)}>
