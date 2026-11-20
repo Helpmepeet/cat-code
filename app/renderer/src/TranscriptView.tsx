@@ -144,11 +144,7 @@ import { FocusedChevron, FocusedTranscript } from './FocusedTranscript.js'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
 import './taskNotification.css'
 import {
-  DIFF_ROW_CLASS,
-  DIFF_SIGN_CLASS,
   FAMILY_STYLE,
-  WORD_DIM_CLASS,
-  WORD_EMPH_CLASS,
 } from './toolCardPalette.js'
 import {
   MAX_PROSE_ARRIVAL_STAGGER_MS,
@@ -220,13 +216,11 @@ import {
   readLineNumbers,
   readSourceLanguage,
 } from './readSource.js'
-import { highlightedWordSegments } from './diffHighlight.js'
+import { DiffRowView } from './DiffRowView.js'
 import { selectHighlightedSourceRows } from './sourceHighlight.js'
 import {
   selectDiffRows,
   selectRowWordSegments,
-  type DiffRow,
-  type WordDiffSide,
 } from './diffRowModel.js'
 import {
   selectGrepHighlightedRows,
@@ -6964,44 +6958,5 @@ function DiffView({
         </button>
       ) : null}
     </>
-  )
-}
-
-/**
- * One diff row: the current-file gutter, the sign, and the source. `body` is
- * already bounded — either the coloured row `sourceHighlight.ts` cut, or the
- * chunk the virtualizer cut — so a minified line cannot mount whole.
- */
-function DiffRowView({
-  row,
-  body,
-  segments,
-}: {
-  row: DiffRow | undefined
-  body: ReactNode
-  segments: WordDiffSide | null
-}) {
-  if (row === undefined) return null
-  const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '
-  const side = row.kind === 'del' ? 'del' : 'add'
-  const painted =
-    segments === null
-      ? body
-      : highlightedWordSegments(
-          [body],
-          segments,
-          WORD_EMPH_CLASS[side],
-          WORD_DIM_CLASS[side],
-        )
-  return (
-    <div className={`flex ${DIFF_ROW_CLASS[row.kind]}`}>
-      <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
-        {row.currentLabel}
-      </span>
-      <span className="min-w-0 flex-1 border-l border-white/[0.05] pl-2.5 pr-3.5 hljs">
-        <span className={DIFF_SIGN_CLASS[row.kind]}>{sign}</span>{' '}
-        {painted}
-      </span>
-    </div>
   )
 }

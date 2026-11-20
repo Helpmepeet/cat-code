@@ -80,6 +80,20 @@ export function selectDiffRows(diff: ToolDiffProjection): DiffRow[] {
   return rows
 }
 
+export function selectSnippetDiffRows(
+  lines: readonly { kind: DiffLineKind; text: string }[],
+): DiffRow[] {
+  const rows = lines.map(({ kind, text }): DiffRow => ({
+    kind,
+    body: text,
+    currentLabel: '',
+    hunkIndex: 0,
+    pairedWith: null,
+  }))
+  pairReplacedRuns(rows)
+  return rows
+}
+
 /**
  * Pair each consecutive run of removes with the run of adds that follows it
  * (prototype pairing, `Messages.jsx:134-150`). Pairing never crosses a hunk,

@@ -1,0 +1,109 @@
+.edit-permission-card { min-width: 0; }
+.edit-permission-block {
+  overflow: hidden;
+  border: 1px solid var(--shell-seam);
+  border-radius: 8px;
+  background: var(--app-bg);
+}
+.edit-permission-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--shell-seam);
+}
+.edit-permission-mark { flex: none; width: 16px; text-align: center; font: 13px/1.5 var(--font-mono); }
+.edit-permission-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 11.5px/1.5 var(--font-mono);
+  color: var(--text-faint);
+}
+.edit-permission-path > span { color: var(--text-primary); }
+.edit-permission-counts { display: flex; flex: none; gap: 6px; font: 10.5px/1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
+.edit-permission-adds { color: light-dark(#15803d, #86efac); }
+.edit-permission-dels { color: light-dark(#dc2626, #fca5a5); }
+
+.edit-permission-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--shell-seam);
+  color: var(--text-subtle);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.edit-permission-worker { display: inline-flex; align-items: center; gap: 4px; }
+
+.edit-permission-diff {
+  max-height: calc(12 * 1.65em + 6px);
+  overflow: hidden;
+  padding: 6px 0;
+  font: 12px/1.65 var(--font-mono);
+}
+.edit-permission-diff[data-expanded='true'] { max-height: calc(20 * 1.65em + 6px); overflow: auto; }
+.edit-permission-diff-row { display: flex; min-height: 1.65em; padding: 0 14px 0 12px; }
+.edit-permission-diff-sign { flex: none; width: 2ch; user-select: none; }
+.edit-permission-diff-source { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.edit-permission-empty { padding: 6px 12px; font: 12px/1.65 var(--font-mono); color: var(--text-subtle); }
+.edit-permission-fold {
+  display: block;
+  width: 100%;
+  border-top: 1px solid var(--shell-seam);
+  padding: 6px 14px;
+  text-align: left;
+  color: var(--text-subtle);
+  font-size: 12px;
+}
+.edit-permission-fold:hover { color: var(--text-primary); background: var(--shell-hover); }
+
+.edit-permission-answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+  padding: 0 2px;
+}
+.edit-permission-suggestions { display: flex; flex: 1 1 14rem; min-width: 0; flex-direction: column; gap: 4px; }
+.edit-permission-suggestions > p { color: var(--text-subtle); font-size: 12px; }
+.edit-permission-suggestion {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.edit-permission-suggestion:hover { color: var(--text-primary); }
+.edit-permission-suggestion input { flex: none; width: 13px; height: 13px; margin: 3.5px 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+.edit-permission-suggestion > span { min-width: 0; overflow-wrap: anywhere; }
+.edit-permission-suggestion > span > span { color: var(--text-subtle); }
+.edit-permission-suggestion code { white-space: pre-wrap; font-size: 11.5px; color: var(--text-primary); }
+.edit-permission-actions { display: flex; flex: none; align-items: center; gap: 14px; margin-left: auto; }
+.edit-permission-actions button { color: var(--text-subtle); font-size: 12px; }
+.edit-permission-actions button:hover:not(:disabled) { color: var(--text-primary); }
+.edit-permission-actions button.edit-permission-apply {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--on-fill);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.edit-permission-actions button.edit-permission-apply:hover:not(:disabled) { color: var(--on-fill); filter: brightness(1.08); }
+.edit-permission-card button:disabled { opacity: .4; }
+.edit-permission-card :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.edit-permission-block :is(button, .edit-permission-diff):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.edit-permission-block .permission-reason-mark:focus-visible { outline-offset: 1px; }

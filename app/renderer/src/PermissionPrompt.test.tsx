@@ -420,36 +420,6 @@ test('a tool with no recognised family shows its input, opened', () => {
   expect(html).toContain('&quot;query&quot;: &quot;roadmap&quot;')
 })
 
-test('an edit shows its file and the change, with no line numbers anywhere', () => {
-  const html = renderToStaticMarkup(
-    <PermissionPrompt
-      onAllow={() => {}}
-      onDeny={() => {}}
-      request={{
-        requestId: 'perm-edit',
-        request: {
-          subtype: 'can_use_tool',
-          tool_name: 'Edit',
-          input: {
-            file_path: '/repo/src/server.ts',
-            old_string: 'const port = 3000\nstart(port)',
-            new_string: 'const port = 8080\nstart(port)',
-          },
-          tool_use_id: 'toolu-edit',
-        },
-      }}
-    />,
-  )
-  expect(html).toContain('/repo/src/server.ts')
-  expect(html).toContain('const port = 3000')
-  expect(html).toContain('const port = 8080')
-  expect(html).toContain('+ ')
-  expect(html).toContain('− ')
-  // A patch over two snippets numbers the SNIPPET, not the file. The gutter the
-  // transcript diff carries must not appear here at all.
-  expect(html).not.toContain('tabular-nums')
-})
-
 test('a write shows the file and the content it would write', () => {
   const html = renderToStaticMarkup(
     <PermissionPrompt

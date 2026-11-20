@@ -231,3 +231,200 @@ test('copy uses the complete original command and the shared copied check state'
     expect(tree.container.querySelector('[aria-label="Code copied"]')).not.toBeNull()
   } finally { write.mockRestore() }
 })
+
+const editRequest: PermissionRequest = {
+  requestId: 'edit-approval',
+  request: {
+    subtype: 'can_use_tool', tool_name: 'Edit', tool_use_id: 'edit-1',
+    input: {
+      file_path: '/repo/src/server.ts',
+      old_string: 'const port = 3000\nstart(port)',
+      new_string: 'const port = 8080\nstart(port)',
+    },
+    decision_reason: "Claude requested permissions to use Edit, but you haven't granted it yet.",
+    permission_suggestions: [
+      { type: 'setMode', mode: 'acceptEdits', destination: 'session' },
+      { type: 'addDirectories', directories: ['/repo/src'], destination: 'localSettings' },
+      { type: 'addRules', behavior: 'allow', rules: [{ toolName: 'Edit', ruleContent: '/src/server.ts' }], destination: 'userSettings' },
+    ],
+  },
+}
+
+test('Edit previews the file and its syntax-colored changes without a file gutter or generic controls', async () => {
+  const { container } = await harness.mount(
+    <PermissionPrompt request={editRequest} onAllow={() => {}} onDeny={() => {}} onSnooze={() => {}} />,
+  )
+  const path = container.querySelector('h2')!
+  expect(path.textContent).toBe('Edit /repo/src/server.ts')
+  expect(path.lastElementChild?.textContent).toBe('server.ts')
+  expect(path.title).toBe('/repo/src/server.ts')
+  expect(container.querySelector('.edit-permission-counts')?.textContent).toBe('+1−1')
+  const rows = [...container.querySelectorAll('.edit-permission-diff-row')]
+  expect(rows.map(row => [...row.children].map(child => child.textContent))).toEqual([
+    ['−', 'const port = 3000'], ['+', 'const port = 8080'], [' ', 'start(port)'],
+  ])
+  expect(rows[0]?.querySelector('.hljs-keyword')?.textContent).toBe('const')
+  expect(rows[1]?.querySelector('[class*="bg-tone-success"] .hljs-number')?.textContent).toBe('8080')
+  expect([...container.querySelectorAll('button')].map(node => [node.textContent, node.title])).toEqual([
+    ['Later', ''], ['Deny', 'Esc'], ['Apply', 'Enter'],
+  ])
+  expect(container.querySelector('button svg, details, kbd, [aria-current]')).toBeNull()
+})
+
+test('Edit wraps into visual lines, folds at twelve, and recalculates on pane resize', async () => {
+  // Happy DOM provides events but has no layout engine. Supply the source's
+  // geometry as a browser would report it at the two pane widths.
+  const getStyle = globalThis.getComputedStyle
+  const style = spyOn(globalThis, 'getComputedStyle').mockImplementation((node, pseudo) => {
+    const properties = getStyle(node, pseudo)
+    return new Proxy(properties, { get: (target, prop) => prop === 'lineHeight' ? '20px' : Reflect.get(target, prop, target) })
+  })
+  let height = 240
+  const bounds = spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+    () => ({ height, width: 556, top: 0, left: 0, bottom: height, right: 556, x: 0, y: 0, toJSON() {} }),
+  )
+  const previousObserver = globalThis.ResizeObserver
+  let notifyResize: (() => void) | undefined
+  globalThis.ResizeObserver = class {
+    constructor(callback: ResizeObserverCallback) { notifyResize = () => callback([], this as unknown as ResizeObserver) }
+    observe() {}
+    disconnect() { notifyResize = undefined }
+  } as unknown as typeof ResizeObserver
+
+  try {
+    const { container } = await harness.mount(<PermissionPrompt request={editRequest} onAllow={() => {}} onDeny={() => {}} />)
+    expect(container.textContent).not.toContain('Show ')
+    height = 280
+    await act(async () => { notifyResize!() })
+    const fold = button(container, 'Show 2 more lines')
+    const scroller = harness.document.getElementById(fold.getAttribute('aria-controls')!)!
+    expect(fold.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => { fold.click() })
+    expect(button(container, 'Show less').getAttribute('aria-expanded')).toBe('true')
+    scroller.scrollTop = 40
+    await act(async () => { button(container, 'Show less').click() })
+    expect(scroller.scrollTop).toBe(0)
+    expect(button(container, 'Show 2 more lines').getAttribute('aria-expanded')).toBe('false')
+    height = 240
+    await act(async () => { notifyResize!() })
+    expect(container.textContent).not.toContain('Show ')
+  } finally {
+    globalThis.ResizeObserver = previousObserver
+    style.mockRestore()
+    bounds.mockRestore()
+  }
+})
+
+test('Edit reasons open on hover and focus, pin on click, and Escape closes the tip before denying', async () => {
+  const reason = 'The change needs your approval.'
+  const toolRequest = { ...editRequest.request, permission_suggestions: [] }
+  const requestWithReason = { ...editRequest, request: { ...toolRequest, decision_reason: reason } }
+  let denied = 0
+  const view = (request: PermissionRequest) => <PermissionPrompt keyboardTarget request={request} onAllow={() => {}} onDeny={() => { denied++ }} />
+  const tree = await harness.mount(view(requestWithReason))
+  await settleFocus()
+  const mark = tree.container.querySelector<HTMLButtonElement>('[aria-label="Why approval is needed"]')!
+  const host = tree.container.querySelector<HTMLElement>('section')!
+  const tip = () => harness.document.querySelector('[role="tooltip"]')
+  const hover = (enter: boolean) => act(async () => {
+    mark.dispatchEvent(new MouseEvent(enter ? 'mouseover' : 'mouseout', { bubbles: true }))
+  })
+
+  expect(tree.container.textContent).not.toContain(reason)
+  expect(tree.container.querySelector('input')).toBeNull()
+  await hover(true)
+  expect(tip()?.textContent).toContain(reason)
+  await hover(false)
+  expect(tip()).toBeNull()
+  await hover(true)
+  expect((await key(host, 'Escape')).defaultPrevented).toBe(true)
+  expect(tip()).toBeNull()
+  expect(denied).toBe(0)
+  await act(async () => { mark.focus() })
+  expect(mark.getAttribute('aria-describedby')).toBe(tip()!.id)
+  await key(mark, 'Escape')
+  expect(tip()).toBeNull()
+  expect(denied).toBe(0)
+  await act(async () => { host.focus() })
+  await hover(true)
+  await act(async () => { mark.click() })
+  await hover(false)
+  expect(tip()?.textContent).toBe('Why approval is needed' + reason)
+  await key(host, 'Escape')
+  expect(tip()).toBeNull()
+  expect(denied).toBe(0)
+  await key(host, 'Escape')
+  expect(denied).toBe(1)
+
+  await tree.render(view({ ...requestWithReason, request: { ...requestWithReason.request, human_only: true } }))
+  const reviewed = tree.container.querySelector<HTMLButtonElement>('[aria-label="Auto mode requested your decision"]')!
+  await act(async () => { reviewed.focus() })
+  expect(tip()?.textContent).toBe('Auto mode requested your decision' + reason)
+  await tree.render(view(editRequest))
+  expect(tree.container.querySelector('.permission-reason-mark')).toBeNull()
+  expect(tip()).toBeNull()
+})
+
+test('Edit sends selected engine indices for Apply and Enter, and keeps Deny and Later independent', async () => {
+  const answers: unknown[] = []
+  const view = (submitted = false) => <PermissionQueue
+    items={[{ request: editRequest, submitted, dismissed: false }, { request, submitted: false, dismissed: false }]}
+    keyboardTargetRequestId={editRequest.requestId}
+    onAllow={(id, indices) => answers.push(['allow', id, indices])}
+    onDeny={(id, message) => answers.push(['deny', id, message])}
+    onSnooze={id => answers.push(['later', id])}
+    onRestore={() => {}}
+  />
+  const tree = await harness.mount(view())
+  await settleFocus()
+  const card = tree.container.querySelector<HTMLElement>('section')!
+  const labels = [...card.querySelectorAll('label')]
+  const boxes = labels.map(label => label.querySelector('input')!)
+  expect(labels.map(label => label.textContent)).toEqual([
+    'Switch to Accept edits in This session',
+    'Add directory /repo/src in Project settings (local)',
+    'Always allow Edit(/src/server.ts) in User settings',
+  ])
+  expect(card.querySelector('[aria-label="2 pending requests"]')?.textContent).toBe('2')
+  expect(boxes.every(box => !box.checked)).toBe(true)
+  await act(async () => { button(card, 'Apply').click(); boxes[2]!.click(); boxes[0]!.click() })
+  await tree.render(view())
+  await key(card, 'Enter')
+  await act(async () => { button(card, 'Deny').click(); button(card, 'Later').click() })
+  await key(card, 'Escape')
+  expect(answers).toEqual([
+    ['allow', editRequest.requestId, []],
+    ['allow', editRequest.requestId, [0, 2]],
+    ['deny', editRequest.requestId, undefined],
+    ['later', editRequest.requestId],
+    ['deny', editRequest.requestId, undefined],
+  ])
+  await tree.render(view(true))
+  expect([...card.querySelectorAll('button, input')].every(node => (node as HTMLButtonElement | HTMLInputElement).disabled)).toBe(true)
+  await key(card, 'Enter')
+  expect(answers).toHaveLength(5)
+})
+
+test('a deny-only Edit still shows its worker, script, and blocked path but cannot apply', async () => {
+  let allowed = 0, denied = 0
+  const { container } = await harness.mount(<PermissionPrompt
+    denyOnly
+    keyboardTarget
+    request={{ ...editRequest, request: {
+      ...editRequest.request, agent_id: 'worker-1', blocked_path: '/outside/server.ts',
+    } }}
+    scriptSource={{ cellId: 'script-1', generation: '1', line: 4 }}
+    onAllow={() => { allowed++ }}
+    onDeny={() => { denied++ }}
+  />)
+  await settleFocus()
+  expect(container.querySelector('[title="Relayed from a coding worker"]')?.querySelector('svg')).not.toBeNull()
+  expect(container.textContent).toContain('from script · line 4')
+  expect(container.textContent).toContain('Blocked path /outside/server.ts')
+  expect(container.querySelector('input')).toBeNull()
+  expect([...container.querySelectorAll('button')].map(node => node.textContent)).toEqual(['Deny'])
+  await key(container.querySelector('section')!, 'Enter')
+  await act(async () => { button(container, 'Deny').click() })
+  expect(allowed).toBe(0)
+  expect(denied).toBe(1)
+})

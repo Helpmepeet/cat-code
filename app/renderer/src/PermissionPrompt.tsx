@@ -9,6 +9,7 @@ import { AgentFace } from './AgentChrome.js'
 import { useAgentFaceRegistry } from './agentFace.js'
 import { Glyph } from './SessionActionIcons.js'
 import { CommandPermissionContent } from './CommandPermissionContent.js'
+import { EditPermissionContent } from './EditPermissionContent.js'
 import './PermissionPrompt.css'
 import type { PermissionRequest } from './permissionState.js'
 import './codeMode.css'
@@ -29,17 +30,7 @@ import {
 } from './permissionPromptModel.js'
 
 /**
- * Exact prototype `PQDiff` line grammar (`Permissions.jsx:139-143`): the add /
- * remove washes are rgba(34,197,94,0.1) / rgba(239,68,68,0.1) over #86efac /
- * #fca5a5 bodies, context in #52525b. Literal hexes, not the green-500/red-500
- * utilities, because Tailwind v4's oklch palette drifted those. Static classes
- * only (the interpolated-arbitrary-value trap silently produces no CSS).
- *
- * The transcript's post-execution diff carries the same values
- * (`TranscriptView.tsx` `DIFF_ROW_CLASS`) because the prototype uses one
- * grammar in both places. They are not shared through a module: these rows have
- * no line-number gutter and are built from a snippet, not from hunks, so
- * nothing but the three class strings would be common.
+ * Legacy preview colors from the prototype's `PQDiff` (`Permissions.jsx:139-143`).
  */
 const PREVIEW_LINE_CLASS: Record<PermissionPreviewLine['kind'], string> = {
   add: 'bg-[#22c55e]/10 text-[light-dark(#15803d,#86efac)]',
@@ -54,8 +45,8 @@ const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
 }
 
 /**
- * Command requests use an explicit Run/Deny footer and opt-in rule checkboxes.
- * Other families keep their numbered response rows, including deny-only cards.
+ * Compact command and edit requests use direct actions and opt-in checkboxes.
+ * The legacy layout uses numbered response rows.
  *
  * The queue gives `keyboardTarget` to exactly one card. Focus ownership and the
  * sole document listener stay here for both layouts, so a decision cannot also
@@ -108,9 +99,11 @@ export function PermissionPrompt({
 }) {
   const toolName = request.request.tool_name
   const commandCard = !denyOnly && (toolName === 'Bash' || toolName === 'PowerShell')
+  const editCard = toolName === 'Edit'
+  const compactCard = commandCard || editCard
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([])
 
-  function changeCommandSuggestion(index: number, checked: boolean) {
+  function changeSuggestion(index: number, checked: boolean) {
     setSelectedSuggestions(previous => {
       if (!checked) return previous.filter(selected => selected !== index)
       if (previous.length >= MAX_SUGGESTION_SELECTIONS || previous.includes(index)) return previous
@@ -144,17 +137,13 @@ export function PermissionPrompt({
   const workerRole =
     agentTypeMeta(relayingWorker?.role)?.label.toLowerCase() ??
     'coding worker'
-  // Memoised because this card re-renders on every App render (once per
-  // streamed frame during a turn) as well as on hover and every disclosure
-  // toggle, and an `Edit` preview runs `diffLines` over the whole change.
-  // Both inputs are stable for the life of a request.
   const preview = useMemo(
-    () => commandCard ? null : selectPermissionPreview(toolName, request.request.input),
-    [commandCard, toolName, request.request.input],
+    () => compactCard ? null : selectPermissionPreview(toolName, request.request.input),
+    [compactCard, toolName, request.request.input],
   )
   const options = useMemo(
-    () => commandCard ? [] : buildPermissionOptions(request.request, denyOnly === true),
-    [commandCard, request.request, denyOnly],
+    () => compactCard ? [] : buildPermissionOptions(request.request, denyOnly === true),
+    [compactCard, request.request, denyOnly],
   )
 
   // Deny-only command requests retain the legacy headline and preview, like
@@ -288,11 +277,11 @@ export function PermissionPrompt({
       if (submitted) return
       const intent = permissionKeyIntent(event)
       if (!intent) return
-      if (commandCard) {
-        // Command cards have no row cursor. Leave navigation and digits to
+      if (compactCard) {
+        // Compact cards have no row cursor. Leave navigation and digits to
         // other listeners; only the advertised decision keys belong here.
         if (intent.kind !== 'confirm' && intent.kind !== 'deny') return
-        if (event.repeat) return
+        if (event.repeat || (denyOnly && intent.kind === 'confirm')) return
         event.preventDefault()
         if (intent.kind === 'deny') onDeny()
         else onAllow(selectedSuggestions)
@@ -349,7 +338,7 @@ export function PermissionPrompt({
   return (
     <section
       aria-labelledby={titleId}
-      className={`${commandCard ? 'command-permission-card' : 'border-l-2 border-accent px-4 py-3'} bg-text-primary/[0.04] transition-opacity duration-[var(--motion-fast)] focus:outline-none ${submitted ? 'opacity-55' : ''} ${animateArrival ? 'animate-toast-in' : ''}`}
+      className={`${editCard ? 'edit-permission-card' : commandCard ? 'command-permission-card bg-text-primary/[0.04]' : 'border-l-2 border-accent px-4 py-3 bg-text-primary/[0.04]'} transition-opacity duration-[var(--motion-fast)] focus:outline-none ${submitted ? 'opacity-55' : ''} ${animateArrival ? 'animate-toast-in' : ''}`}
       onAnimationEnd={onArrivalAnimationEnd}
       // Literal because JSX needs a literal attribute name; the reader is
       // `PERMISSION_KEY_HOST_ATTR` in `permissionPromptModel.ts`.
@@ -369,7 +358,22 @@ export function PermissionPrompt({
       role="alertdialog"
       tabIndex={keyboardTarget ? -1 : undefined}
     >
-      {commandCard ? (
+      {editCard ? (
+        <EditPermissionContent
+          request={request.request}
+          titleId={titleId}
+          worker={relayed ? { name: workerName, role: workerRole, face: workerFace } : undefined}
+          scriptSource={scriptSource}
+          pendingCount={pendingCount}
+          submitted={submitted === true}
+          denyOnly={denyOnly === true}
+          selectedSuggestions={selectedSuggestions}
+          onSelectionChange={changeSuggestion}
+          onAllow={() => { if (!submitted && !denyOnly) onAllow(selectedSuggestions) }}
+          onDeny={() => { if (!submitted) onDeny() }}
+          onSnooze={onSnooze}
+        />
+      ) : commandCard ? (
         <CommandPermissionContent
           request={request.request}
           titleId={titleId}
@@ -379,7 +383,7 @@ export function PermissionPrompt({
           submitted={submitted === true}
           keysLive={hintVisible && !submitted}
           selectedSuggestions={selectedSuggestions}
-          onSelectionChange={changeCommandSuggestion}
+          onSelectionChange={changeSuggestion}
           onAllow={() => { if (!submitted) onAllow(selectedSuggestions) }}
           onDeny={() => { if (!submitted) onDeny() }}
           onSnooze={onSnooze}
