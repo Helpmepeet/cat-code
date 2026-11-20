@@ -11,10 +11,9 @@ async function run(scenario: string) {
   try {
     await Promise.all([mkdir(join(root, 'config')), mkdir(join(root, 'workspace'))])
     const trial = scenario.startsWith('trial-')
-    const trialId = '00000000-0000-4000-8000-000000000001'
     const runtimeArgs = trial ? resolveSidecarLaunch({
       mainDir: new URL('../../app/main/', import.meta.url).pathname,
-      packaged: false, contextualAutoMode: 'experimental', contextualAutoModeSessionId: trialId,
+      packaged: false,
     }).argsFor('session').slice(0, -1) : ['--feature=CODE_MODE', '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=AUTO_MODE_UPSTREAM_PORT', '--feature=AUTO_MODE_CONTEXTUAL_REVIEW']
     const child = Bun.spawn([process.execPath, ...runtimeArgs, fixture], {
@@ -25,10 +24,10 @@ async function run(scenario: string) {
         ANTHROPIC_API_KEY: 'isolated-fixture', CLAUDE_CODE_USE_OPENAI: '0',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
         NODE_ENV: 'test', TEST_ENABLE_SESSION_PERSISTENCE: '1', CLAUDE_CODE_AUTO_MODE_MODEL: 'claude-sonnet-5-5',
-        CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'experimental',
-        ...(trial && { CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna',
-          CLAUDE_CODE_CONTEXTUAL_AUTO_MODE_SESSION_ID: trialId,
-          CATCODE_SIDECAR_SESSION_ID: scenario === 'trial-selected' ? trialId : 'another-app-session' }),
+        ...(trial
+          ? { CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna', CATCODE_SIDECAR_SESSION_ID: 'desktop-session',
+              ...(scenario === 'trial-legacy' && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'legacy' }) }
+          : { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'experimental' }),
         CONTEXTUAL_AUTO_TEST_ROOT: root, CONTEXTUAL_AUTO_TEST_SCENARIO: scenario,
       },
     })
@@ -115,12 +114,12 @@ for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
   }, 30_000)
 }
 
-for (const selected of [true, false]) {
-  test(`Dev trial launch uses the ${selected ? 'contextual Luna' : 'legacy'} reviewer for the ${selected ? 'selected' : 'other'} session`, async () => {
-    const proof = await run(selected ? 'trial-selected' : 'trial-other')
+for (const contextual of [true, false]) {
+  test(`desktop Auto Mode uses the ${contextual ? 'contextual Luna reviewer without an opt-in' : 'legacy reviewer with an explicit override'}`, async () => {
+    const proof = await run(contextual ? 'trial-default' : 'trial-legacy')
     expect(proof.requests.length).toBeGreaterThan(0)
-    expect(proof.requests[0].contextual).toBe(selected)
-    if (selected) {
+    expect(proof.requests[0].contextual).toBe(contextual)
+    if (contextual) {
       expect(proof.requests[0]).toMatchObject({ model: 'gpt-6-luna', provider: 'openai' })
       expect(proof.savedReviews).toContainEqual(expect.objectContaining({ outcome: 'allowed',
         reviewer: expect.objectContaining({ kind: 'contextual', verdict: 'allow',

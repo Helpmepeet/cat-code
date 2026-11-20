@@ -92,6 +92,7 @@ test('the production sidecar runtime enables the desktop engine features', () =>
     '--feature=CODE_MODE',
     '--feature=LID_CLOSED',
     '--feature=AUTO_MODE_UPSTREAM_PORT',
+    '--feature=AUTO_MODE_CONTEXTUAL_REVIEW',
     '--feature=TRANSCRIPT_CLASSIFIER',
     '--feature=REACTIVE_COMPACT',
     '--feature=COMPACT_TASK_RESTORE',
@@ -107,13 +108,14 @@ describe('sidecar launch resolution (P5-1)', () => {
     resourcesPath: '/Apps/Cat Code.app/Contents/Resources',
   } as const
 
-  test('development spawns repository TypeScript under bun, unchanged from before packaging existed', () => {
+  test('development spawns repository TypeScript under bun with the production session features', () => {
     const plan = resolveSidecarLaunch(DEV)
     expect(plan.command).toBe('bun')
     expect(plan.argsFor('session')).toEqual([
       '--feature=CODE_MODE',
       '--feature=LID_CLOSED',
       '--feature=AUTO_MODE_UPSTREAM_PORT',
+      '--feature=AUTO_MODE_CONTEXTUAL_REVIEW',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',
@@ -158,6 +160,7 @@ describe('sidecar launch resolution (P5-1)', () => {
       '--feature=CODE_MODE',
       '--feature=LID_CLOSED',
       '--feature=AUTO_MODE_UPSTREAM_PORT',
+      '--feature=AUTO_MODE_CONTEXTUAL_REVIEW',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',

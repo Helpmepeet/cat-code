@@ -80,13 +80,13 @@ function containsCredentialMaterial(value: string): boolean {
 }
 
 function readMode(): ReviewMode | undefined {
+  if (!feature('AUTO_MODE_CONTEXTUAL_REVIEW')) return undefined
   const value = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE
   const session = process.env.CATCODE_SIDECAR_SESSION_ID
   const selected = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE_SESSION_ID
-  if ((session || selected) && (!selected || selected !== session)) return undefined
-  // The normal build keeps the release gate off while qualification is incomplete.
-  if (feature('AUTO_MODE_CONTEXTUAL_REVIEW') && (value === 'shadow' || value === 'experimental')) return value
-  return undefined
+  if (value === 'legacy' || (selected && selected !== session)) return undefined
+  if (value === 'shadow' || value === 'experimental') return value
+  return session ? 'experimental' : undefined
 }
 
 export type ContextualAutoAttempt = NonNullable<Awaited<ReturnType<typeof createContextualAttempt>>>

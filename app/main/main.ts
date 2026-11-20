@@ -1449,8 +1449,6 @@ function sidecarLaunch(): SidecarLaunchPlan {
     mainDir: __dirname,
     resourcesPath: process.resourcesPath,
     bunBin: process.env.CATCODE_BUN_BIN,
-    contextualAutoMode: process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE,
-    contextualAutoModeSessionId: process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE_SESSION_ID,
   })
   // Same class of trap as the CATCODE_RENDERER_URL warning below, and now the
   // more expensive half of it. `app.isPackaged` comes from the executable's
