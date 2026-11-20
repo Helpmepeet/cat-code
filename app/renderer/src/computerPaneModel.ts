@@ -1,5 +1,6 @@
 import type { NestedTranscriptRow, ToolCardStatus, ToolResultProjection } from './transcriptProjector.js'
 import { deriveTarget } from './transcriptToolTarget.js'
+import { parseComputerWindowCaptureRequest, type ComputerWindowCapture } from '../../shared/computerWindowCapture.js'
 
 export type ComputerStep = {
   id: string
@@ -7,6 +8,7 @@ export type ComputerStep = {
   status: ToolCardStatus
   observation: string
   image: NonNullable<ToolResultProjection['images']>[number] | null
+  app?: string | null
   nested?: boolean
 }
 
@@ -20,17 +22,65 @@ export function selectComputerScreen(steps: readonly ComputerStep[], selected: C
 export function selectComputerSteps(rows: readonly NestedTranscriptRow[]): ComputerStep[] {
   const steps: ComputerStep[] = []
   const seen = new Set<string>()
+  function appName(value: string | undefined): string | null {
+    if (!value) return null
+    const target = value.split('/').at(-1)?.replace(/\.app$/i, '')
+    return parseComputerWindowCaptureRequest({ app: target })?.app ?? null
+  }
   function visit(branch: readonly NestedTranscriptRow[], nested = false) {
+    let app: string | null = null
     for (const row of branch) {
+      if (row.kind === 'user-text' || row.kind === 'user-image' || row.kind === 'command-echo') app = null
       if (row.kind === 'tool-use' && row.toolFamily === 'computer' && !seen.has(row.id)) {
         seen.add(row.id)
-        steps.push({ id: row.id, title: deriveTarget(row), status: row.status, observation: row.result?.content ?? '', image: row.result?.images?.at(-1) ?? null, nested })
+        const observation = row.result?.content ?? ''
+        const input = row.input as { code?: unknown } | null
+        const code = typeof input?.code === 'string' ? input.code : ''
+        const explicit = [...code.matchAll(/\bcua\.getApp\(\s*(["'])([^"'\n]+)\1\s*\)/g)]
+        const observed = /^Window:[^\n]*?, App: ([^\n]+?)\.\s*(?:\n|$)/m.exec(observation)?.[1]
+        if (/^Browser tab:/m.test(observation) || /\bcua\.(?:getBrowser|browser)\b/.test(code)) app = null
+        else if (observed) app = appName(observed)
+        else if (explicit.length || /\bcua\.getApp\(/.test(code)) app = appName(explicit.at(-1)?.[2])
+        steps.push({ id: row.id, title: deriveTarget(row), status: row.status, observation, image: row.result?.images?.at(-1) ?? null, app, nested })
       }
       visit(row.children, true)
     }
   }
   visit(rows)
   return steps
+}
+
+export type ComputerPicture = {
+  stepId: string
+  app: string | null
+  src: string
+  fingerprint?: readonly number[]
+}
+
+export function computerPicture(step: ComputerStep, capture?: ComputerWindowCapture): ComputerPicture | null {
+  if (capture?.status === 'captured') return { stepId: step.id, app: step.app ?? null, src: capture.dataUrl, fingerprint: capture.fingerprint }
+  return step.image ? { stepId: step.id, app: step.app ?? null, src: `data:${step.image.mediaType};base64,${step.image.data}` } : null
+}
+
+function sameScreen(a: ComputerPicture, b: ComputerPicture): boolean {
+  if (a.app !== b.app) return false
+  if (a.fingerprint && b.fingerprint && a.fingerprint.length === b.fingerprint.length) {
+    return a.fingerprint.every((sample, index) => Math.abs(sample - b.fingerprint![index]!) <= 3)
+  }
+  return a.src === b.src
+}
+
+export function groupComputerSteps(steps: readonly ComputerStep[], captures?: ReadonlyMap<string, ComputerWindowCapture>) {
+  const groups: { steps: ComputerStep[]; picture: ComputerPicture | null }[] = []
+  for (const step of steps) {
+    const picture = computerPicture(step, captures?.get(step.id))
+    const previous = groups.at(-1)
+    if (previous && (!picture || (previous.picture && sameScreen(previous.picture, picture)))) {
+      previous.steps.push(step)
+      if (picture) previous.picture = picture
+    } else groups.push({ steps: [step], picture })
+  }
+  return groups
 }
 
 /** Interrupted calls can stay pending in history. Only this operator turn can be live. */

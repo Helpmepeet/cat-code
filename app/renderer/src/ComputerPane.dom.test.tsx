@@ -9,7 +9,6 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type { ComputerStep } from './computerPaneModel.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { disposeFilePaneSession, showSlotOccupant, updateFilePaneSession } from './filePaneState.js'
-import { MAX_MOUNTED_CHUNK_CHARS, MAX_MOUNTED_OUTPUT_LINES } from './lineWindow.js'
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await harness.unmountAll() })
@@ -24,32 +23,34 @@ test('running, between steps, stopped and finished statuses retain screenshot fo
   const tree = await harness.mount(view(true, null))
   expect([...tree.container.querySelectorAll('.computer-pane-header button')].map(button => button.getAttribute('aria-label') ?? button.textContent)).toEqual(['Back', 'Forward', 'Stop', 'Close computer panel'])
   expect(tree.container.querySelector('.computer-pane-header button[aria-label="Back"]')?.hasAttribute('disabled')).toBe(true)
-  expect(tree.container.querySelector('.computer-pane-caption button[aria-label="Previous computer step"]')).not.toBeNull()
+  expect(tree.container.querySelector('.computer-pane-caption button[aria-label="Previous computer step"]')).toBeNull()
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Using your Mac')
-  expect(tree.container.querySelector('.computer-pane-now')?.textContent).toBe('NowChecking the list')
-  expect(tree.container.querySelector('.computer-pane-screen')?.hasAttribute('data-agent')).toBe(true)
-  expect(tree.container.querySelector('[data-now]')?.textContent).toBe('now')
+  expect(tree.container.querySelector('.computer-pane-now')?.textContent).toBe('now')
+  expect(tree.container.querySelector('.computer-pane-status .computer-pane-live-dot[data-live]')).not.toBeNull()
+  expect(tree.container.querySelectorAll('.computer-pane-thumbnail')).toHaveLength(1)
+  expect(tree.container.querySelectorAll('.computer-pane-dot[data-status]')).toHaveLength(1)
   expect(tree.container.querySelector('.computer-pane-latest')).toBeNull()
   await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-stop')!.click())
   expect(stops).toBe(1)
   await tree.render(view(true, 'one'))
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest output')
-  expect(tree.container.querySelector('.computer-pane-screen')?.hasAttribute('data-agent')).toBe(false)
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Back to latest')
   await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-latest')!.click())
   expect(selections).toEqual([null])
   const completed: ComputerStep[] = [steps[0]!, { ...steps[1]!, status: 'error' }]
   await tree.render(view(true, 'two', completed))
-  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Between steps')
+  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Using your Mac')
   expect(tree.container.querySelector('.computer-pane-now')).toBeNull()
-  expect(tree.container.querySelector('.computer-pane-failed')?.textContent).toBe('Failed')
+  expect(tree.container.querySelector('.computer-pane-reason')?.textContent).toBe('Step failed')
   await tree.render(view(false, 'two', completed))
-  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished2 steps · 1 failed')
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest output')
+  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished')
+  expect(tree.container.querySelector('.computer-pane-live-dot')).toBeNull()
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Back to latest')
   expect(tree.container.querySelector('.computer-pane-stop')).toBeNull()
   await tree.render(view(false, null, completed, true))
-  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Stopped2 steps')
+  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Stopped')
+  expect(tree.container.querySelector('.computer-pane-status .computer-pane-live-dot:not([data-live])')).not.toBeNull()
   await tree.render(view(false, null, [steps[0]!]))
-  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished1 steps')
+  expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished')
 })
 
 test('navigation, Latest output, close and screenshotless selection use supplied state', async () => {
@@ -58,13 +59,12 @@ test('navigation, Latest output, close and screenshotless selection use supplied
   const view = (selectedId: string | null, active = true) => <ComputerPane steps={steps} selectedId={selectedId} onSelect={id => calls.push(id)} onClose={() => { closed = true }} active={active} />
   const tree = await harness.mount(view(null))
   expect(tree.container.querySelector('img')?.src).toContain('data:image/png;base64,')
-  expect(tree.container.textContent).toContain('Step 1')
-  await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Next computer step"]')!.click() })
+  expect(tree.container.textContent).not.toContain('Step 1')
+  await act(async () => { tree.container.querySelectorAll<HTMLButtonElement>('.computer-pane-step')[1]!.click() })
   expect(calls).toEqual(['two'])
   await tree.render(view('two'))
-  expect(tree.container.querySelector('img')?.alt).toBe('Screenshot: Opening Reminders')
-  expect(tree.container.querySelector('.computer-pane-from')?.textContent).toBe('Screen from step 1')
-  await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-from')!.click())
+  expect(tree.container.querySelector('.computer-pane-screen img')?.getAttribute('alt')).toBe('Computer screenshot')
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-thumbnail')!.click())
   expect(calls).toEqual(['two', 'one'])
   await act(async () => { tree.container.querySelector<HTMLButtonElement>('.computer-pane-latest')!.click(); tree.container.querySelector<HTMLButtonElement>('[aria-label="Close computer panel"]')!.click() })
   expect(calls).toEqual(['two', 'one', null])
@@ -73,68 +73,39 @@ test('navigation, Latest output, close and screenshotless selection use supplied
   expect(tree.container.querySelector('section')?.hidden).toBe(true)
 })
 
-test('text-only observations display without images and follow new output, not the last screenshot', async () => {
+test('text-only results do not expose observations and keep the previous screenshot', async () => {
   const first: ComputerStep = { ...steps[1]!, status: 'success', observation: 'Browser tab: 12, Title: "Drive"\n42 button Share' }
   const second: ComputerStep = { ...first, id: 'three', title: 'Reading sharing settings', observation: '+ 45 text Restricted\n<script>not markup</script>' }
   const view = (current: ComputerStep[], selectedId: string | null = null) => <ComputerPane steps={current} running selectedId={selectedId} onSelect={() => {}} onClose={() => {}} />
   const tree = await harness.mount(view([first]))
   expect(tree.container.querySelector('.computer-pane-screen')).toBeNull()
-  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('42 button Share')
-  expect(tree.container.querySelector('.computer-pane-empty')).toBeNull()
+  expect(tree.container.textContent).not.toContain('42 button Share')
+  expect(tree.container.querySelector('.computer-pane-empty')?.textContent).toContain('Waiting for a screenshot')
   await tree.render(view([steps[0]!, first, second]))
-  expect(tree.container.querySelector('.computer-pane-title')?.textContent).toBe('Reading sharing settings')
-  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('+ 45 text Restricted')
-  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('<script>not markup</script>')
+  expect(tree.container.querySelector('.computer-pane-step[aria-current]')?.textContent).toBe('Reading sharing settings')
+  expect(tree.container.textContent).not.toContain('Restricted')
   expect(tree.container.querySelector('script')).toBeNull()
-  expect(tree.container.querySelector('.computer-pane-observation-heading')?.textContent).toContain('may show only what changed')
-  expect(tree.container.querySelector('img')?.alt).toBe('Screenshot: Opening Reminders')
-  expect(tree.container.querySelector('.computer-pane-from')?.textContent).toBe('Screen from step 1')
+  expect(tree.container.querySelector('.computer-pane-screen img')?.getAttribute('alt')).toBe('Computer screenshot')
   await tree.render(view([steps[0]!, first, second], first.id))
-  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('42 button Share')
-  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).not.toContain('Restricted')
+  expect(tree.container.querySelector('.computer-pane-step[aria-current]')?.textContent).toBe(first.title)
   await tree.render(view([steps[0]!, first, second, { ...steps[1]!, id: 'pending' }]))
-  expect(tree.container.querySelector('.computer-pane-title')?.textContent).toBe('Reading sharing settings')
   expect(tree.container.querySelector('.computer-pane-now')).not.toBeNull()
 })
 
 test('an empty step before the first capture never displays future output', async () => {
   const tree = await harness.mount(<ComputerPane steps={[steps[1]!, steps[0]!]} selectedId="two" onSelect={() => {}} onClose={() => {}} />)
-  expect(tree.container.querySelector('img')).toBeNull()
-  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('No output for this step')
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest output')
+  expect(tree.container.querySelector('.computer-pane-screen img')).toBeNull()
+  expect(tree.container.querySelector('.computer-pane-empty')?.textContent).toContain('No screenshot available')
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Back to latest')
   await tree.render(<ComputerPane steps={[steps[1]!]} running selectedId={null} onSelect={() => {}} onClose={() => {}} />)
-  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('Waiting for output')
+  expect(tree.container.querySelector('.computer-pane-empty')?.textContent).toContain('Waiting for a screenshot')
 })
 
-test('large observations stay windowed, unchanged output retains its DOM, and hidden panes unmount observation work', async () => {
-  const large: ComputerStep = { ...steps[0]!, image: null, observation: `${'x'.repeat(20_000)}\n${Array.from({ length: 10_000 }, (_, i) => `line ${i}`).join('\n')}` }
-  const view = (current: ComputerStep[], active = true) => <ComputerPane steps={current} active={active} selectedId={null} onSelect={() => {}} onClose={() => {}} />
-  const tree = await harness.mount(view([large]))
-  const output = tree.container.querySelector('[aria-label="Computer observation"]')!
-  expect(output.querySelectorAll('div').length).toBeLessThan(MAX_MOUNTED_OUTPUT_LINES * 3)
-  expect(output.textContent!.length).toBeLessThan(MAX_MOUNTED_CHUNK_CHARS + 10_000)
-  await tree.render(view([large, steps[1]!]))
-  expect(tree.container.querySelector('[aria-label="Computer observation"]')).toBe(output)
-  await tree.render(view([large, steps[1]!], false))
-  expect(tree.container.querySelector('[aria-label="Computer observation"]')).toBeNull()
-  expect(tree.container.innerHTML).not.toContain('computer-pane-observation-heading')
-})
-
-test('long observation lines remain fully reachable through bounded part navigation', async () => {
-  const long: ComputerStep = { ...steps[0]!, image: null, observation: `START ${'x'.repeat(MAX_MOUNTED_CHUNK_CHARS * 2)} TAIL_SENTINEL` }
-  const tree = await harness.mount(<ComputerPane steps={[long]} selectedId={null} onSelect={() => {}} onClose={() => {}} />)
-  const output = () => tree.container.querySelector('[aria-label="Computer observation"]')!
-  expect(output().textContent).not.toContain('TAIL_SENTINEL')
-  const next = () => output().querySelector<HTMLButtonElement>('[aria-label="Next part of line 1"]')
-  expect(next()).not.toBeNull()
-  await act(async () => next()!.click())
-  expect(output().textContent!.length).toBeLessThan(MAX_MOUNTED_CHUNK_CHARS + 500)
-  await act(async () => next()!.click())
-  expect(output().textContent).toContain('TAIL_SENTINEL')
-  expect(next()).toBeNull()
-  await act(async () => output().querySelector<HTMLButtonElement>('[aria-label="Previous part of line 1"]')!.click())
-  expect(output().textContent).not.toContain('TAIL_SENTINEL')
-  expect(next()).not.toBeNull()
+test('permission denial explains how to enable screen recording', async () => {
+  const tree = await harness.mount(<ComputerPane steps={[steps[0]!]} captures={new Map([['one', { status: 'denied' }]])} selectedId={null} onSelect={() => {}} onClose={() => {}} />)
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('Screen Recording is off for Cat Code')
+  expect(tree.container.querySelector('[role="status"] button')?.textContent).toBe('Open Privacy Settings')
+  expect(tree.container.querySelector('.computer-pane-screen img')).not.toBeNull()
 })
 
 const row: NestedTranscriptRow = {
@@ -154,7 +125,7 @@ test('workspace forwards turn Stop for top-level computer activity but hides it 
     onFallback={() => {}} onOpenWorkers={() => {}} rows={rows} cwd={null} running onStop={() => { stops++ }}><div /></SubagentWorkspace>
   try {
     const tree = await harness.mount(view([row]))
-    expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Between steps')
+    expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Using your Mac')
     await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-stop')!.click())
     expect(stops).toBe(1)
     const parent = { ...row, id: 'agent', toolFamily: 'agent' as const, children: [row] }

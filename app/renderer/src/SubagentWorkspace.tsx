@@ -9,6 +9,7 @@ import { browserPaneLabel } from './browserPaneState.js'
 import { ComputerPane } from './ComputerPane.js'
 import { ComputerPaneContext } from './computerPaneContext.js'
 import { selectComputerStep, selectComputerSteps, selectCurrentComputerStepId } from './computerPaneModel.js'
+import { useComputerWindowCaptures } from './useComputerWindowCaptures.js'
 import { reduceScreenActivity, type ScreenKind } from './screenActivityState.js'
 import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OUTPUT_WIDTH_STEP, writeToolOutputWidth, type OpenToolOutput } from './toolOutputPanel.js'
 import { FilePaneContext } from './filePaneContext.js'
@@ -59,6 +60,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   const navigation = useSidePaneNavigation(sessionId, navigationFailed)
   const files = useMemo(() => paneFileIndex({ rows: [], cwd, opened: state.opened }), [cwd, state.opened])
   const computerSteps = useMemo(() => selectComputerSteps(outputRows), [outputRows])
+  const computerCaptures = useComputerWindowCaptures(appSessionId, computerSteps, running)
   const computerStep = selectComputerStep(computerSteps, state.computer?.selectedId ?? null)
   const latestComputerId = computerSteps.at(-1)?.id ?? null
   const browserSequence = state.browser ? state.browser.agentUseSequence ?? 0 : null
@@ -289,7 +291,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
           {outputPanel ? <div className="subagent-slot-content" hidden={state.visible !== 'output'}>{outputPanel}</div> : null}
           {filePanel ? <div className="subagent-slot-content" hidden={state.visible !== 'file'}>{filePanel}</div> : null}
           {state.browser ? <div className="subagent-slot-content" hidden={state.visible !== 'browser'}><BrowserPane state={state.browser} active={state.visible === 'browser'} onHide={() => hideScreen('browser')} /></div> : null}
-          {computerSteps.length ? <div className="subagent-slot-content" hidden={state.visible !== 'computer'}><ComputerPane steps={computerSteps}
+          {computerSteps.length ? <div className="subagent-slot-content" hidden={state.visible !== 'computer'}><ComputerPane steps={computerSteps} captures={computerCaptures}
             selectedId={state.computer?.selectedId ?? null} onSelect={openComputer} onClose={() => hideScreen('computer')} active={state.visible === 'computer'}
             running={running} stopped={stopped} currentStepId={selectCurrentComputerStepId(rows)} onStop={computerSteps.some(step => step.nested) ? undefined : onStop} /></div> : null}
         </div> : null

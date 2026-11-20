@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { selectComputerScreen, selectComputerStep, selectComputerSteps, selectCurrentComputerStepId } from './computerPaneModel.js'
+import { groupComputerSteps, selectComputerScreen, selectComputerStep, selectComputerSteps, selectCurrentComputerStepId } from './computerPaneModel.js'
+import type { ComputerWindowCapture } from '../../shared/computerWindowCapture.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 const computerFixture = (id: string, image = true): Extract<NestedTranscriptRow, { kind: 'tool-use' }> => ({
@@ -8,6 +9,30 @@ const computerFixture = (id: string, image = true): Extract<NestedTranscriptRow,
   input: { code: 'secret raw code', title: `Capture ${id}` }, status: image ? 'success' : 'pending', agentCompletion: null,
   result: image ? { content: '', isError: false, diff: null, images: [{ mediaType: 'image/png', data: 'first' }, { mediaType: 'image/png', data: 'last' }] } : null,
   children: [],
+})
+
+test('targets carry forward until a hidden browser result, and can be restored by app observation', () => {
+  const call = (id: string, code = '', content = '') => ({
+    ...computerFixture(id), input: { code }, result: { content, isError: false, diff: null },
+  })
+  expect(selectComputerSteps([
+    call('a', 'const app = cua.getApp("/System/Applications/System Settings.app")'),
+    call('b'),
+    call('c', '', 'Browser tab: 12, Title: "Drive"'),
+    call('d'),
+    call('e', '', 'Window: "", App: Finder.\n42 button'),
+  ]).map(step => step.app)).toEqual(['System Settings', 'System Settings', null, null, 'Finder'])
+})
+
+test('same-screen captures share a thumbnail, but changed screens start a new group', () => {
+  const steps = selectComputerSteps(['a', 'b', 'c', 'd'].map(id => computerFixture(id, false)))
+  const captures = new Map<string, ComputerWindowCapture>()
+  for (const [id, sample] of [['a', 1], ['b', 3], ['d', 23]] as const) {
+    captures.set(id, { status: 'captured', dataUrl: id, fingerprint: [sample] })
+  }
+  const groups = groupComputerSteps(steps, captures)
+  expect(groups.map(group => group.steps.map(step => step.id))).toEqual([['a', 'b', 'c'], ['d']])
+  expect(groups.map(group => group.picture?.stepId)).toEqual(['b', 'd'])
 })
 
 test('nested computer steps retain stable IDs and titles, deduplicate, and use last capture', () => {
