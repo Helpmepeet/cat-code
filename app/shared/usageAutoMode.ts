@@ -19,6 +19,7 @@ export type AutoModeUsageRoute =
   | 'guard'
   | 'accept_edits'
   | 'allowlist'
+  | 'contextual'
   | 'stage1'
   | 'stage2'
   | 'unknown'

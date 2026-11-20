@@ -9,12 +9,15 @@ import type { PermissionDecision } from '../../types/permissions.js'
 import { recordToolReview } from '../../app-runtime/toolActivity.js'
 import { persistAutoModeReview } from '../../app-runtime/autoModeReviewPersistence.js'
 import type { AutoModeReview } from '../../app-runtime/autoModeReviewContract.js'
+import { scanForSecrets } from '../../services/teamMemorySync/secretScanner.js'
+import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import { getBashExecutionSettings, type BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { codeModeToolPrincipal } from '../../tools/REPLTool/codeModeTools.js'
 import { getCwd } from '../cwd.js'
 import { expandPath } from '../path.js'
 import { getSourcedAutoModeInstructions } from '../settings/settings.js'
 import { buildContextualReview, contextualReviewerProfile, sendContextualReview } from './contextualReviewer.js'
+import { CONTEXTUAL_REVIEW_VERSION } from './contextualReviewPrompt.js'
 import { readContextualAuthority, resolveContextualPeerParent } from './contextualAuthority.js'
 import { recordAutoModeOutcome } from './autoModeMeta.js'
 import { collectPermissionDecisionContexts } from './permissionDecisionContext.js'
@@ -35,6 +38,7 @@ const toolEffects: Readonly<Record<string, string>> = {
   REPL: 'Admit the complete submitted source to the isolated Script interpreter. Each child is authorized separately.',
   Agent: 'Launch an agent with the specified assignment and capabilities.',
   CreatePeer: 'Create a new peer and deliver the specified opening assignment.',
+  SendToPeer: 'Deliver the specified message to a workspace peer. This can wake that session and start a turn.',
   Announce: 'Replace this session’s scope notice on the workspace peer roster. Peers can read the notice when they list the roster. Posting executes no edits and grants no file permissions.',
 }
 
@@ -71,11 +75,15 @@ function projectAction(tool: Tool, input: Input, context: ToolUseContext) {
 }
 
 function containsCredentialMaterial(value: string): boolean {
-  return /\b(?:sk-(?:ant-|proj-)?[a-z0-9_-]{15,}|gh[pousr]_[a-z0-9]{20,}|eyJ[a-z0-9_-]{15,}\.[a-z0-9_-]{10,}|(?:authorization:\s*bearer|(?:access_token|api[_-]?key|password)\s*[:=])\s*["']?[^\s"']{8,})|(?:^|[/~])\.(?:ssh|aws|credentials\.json)(?:\/|["'\s]|$)|-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(value)
+  return /\b(?:sk-(?:ant-|proj-)?[a-z0-9_-]{15,}|gh[pousr]_[a-z0-9]{20,}|eyJ[a-z0-9_-]{15,}\.[a-z0-9_-]{10,}|(?:authorization:\s*bearer|(?:access_token|api[_-]?key|password)(?:\\?["'])?\s*[:=])\s*(?:\\?["'])?[^\s"'\\]{8,})|(?:^|[/~])\.(?:ssh|aws|credentials\.json)(?:\/|["'\s]|$)|-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(value) ||
+    scanForSecrets(value).length > 0
 }
 
 function readMode(): ReviewMode | undefined {
   const value = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE
+  const session = process.env.CATCODE_SIDECAR_SESSION_ID
+  const selected = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE_SESSION_ID
+  if ((session || selected) && (!selected || selected !== session)) return undefined
   // The normal build keeps the release gate off while qualification is incomplete.
   if (feature('AUTO_MODE_CONTEXTUAL_REVIEW') && (value === 'shadow' || value === 'experimental')) return value
   return undefined
@@ -92,6 +100,9 @@ export async function createContextualAttempt(
 ) {
   const mode = readMode()
   if (!mode) return undefined
+  // The engine's typed question receipt authorizes its display and answer.
+  // Any action proposed in response still goes through its own permission check.
+  if (!tool.isMcp && !tool.mcpInfo && tool.name === ASK_USER_QUESTION_TOOL_NAME) return undefined
   const snapshot = structuredClone(input)
   const action = projectAction(tool, snapshot, context)
   const peerParent = await resolveContextualPeerParent(context,
@@ -111,6 +122,8 @@ export async function createContextualAttempt(
   let requiresHuman = false
   let humanAllowed = false
   let used = false
+  let lastOutcome: AutoModeReview['outcome'] | undefined
+  let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
 
   function current(candidate: Input, releasedContext: ToolUseContext): boolean {
     const latest = readContextualAuthority(releasedContext, peerParent)
@@ -125,7 +138,9 @@ export async function createContextualAttempt(
   }
 
   function emit(outcome: AutoModeReview['outcome'], reason?: string) {
-    const event: AutoModeReview = { type: 'tool.review', toolUseId, attemptId, startedAt, outcome,
+    if (mode !== 'experimental') return
+    lastOutcome = outcome
+    const event: AutoModeReview = { type: 'tool.review', toolUseId, attemptId, startedAt, outcome, reviewer,
       ...(outcome !== 'reviewing' && { completedAt: Math.max(startedAt, Date.now()) }),
       ...(reason && { reason }) }
     persistAutoModeReview(event)
@@ -146,11 +161,17 @@ export async function createContextualAttempt(
       decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
   }
 
-  async function reviewHeldAction(): Promise<PermissionDecision> {
-    if (!current(input, context)) return {
-      behavior: 'deny', message: 'The assignment or action changed while it was held.',
-      decisionReason: { type: 'other', reason: 'Stale assignment or action' },
+  function stale(reason: string): PermissionDecision {
+    emit('inconclusive', reason)
+    return {
+      behavior: 'deny', message: reason,
+      decisionReason: { type: 'other', reason },
     }
+  }
+
+  async function reviewHeldAction(): Promise<PermissionDecision> {
+    if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
+    if (!current(input, context)) return stale('The assignment or action changed before review.')
     if (delegatedMutation && !authority.verifiedSource) {
       return ask('This helper has no verified user assignment for the requested action.')
     }
@@ -166,22 +187,25 @@ export async function createContextualAttempt(
       })),
       workspaceInstructions: source,
     }
-    if (containsCredentialMaterial(JSON.stringify(evidence))) return ask('The action or its context may contain credentials.')
     const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
     const built = buildContextualReview(evidence, profile, instructions)
     if (!built) return ask('The complete action and applicable instructions exceed the Auto Mode review limit.')
-    if (mode === 'experimental') emit('reviewing')
-    const result = await sendContextualReview({ ...built.options, agentId: context.agentId }, context.abortController.signal)
-    if (!current(input, context)) return {
-      behavior: 'deny', message: 'The assignment or action changed during review.',
-      decisionReason: { type: 'other', reason: 'Stale assignment or action' },
+    if (containsCredentialMaterial(JSON.stringify(evidence)) || containsCredentialMaterial(JSON.stringify(instructions))) {
+      return ask('The action or its context may contain credentials.')
     }
+    reviewer = { ...reviewer, profile: { provider: profile.provider, model: profile.model,
+      effort: profile.effort, promptDigest: built.promptDigest } }
+    emit('reviewing')
+    const result = await sendContextualReview({ ...built.options, agentId: context.agentId }, context.abortController.signal)
+    if (result.status === 'valid') reviewer = { ...reviewer, verdict: result.verdict.decision }
+    if (!current(input, context)) return stale(context.abortController.signal.aborted
+      ? 'The review was cancelled.' : 'The assignment or action changed during review.')
     if (result.status !== 'valid') return ask('Auto Mode could not complete this review.', 'inconclusive')
     const { decision, rationale } = result.verdict
     const reason = containsCredentialMaterial(rationale) ? 'Auto Mode reviewed the proposed action.' : rationale
     if (decision === 'ask') return ask(reason)
     const decisionReason = { type: 'classifier' as const, classifier: 'auto-mode', reason }
-    if (mode === 'experimental') emit(decision === 'allow' ? 'allowed' : 'blocked', reason)
+    emit(decision === 'allow' ? 'allowed' : 'blocked', reason)
     if (decision === 'deny') {
       if (mode === 'experimental') recordAutoModeOutcome(toolUseId, 'automode-blocked')
       return { behavior: 'deny', message: reason, decisionReason }
@@ -199,9 +223,16 @@ export async function createContextualAttempt(
     },
     isCurrent: current,
     release(candidate: Input, releasedContext: ToolUseContext): boolean {
-      if (used || !current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation && !modelAllowed)) return false
+      if (used) return false
+      if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation && !modelAllowed)) {
+        stale('The approval no longer matches the current action, assignment or permissions.')
+        return false
+      }
       used = true
       return true
+    },
+    finishWithoutRelease() {
+      if (!used && lastOutcome === 'allowed') stale('The approval expired before the action was released.')
     },
   }
 }

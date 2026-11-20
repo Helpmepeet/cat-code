@@ -25,6 +25,7 @@ export const AUTO_MODE_ROUTES = [
   'guard',
   'accept_edits',
   'allowlist',
+  'contextual',
   'stage1',
   'stage2',
   'unknown',

@@ -196,16 +196,24 @@ export function resolveSidecarLaunch(options: {
   resourcesPath?: string
   /** `CATCODE_BUN_BIN`, development only. */
   bunBin?: string
+  /** A Dev launch may qualify the contextual reviewer for one app session. */
+  contextualAutoMode?: string
+  contextualAutoModeSessionId?: string
 }): SidecarLaunchPlan {
-  const { packaged, mainDir, resourcesPath, bunBin } = options
+  const { packaged, mainDir, resourcesPath, bunBin, contextualAutoMode, contextualAutoModeSessionId } = options
 
   if (!packaged) {
+    const contextualFeature = contextualAutoModeSessionId &&
+      (contextualAutoMode === 'experimental' || contextualAutoMode === 'shadow')
+      ? ['--feature=AUTO_MODE_CONTEXTUAL_REVIEW']
+      : []
     const entryPath = (mode: SidecarMode): string =>
       join(mainDir, '..', '..', 'app', 'sidecar', SIDECAR_MODE_ENTRIES[mode].file)
     return {
       packaged: false,
       command: bunBin ?? 'bun',
       argsFor: (mode, extra = []) => [
+        ...(mode === 'session' ? contextualFeature : []),
         ...(SIDECAR_MODE_ENTRIES[mode].runtimeFlags ? SIDECAR_RUNTIME_ARGS : ['run']),
         entryPath(mode),
         ...extra,

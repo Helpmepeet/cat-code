@@ -282,6 +282,8 @@ export type ToolUseContext = {
   autoModeInstructionContext?: string | null
   /** Live session evidence for a review held across an asynchronous boundary. */
   getCurrentAutoModeMessages?: () => readonly Message[]
+  /** Desktop registry identity, independent of what survives context compaction. */
+  peerCreatorAppSessionId?: string | null
   /** Desktop-owned identities for a peer created before assignment links were recorded. */
   lookupLegacyPeerCreator?: (creatorAppSessionId: string) => Promise<
     { parentSessionId: string; childAppSessionId: string } | undefined

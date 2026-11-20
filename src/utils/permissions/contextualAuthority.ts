@@ -1,18 +1,33 @@
 import { statSync } from 'node:fs'
+import type { UUID } from 'node:crypto'
 import { validateUuid } from '../uuid.js'
 import type { ToolUseContext } from '../../Tool.js'
-import type { Message } from '../../types/message.js'
+import type { AssistantMessage, Message, MessageOrigin } from '../../types/message.js'
 import type { Attachment } from '../attachments.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
 import { SYNTHETIC_MODEL } from '../messages.js'
 import { getCommandQueueSnapshot } from '../messageQueueManager.js'
 import { queuedCommandOrigin } from '../taskNotification.js'
-import { positionPermissionDecisionContexts } from './permissionDecisionContext.js'
+import { isRelayedOrigin } from '../messageOrigin.js'
+import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
+import { askUserQuestionAnswerText, positionPermissionDecisionContexts } from './permissionDecisionContext.js'
 import { parsePriorAssistantContext, readAssistantProposal } from './priorAssistantContext.js'
 import type { ContextualEvidence } from './contextualReviewPrompt.js'
 
 type Conversation = ContextualEvidence['conversation']
 type ConversationEntry = Conversation[number]
+
+function isOperatorOrigin(origin: MessageOrigin | undefined): boolean {
+  return !origin || origin.kind === 'human' ||
+    (origin.kind === 'question-reply' && !isRelayedOrigin(origin))
+}
+
+function isLiveAssistant(message: AssistantMessage): boolean {
+  return !message.isApiErrorMessage && !message.isInternalNoResponseSentinel &&
+    !message.discardedStreamMessageId && (message.codeMode
+      ? message.isVirtual === true
+      : !message.isVirtual && message.message.model !== SYNTHETIC_MODEL)
+}
 
 function conversationEvidence(
   messages: readonly Message[],
@@ -20,20 +35,26 @@ function conversationEvidence(
   includeWorkerRequests = false,
 ): ConversationEntry[] {
   const proposals = new Map<string, ReturnType<typeof readAssistantProposal>>()
+  const askedQuestions = new Map<string, { assistantUuid: string; questions: unknown }>()
   const evidence: ConversationEntry[] = []
   const permissionHistory = positionPermissionDecisionContexts(messages)
   for (const message of messages) {
     if (excluded?.has(message.uuid)) continue
     if (message.type === 'assistant') {
-      if (message.isVirtual || message.codeMode) continue
-      const proposal = readAssistantProposal(message)
-      proposals.set(message.uuid, proposals.has(message.uuid) ? null : proposal)
-      if (includeWorkerRequests && !message.isApiErrorMessage && !message.isInternalNoResponseSentinel &&
-          !message.discardedStreamMessageId && message.message.model !== SYNTHETIC_MODEL) {
+      if (!message.isVirtual && !message.codeMode) {
+        const proposal = readAssistantProposal(message)
+        proposals.set(message.uuid, proposals.has(message.uuid) ? null : proposal)
+      }
+      if (isLiveAssistant(message)) {
         for (const block of message.message.content) {
-          if (block.type !== 'tool_use' || (block.name !== AGENT_TOOL_NAME && block.name !== LEGACY_AGENT_TOOL_NAME)) continue
+          if (block.type !== 'tool_use') continue
           const input = block.input
-          if (input && typeof input === 'object' && 'prompt' in input && typeof input.prompt === 'string') {
+          if (!input || typeof input !== 'object') continue
+          if (!message.codeMode && block.name === ASK_USER_QUESTION_TOOL_NAME && 'questions' in input) {
+            askedQuestions.set(block.id, { assistantUuid: message.uuid, questions: input.questions })
+          }
+          if (includeWorkerRequests && (block.name === AGENT_TOOL_NAME || block.name === LEGACY_AGENT_TOOL_NAME) &&
+              'prompt' in input && typeof input.prompt === 'string') {
             // The request records whom the assistant addressed, even if launch was refused or rewritten.
             evidence.push({ origin: 'assistant', id: block.id, recipient: 'requested worker', text: input.prompt })
           }
@@ -50,6 +71,13 @@ function conversationEvidence(
     const attachment = message.type === 'attachment' ? message.attachment as Attachment : undefined
     const queued = attachment?.type === 'queued_command' ? attachment : undefined
     if (!user && !queued) continue
+    if (user && Array.isArray(user.message.content)) {
+      for (const block of user.message.content) {
+        if (block.type !== 'tool_result') continue
+        const answer = askUserQuestionAnswerText(block, askedQuestions, user)
+        if (answer) evidence.push({ origin: 'operator', id: message.uuid, text: answer })
+      }
+    }
     if (user && (user.isCompactSummary || user.isVirtual || user.isVisibleInTranscriptOnly ||
         user.toolUseResult !== undefined || user.sourceToolAssistantUUID !== undefined)) continue
     const source = user?.origin ?? queuedCommandOrigin(queued)
@@ -63,7 +91,13 @@ function conversationEvidence(
         ...(source.kind === 'peer' && { actor: source.name }) })
       continue
     }
-    if (!(source?.kind === 'human' || source === undefined) || user?.isMeta || (queued && 'isMeta' in queued && queued.isMeta)) continue
+    if (source?.kind === 'coordinator' && includeWorkerRequests) {
+      evidence.push({ origin: 'assistant', id: message.uuid, actor: 'coordinator', text: content })
+      continue
+    }
+    if (!isOperatorOrigin(source) || user?.isMeta ||
+        (queued && ((queued.commandMode !== undefined && queued.commandMode !== 'prompt') ||
+          ('isMeta' in queued && queued.isMeta)))) continue
     const reply = parsePriorAssistantContext(user?.priorAssistantContext ??
       (queued && 'priorAssistantContext' in queued ? queued.priorAssistantContext : undefined))
     const prior = reply ? proposals.get(reply.messageUuid) : undefined
@@ -74,11 +108,12 @@ function conversationEvidence(
   return evidence
 }
 
-function stopped(messages: readonly Message[]): boolean {
+function stopped(messages: readonly Message[], evidence: Conversation): boolean {
+  const lastOperator = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
   for (let index = messages.length - 1; index >= 0; index--) {
     const row = messages[index]!
     if (row.type === 'user' && row.origin?.kind === 'interruption') return true
-    if (conversationEvidence([row]).some(record => record.origin === 'operator')) return false
+    if (row.uuid === lastOperator) return false
   }
   return false
 }
@@ -101,36 +136,39 @@ export function findContextualAssignmentAnchor(context: ToolUseContext): string 
 type PeerParentEvidence = {
   reference: { parentSessionId: string; userMessageId: string }
   messages: readonly Message[]
+  pendingOperatorInput: boolean
   isCurrent: () => boolean
 }
 
 // Only a successful host receipt identifies the child. Identical brief text
 // or a peer's display name alone can occur in unrelated launches.
 function legacyLaunchAnchor(messages: readonly Message[], childId: string, openingBrief: string): string | undefined {
-  const matches: number[] = []
-  const calls = new Map<string, { index: number; messageId: string }>()
-  for (const [index, message] of messages.entries()) {
-    if (message.type === 'assistant' && !message.isVirtual && !message.codeMode) {
-      for (const block of message.message.content) {
-        if (block.type === 'tool_use' && block.name === 'CreatePeer' && block.input &&
-            typeof block.input === 'object' && 'prompt' in block.input && block.input.prompt === openingBrief) {
-          if (calls.has(block.id)) return undefined
-          calls.set(block.id, { index, messageId: message.uuid })
-        }
-      }
-    }
-    if (message.type !== 'user' || message.isVirtual || !Array.isArray(message.message.content) ||
-        message.message.content.length !== 1) continue
+  const receipts = messages.filter(message => {
+    if (message.type !== 'user') return false
     const result = message.toolUseResult
-    if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true ||
-        'failedStep' in result || !('appSessionId' in result) || result.appSessionId !== childId) continue
-    const block = message.message.content[0]
-    if (block?.type !== 'tool_result' || block.is_error) continue
-    const call = calls.get(block.tool_use_id)
-    if (call && call.messageId === message.sourceToolAssistantUUID) matches.push(call.index)
-  }
-  if (matches.length !== 1) return undefined
-  return conversationEvidence(messages.slice(0, matches[0])).findLast(row => row.origin === 'operator' && row.id)?.id
+    return result && typeof result === 'object' && 'appSessionId' in result && result.appSessionId === childId
+  })
+  if (receipts.length !== 1) return undefined
+  const receipt = receipts[0]!
+  if (receipt.type !== 'user' || receipt.origin || receipt.isMeta || receipt.isCompactSummary ||
+      receipt.isVisibleInTranscriptOnly || Boolean(receipt.isVirtual) !== Boolean(receipt.codeMode)) return undefined
+  const result = receipt.toolUseResult as Record<string, unknown>
+  if (result.ok !== true || 'failedStep' in result) return undefined
+  const blocks = receipt.message.content
+  const response = Array.isArray(blocks) && blocks.length === 1 ? blocks[0] : undefined
+  if (response?.type !== 'tool_result' || response.is_error || !receipt.sourceToolAssistantUUID) return undefined
+  const index = messages.findIndex(message => message.uuid === receipt.sourceToolAssistantUUID)
+  const launch = messages[index]
+  if (index >= messages.indexOf(receipt) || launch?.type !== 'assistant' || !isLiveAssistant(launch) ||
+      launch.codeMode?.cellId !== receipt.codeMode?.cellId || launch.codeMode?.generation !== receipt.codeMode?.generation) return undefined
+  const uses = launch.message.content.filter(block => block.type === 'tool_use' && block.id === response.tool_use_id)
+  const call = uses[0]
+  if (uses.length !== 1 || call?.type !== 'tool_use' || call.name !== 'CreatePeer' || !call.input ||
+      typeof call.input !== 'object' || !('prompt' in call.input) || call.input.prompt !== openingBrief) return undefined
+  if (messages.some(message => message !== receipt && message.type === 'user' &&
+      message.sourceToolAssistantUUID === launch.uuid && Array.isArray(message.message.content) &&
+      message.message.content.some(block => block.type === 'tool_result' && block.tool_use_id === response.tool_use_id))) return undefined
+  return conversationEvidence(messages.slice(0, index)).findLast(row => row.origin === 'operator' && row.id)?.id
 }
 
 export async function resolveContextualPeerParent(
@@ -140,39 +178,62 @@ export async function resolveContextualPeerParent(
   if (context.agentId) return undefined
   const current = context.getCurrentAutoModeMessages?.() ?? context.messages
   const origin = current.flatMap(message => {
+    const attachment = message.type === 'attachment' ? message.attachment as Attachment : undefined
     const source = message.type === 'user' ? message.origin
-      : message.type === 'attachment' ? queuedCommandOrigin(message.attachment) : undefined
-    if (source?.kind !== 'peer' || !source.creationPrompt) return []
-    const input = message.type === 'user' ? message.message.content : undefined
+      : queuedCommandOrigin(attachment)
+    if (source?.kind !== 'peer' || !source.creationPrompt ||
+        (message.type === 'user' && (message.isVirtual || message.isMeta || message.isCompactSummary ||
+          message.isVisibleInTranscriptOnly || message.toolUseResult !== undefined || message.sourceToolAssistantUUID))) return []
+    const input = message.type === 'user' ? message.message.content
+      : attachment?.type === 'queued_command' ? attachment.prompt
+      : undefined
     const onlyBlock = Array.isArray(input) && input.length === 1 ? input[0] : undefined
     const brief = typeof input === 'string' ? input : onlyBlock?.type === 'text' ? onlyBlock.text : undefined
     return [{ source, brief }]
   })
   if (origin.length !== 1) return undefined
   const { source, brief } = origin[0]!
+  if (context.peerCreatorAppSessionId !== undefined && context.peerCreatorAppSessionId !== source.appSessionId) return undefined
   const linked = source.assignment
   try {
     const legacy = !linked && brief && validateUuid(source.appSessionId) ? await lookupLegacyCreator?.(source.appSessionId) : undefined
     const parentSessionId = linked?.parentSessionId ?? legacy?.parentSessionId
     if (!parentSessionId || !validateUuid(parentSessionId) || (legacy && !validateUuid(legacy.childAppSessionId))) return undefined
-    const { getTranscriptPathForSession, loadTranscriptFromFile } = await import('../sessionStorage.js')
+    const { getTranscriptPathForSession, loadTranscriptFile, selectActiveConversation, projectSessionQueueOperations } =
+      await import('../sessionStorage.js')
     const path = getTranscriptPathForSession(parentSessionId)
     const fingerprint = () => {
       const file = statSync(path, { bigint: true })
       return [file.ino, file.size, file.mtimeNs, file.ctimeNs].join(':')
     }
     const before = fingerprint()
-    const transcript = await loadTranscriptFromFile(path)
+    const loaded = await loadTranscriptFile(path, { strict: true, keepAllLeaves: true })
+    const transcript = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
     const isCurrent = () => {
       try { return fingerprint() === before } catch { return false }
     }
-    if (!isCurrent() || transcript.sessionId !== parentSessionId) return undefined
+    if (!isCurrent() || loaded.sourceTruncated || transcript.sessionId !== parentSessionId ||
+        (loaded.activeConversationTip && transcript.tip?.uuid !== loaded.activeConversationTip.tipUuid) ||
+        transcript.messages.some(row => row.sessionId !== parentSessionId || row.isSidechain ||
+          (row.parentUuid && !loaded.messages.has(row.parentUuid)))) return undefined
     const userMessageId = linked?.userMessageId ?? (legacy && brief
       ? legacyLaunchAnchor(transcript.messages, legacy.childAppSessionId, brief)
       : undefined)
     if (!userMessageId || !validateUuid(userMessageId) ||
         !conversationEvidence(transcript.messages).some(row => row.id === userMessageId && row.origin === 'operator')) return undefined
-    return { reference: { parentSessionId, userMessageId }, messages: transcript.messages, isCurrent }
+    const { operations, messageUuids } = projectSessionQueueOperations(loaded)
+    const pending = new Set<UUID>()
+    for (const op of operations) {
+      if (op.sessionId !== parentSessionId || !op.uuid) continue
+      if (op.operation === 'enqueue' && op.mode === 'prompt' && !op.agentId && isOperatorOrigin(op.origin)) {
+        pending.add(op.uuid)
+      } else if (op.operation === 'popAll' ||
+          (op.queueVersion === 2 && (op.operation === 'dequeue' || op.operation === 'remove'))) {
+        pending.delete(op.uuid)
+      }
+    }
+    return { reference: { parentSessionId, userMessageId }, messages: transcript.messages, isCurrent,
+      pendingOperatorInput: [...pending].some(id => !messageUuids.has(id)) }
   } catch {
     return undefined
   }
@@ -196,9 +257,11 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
   const messages = context.getCurrentAutoModeMessages?.() ?? context.messages
   const conversation = conversationEvidence(messages, worker?.excluded, true)
   const peer = conversation.find(record => record.origin === 'peer')
-  const actor = context.agentId ?? (peer ? 'peer-session' : 'main')
+  const peerSession = Boolean(context.peerCreatorAppSessionId || peer || peerParent ||
+    messages.some(message => message.type === 'user' && message.summarizedRelayedInput === true))
+  const actor = context.agentId ?? (peerSession ? 'peer-session' : 'main')
   for (const entry of conversation) {
-    if (entry.origin === 'assistant') entry.actor = actor
+    if (entry.origin === 'assistant' && !entry.actor) entry.actor = actor
   }
   const parentMessages = worker?.parentMessages() ?? (peerParent?.isCurrent() ? peerParent.messages : undefined)
   const parentEvidence = parentMessages ? conversationEvidence(parentMessages) : undefined
@@ -207,19 +270,20 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
   const anchor = worker?.anchor ?? peerParent?.reference.userMessageId
   const parent = anchor && parentEvidence?.some(record => record.id === anchor && record.origin === 'operator')
     ? parentEvidence : undefined
-  const delegated = Boolean(context.agentId || peer || peerParent)
+  const delegated = Boolean(context.agentId || peerSession)
   const assignment: ContextualEvidence['assignment'] = delegated ? {
     actor, origin: worker ? 'worker-launch' : 'peer',
-    ...(worker ? { text: worker.text, sender: worker.sender } : peer ? { text: peer.text } : {}),
-    ...(parent && { parent }),
+    ...(worker ? { text: worker.text, sender: worker.sender } : peer ? { text: peer.text, sender: peer.actor } : {}),
+    ...(parent && { parent, parentAnchor: anchor }),
   } : undefined
   return {
     actor, delegated, assignment, conversation,
     verifiedSource: Boolean(parent || conversation.some(record => record.origin === 'operator' && record.id)),
-    pendingOperatorInput: getCommandQueueSnapshot().some(command => command.mode === 'prompt' &&
-      (command.agentId === undefined || command.agentId === context.agentId) && !command.isMeta &&
-      (!command.origin || command.origin.kind === 'human')),
+    pendingOperatorInput: Boolean(peerParent?.pendingOperatorInput) ||
+      getCommandQueueSnapshot().some(command => command.mode === 'prompt' &&
+        (command.agentId === undefined || command.agentId === context.agentId) && !command.isMeta &&
+        isOperatorOrigin(command.origin)),
     stopped: context.abortController.signal.aborted || worker?.parentSignal.aborted === true ||
-      stopped(messages) || Boolean(parentMessages && stopped(parentMessages)),
+      stopped(messages, conversation) || Boolean(parentMessages && parentEvidence && stopped(parentMessages, parentEvidence)),
   }
 }

@@ -1,7 +1,25 @@
 import { z } from 'zod/v4'
-import type { Message } from '../../types/message.js'
+import type { Message, UserMessage } from '../../types/message.js'
 import type { PermissionDecision } from '../../types/permissions.js'
+import { readQuestionSelections } from '../questionSelections.js'
 import { getRecordedAutoModeOutcome } from './autoModeMeta.js'
+
+/** Read a blocking question's receiver-owned answer from its paired tool result. */
+export function askUserQuestionAnswerText(
+  block: { tool_use_id?: string; is_error?: boolean },
+  askedQuestions: ReadonlyMap<string, { assistantUuid: string; questions: unknown }>,
+  message: UserMessage,
+): string | null {
+  const id = block.tool_use_id
+  const asked = id === undefined ? undefined : askedQuestions.get(id)
+  if (!asked || !id || message.sourceToolAssistantUUID !== asked.assistantUuid ||
+    block.is_error || message.origin !== undefined || message.isCompactSummary ||
+    message.isMeta || message.isVirtual || message.isVisibleInTranscriptOnly) return null
+  const output = message.toolUseResult
+  if (typeof output !== 'object' || output === null || !('selections' in output)) return null
+  const selections = readQuestionSelections(output.selections, id, asked.questions)
+  return selections ? JSON.stringify({ selections }) : null
+}
 
 // These marks cannot be supplied through a tool argument or a permission wire response.
 type HumanRefusal = { disposition?: 'skip' | 'correction'; feedback?: string }

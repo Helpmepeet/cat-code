@@ -22,7 +22,6 @@ import { roughTokenCountEstimationForContent } from '../../services/tokenEstimat
 import type { Tool, ToolPermissionContext, Tools } from '../../Tool.js'
 import type { Message, UserMessage } from '../../types/message.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
-import { readQuestionSelections } from '../questionSelections.js'
 import type {
   ClassifierUsage,
   YoloClassifierResult,
@@ -65,7 +64,7 @@ import { selectAutoModeInstructionContext } from './autoModeInstructionSelection
 import { selectAutoModeHistory } from './autoModeHistory.js'
 import { positionToolExecutionEvidence } from './toolExecutionEvidence.js'
 import { getAutoModeClassifierAttempts, GPT_CLASSIFIER_FALLBACKS } from './autoModeProviderLadder.js'
-import { positionPermissionDecisionContexts, type PermissionDecisionContext } from './permissionDecisionContext.js'
+import { askUserQuestionAnswerText, positionPermissionDecisionContexts, type PermissionDecisionContext } from './permissionDecisionContext.js'
 import {
   buildAutoModeMetaLines,
   buildAutoModeOutcomeLine,
@@ -432,29 +431,6 @@ function summaryPrefixFor(msg: UserMessage): string {
     return SUMMARIZED_RELAY_PREFIX
   }
   return msg.isCompactSummary === true ? '[CONVERSATION SUMMARY - NOT NEW USER AUTHORIZATION] ' : ''
-}
-
-/**
- * The user's answer to a question the agent asked, or null for any other tool
- * result. Correlation is by tool_use id, so a result cannot claim to be an
- * answer to a question that was never asked.
- */
-function askUserQuestionAnswerText(
-  block: { tool_use_id?: string; content?: unknown; is_error?: boolean },
-  askedQuestions: ReadonlyMap<string, { assistantUuid: string; questions: unknown }>,
-  message: UserMessage,
-): string | null {
-  const id = block.tool_use_id
-  const asked = id === undefined ? undefined : askedQuestions.get(id)
-  if (!asked || !id || message.sourceToolAssistantUUID !== asked.assistantUuid ||
-    block.is_error || message.origin !== undefined || message.isCompactSummary ||
-    message.isMeta || message.isVirtual || message.isVisibleInTranscriptOnly) return null
-  const output = message.toolUseResult
-  if (typeof output !== 'object' || output === null || !('selections' in output)) return null
-  const selections = readQuestionSelections(output.selections, id, asked.questions)
-  // A body prefix, legacy answer argument, or arbitrary tool output is not a
-  // receiver receipt. Emit only the selected engine-owned meaning and user text.
-  return selections ? JSON.stringify({ selections }) : null
 }
 
 type ClassifierTranscriptOptions = {

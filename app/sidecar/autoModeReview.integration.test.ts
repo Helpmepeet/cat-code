@@ -195,6 +195,12 @@ describe.skipIf(feature('TRANSCRIPT_CLASSIFIER') ? false : true)('real app-runti
   test('fresh sidecar socket and main renderer-reload buffer replay the same display-only events from disk', async () => {
     const main = await run('allow')
     const child = await run('allow', true)
+    const contextualChild: AutoModeReview = {
+      ...child.reviews[1]!,
+      reviewer: { kind: 'contextual', version: 'review-fixture', verdict: 'allow',
+        profile: { model: 'gpt-6-luna', provider: 'openai', effort: 'provider-default', promptDigest: 'a'.repeat(64) } },
+    }
+    persistAutoModeReview(contextualChild)
     expect(JSON.stringify(requests)).not.toContain('DISPLAY_ONLY_REVIEW_REASON')
     clearSessionMessagesCache()
     const loaded = await loadTranscriptFile(getTranscriptPath(), { keepCompactedHistory: true })
@@ -216,7 +222,7 @@ describe.skipIf(feature('TRANSCRIPT_CLASSIFIER') ? false : true)('real app-runti
       expect(replay).toHaveLength(2)
       expect(replay.every(frame => frame.kind === 'event' && frame.replay === true)).toBe(true)
       expect(replay.map(frame => frame.kind === 'event' ? frame.event : null)).toEqual([
-        child.reviews[1], main.reviews[1],
+        contextualChild, main.reviews[1],
       ])
       const buffer = new FrameReplayBuffer()
       for (const frame of received) buffer.record('review-app-session', frame)
@@ -225,7 +231,7 @@ describe.skipIf(feature('TRANSCRIPT_CLASSIFIER') ? false : true)('real app-runti
         frame.kind === 'event' && frame.event.type === 'tool.review')).toEqual(replay)
       const reloadedRenderer = projectServerFrames(createTranscriptState(), reloadedFrames)
       const tools = selectTranscriptRows(reloadedRenderer, 'review-app-session').filter(row => row.kind === 'tool-use')
-      expect(tools.map(row => row.autoModeReview)).toEqual([main.reviews[1], child.reviews[1]])
+      expect(tools.map(row => row.autoModeReview)).toEqual([main.reviews[1], contextualChild])
       expect(received.filter(frame => frame.kind === 'event' && frame.event.type === 'message')
         .some(frame => JSON.stringify(frame).includes('DISPLAY_ONLY_REVIEW_REASON'))).toBe(false)
     } finally { server.close() }

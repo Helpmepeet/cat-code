@@ -6,6 +6,17 @@ import { dirname, join } from 'node:path'
 const root = process.env.CONTEXTUAL_AUTO_TEST_ROOT!
 const scenario = process.env.CONTEXTUAL_AUTO_TEST_SCENARIO!
 const legacyNotice = scenario.startsWith('legacy-notice-')
+const backgroundWithdrawal = scenario === 'background-withdrawal'
+const questionReply = scenario === 'question-reply'
+const lateCorrection = scenario === 'direct-late-correction'
+const credentialSettings = scenario === 'direct-credential-settings'
+const compacted = scenario.startsWith('compacted-')
+const mainEdit = scenario === 'main-inspect-only'
+const peerAction = scenario === 'main-peer-create'
+  ? { name: 'CreatePeer', input: { prompt: 'Update the file.' } }
+  : scenario === 'main-peer-send'
+    ? { name: 'SendToPeer', input: { peers: ['Worker'], text: 'Update the file.' } }
+    : undefined
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated fixture required')
 Object.assign(globalThis, { MACRO: { VERSION: 'contextual-auto-test' } })
 globalThis.fetch = Object.assign(async () => { throw new Error('Unexpected network request') }, { preconnect: globalThis.fetch.preconnect })
@@ -18,6 +29,12 @@ const reviewUnavailable = scenario.endsWith('-unavailable')
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
 const action = (name: string) => ({ name: 'Edit', input: { file_path: join(cwd, name + '.txt'), old_string: 'old', new_string: 'new' } })
 const command = { name: 'Bash', input: { command: 'printf effect >> effects.txt', work_lifetime: 'finite', run_in_background: false } }
+const question = { name: 'AskUserQuestion', input: { questions: [
+  { question: 'How should I handle this file?', options: [
+    { label: 'Inspect', description: 'Leave the file untouched.' },
+    { label: 'Edit', description: 'Update the file.' },
+  ], multiSelect: false },
+] } }
 const child = (name: string) => JSON.stringify(action(name))
 const call = (name: string) => `tools.call({ ...${child(name)}, nothrow: true })`
 const routed = scenario.startsWith('delegated-') || scenario === 'hook-edit'
@@ -36,43 +53,58 @@ const code = scenario === 'skip-queued'
     : scenario === 'hook-edit' ? `const name = "a" + ".txt"; await tools.call({name:"Edit",input:{file_path:name,old_string:"old",new_string:"new"}});`
     : routed ? `const pending = ${JSON.stringify(candidate)}; await tools.call(pending); output("helper completed");`
     : `await tools.call(${JSON.stringify(command)}); output("after approval");`
-const submitted = routed && scenario.endsWith('-direct') || scenario.startsWith('direct-')
-  ? (scenario.startsWith('direct-') ? command : candidate)
-  : { name: 'REPL', input: { code, description: 'Run isolated fixture', ...(scenario === 'measure-background' && { run_in_background: true }) } }
+const submitted = peerAction ?? (questionReply ? question
+  : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || mainEdit || scenario.startsWith('trial-')
+    ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
+    : { name: 'REPL', input: { code, description: 'Run isolated fixture',
+        ...((scenario === 'measure-background' || backgroundWithdrawal) && { run_in_background: true }) } })
 if (scenario === 'hook-edit' || scenario.startsWith('direct-')) {
   const rewrite = scenario === 'hook-edit' ? action('hooked').input : { ...command.input, timeout: 5_000 }
   const event = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: rewrite } }
   const approve = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } }
   const hook = (output: unknown) => ({ type: 'command', command: `printf '%s' '${JSON.stringify(output).replaceAll("'", "'\\''")}'` })
   await mkdir(configuration, { recursive: true })
-  await writeFile(join(configuration, 'settings.json'), JSON.stringify({ hooks: {
+  await writeFile(join(configuration, 'settings.json'), JSON.stringify({
+    ...(credentialSettings && { autoMode: { allow: ['Synthetic example password = fixturePass98765'] } }),
+    hooks: {
     PreToolUse: [{ matcher: scenario === 'hook-edit' ? 'Edit' : 'Bash', hooks: [hook(event)] }],
     PermissionRequest: [{ matcher: 'Bash', hooks: [{ ...hook(approve), command: `touch permission-hook-ran && ${hook(approve).command}` }] }],
   } }))
 }
-const requests: { tool: string; content: any; startedAt: number; elapsedMs: number }[] = []
+const requests: { tool: string; content: any; startedAt: number; elapsedMs: number; model: string; provider: string; contextual: boolean }[] = []
 let modelCalls = 0
 let invalidateParent: (() => Promise<void>) | undefined
+const backgroundReview = Promise.withResolvers<void>()
+const backgroundVerdict = Promise.withResolvers<void>()
 let resolveBackground!: () => void
 const backgroundFinished = new Promise<void>(resolve => { resolveBackground = resolve })
 mock.module('../services/api/client.js', () => ({
   CLIENT_REQUEST_ID_HEADER: 'x-client-request-id',
   resolveCodexOAuthTokensForLeaseOwner: async () => { throw new Error('OAuth forbidden') },
-  getAnthropicClient: async () => ({ beta: { messages: { create(body: any) {
+  getAnthropicClient: async (client: { provider: string }) => ({ beta: { messages: { create(body: any) {
     if (!body.stream) {
       const start = performance.now()
       const contextual = !body.tool_choice
       const content = contextual ? JSON.parse(body.messages.at(-1).content) : body.messages.at(-1)?.content.at(-1)?.text
       const tool = contextual ? content.action.tool : /<pending_action>\n(\S+)/.exec(content)?.[1] ?? 'unknown'
-      const review = { tool, content, startedAt: start, elapsedMs: 0 }
+      const review = { tool, content, startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
       const verdict = tool === 'REPL' ? 'allow'
-        : scenario.includes('withdrawn') || scenario === 'hook-edit' ? 'deny'
+        : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction ? 'deny'
+        : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
         : scenario.startsWith('wait-') || scenario.startsWith('direct-') ? 'ask' : 'allow'
       return (async () => {
         await Bun.sleep(2)
         if (tool === 'Edit') await invalidateParent?.()
+        if (tool === 'Bash' && lateCorrection) {
+          const { enqueue } = await import('../utils/messageQueueManager.js')
+          enqueue({ mode: 'prompt', value: 'Stop. Leave all files untouched.' })
+        }
+        if (tool === 'Bash' && backgroundWithdrawal) {
+          backgroundReview.resolve()
+          await backgroundVerdict.promise
+        }
         review.elapsedMs = performance.now() - start
         if (reviewUnavailable) throw new Error('Synthetic provider outage')
         return { id: 'classifier', type: 'message', role: 'assistant', model: body.model,
@@ -84,10 +116,11 @@ mock.module('../services/api/client.js', () => ({
       })()
     }
     const index = modelCalls++
-    const invocation = index === 0 || (scenario === 'skip-queued' || legacyNotice) && index === 1
+    const invocation = index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply) && index === 1
     const main = legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : index === 0 ? submitted
+      : questionReply ? action('a')
       : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
@@ -111,11 +144,12 @@ const { createQueryEngineSessionController } = await import('./createQueryEngine
 const { BashTool } = await import('../tools/BashTool/BashTool.js')
 const { FileReadTool } = await import('../tools/FileReadTool/FileReadTool.js')
 const { FileEditTool } = await import('../tools/FileEditTool/FileEditTool.js')
+const { AskUserQuestionTool } = await import('../tools/AskUserQuestionTool/AskUserQuestionTool.js')
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
-if (routed && scenario.endsWith('-direct')) {
+if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
@@ -149,7 +183,7 @@ const runtimeLimits = scenario.startsWith('wait-') ? { foregroundMs: 900, backgr
   : scenario === 'timeout-host' ? { foregroundMs: 350, backgroundMs: 350, runtimeMs: 1500 }
   : scenario === 'timeout-runtime' ? { foregroundMs: 1500, backgroundMs: 1500, runtimeMs: 350 } : undefined
 const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> = {
-  cwd, tools: [REPLTool, BashTool, FileReadTool, FileEditTool], commands: [], mcpClients: [], agents: [],
+  cwd, tools: [REPLTool, BashTool, FileReadTool, FileEditTool, ...(questionReply ? [AskUserQuestionTool] : [])], commands: [], mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => {
     state = update(state)
     if (Object.values(state.tasks).some((task: any) => task.delivery === 'delivered')) resolveBackground()
@@ -157,13 +191,29 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   userSpecifiedModel: 'claude-sonnet-5-5',
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
-    return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop') ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
+    return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
+      backgroundWithdrawal || lateCorrection || scenario.startsWith('trial-'))
+      ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
-  initialMessages: initial,
+  initialMessages: compacted ? [
+    createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
+      ...(scenario === 'compacted-relay-marker' && { summarizedRelayedInput: true }) }),
+  ] : initial,
+  ...(scenario === 'compacted-host-identity' && { peerCreatorAppSessionId: randomUUID() }),
 }
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
+let peerRequests = 0
+if (peerAction) {
+  const { createCreatePeerTool } = await import('../../app/sidecar/createPeerTool.js')
+  const { createSendToPeerTool } = await import('../../app/sidecar/sendToPeerTool.js')
+  const host: import('../../app/sidecar/peerHostRequester.js').PeerHostRequester = async () => {
+    peerRequests++
+    return { ok: false, error: { code: 'unavailable', message: 'Unexpected peer request' } }
+  }
+  config.tools = [...config.tools, createCreatePeerTool(host), createSendToPeerTool(host)]
+}
 if (legacyNotice) {
   const { getTranscriptPathForSession } = await import('../utils/sessionStorage.js')
   const { createAnnounceTool } = await import('../../app/sidecar/announceTool.js')
@@ -172,17 +222,29 @@ if (legacyNotice) {
   const parentFile = getTranscriptPathForSession(parentSessionId)
   const grant = createUserMessage({ content: 'Have a helper inspect a.txt. Leave it untouched.' })
   const callId = randomUUID()
-  const create = { type: 'assistant', uuid: randomUUID(), message: { role: 'assistant', content: [
+  const script = scenario === 'legacy-notice-script' ? { isVirtual: true as const, codeMode: { cellId: 'fixture-cell', generation: 'fixture-generation' } } : {}
+  const create = { type: 'assistant', uuid: randomUUID(), ...script, message: { role: 'assistant', content: [
     { type: 'tool_use', name: 'CreatePeer', id: callId, input: { prompt: 'Inspect a.txt.' } },
   ] } }
-  const receipt = createUserMessage({ content: [{ type: 'tool_result', tool_use_id: callId, content: 'Created peer' }],
+  const receipt = { ...createUserMessage({ content: [{ type: 'tool_result', tool_use_id: callId, content: 'Created peer' }],
     sourceToolAssistantUUID: create.uuid, toolUseResult: { ok: true,
-      appSessionId: scenario === 'legacy-notice-other-child' ? randomUUID() : childAppSessionId } })
+      appSessionId: scenario === 'legacy-notice-other-child' ? randomUUID() : childAppSessionId } }), ...script }
   const rows = [grant, create, receipt]
+  if (scenario === 'legacy-notice-conflicting') {
+    rows.push({ ...receipt, uuid: randomUUID(), toolUseResult: { ok: true, appSessionId: randomUUID() } })
+  }
+  if (scenario === 'legacy-notice-no-anchor') rows.push(rows.shift()!)
   await mkdir(dirname(parentFile), { recursive: true })
   await writeFile(parentFile, rows.map((row, i) => JSON.stringify({ ...row, parentUuid: rows[i - 1]?.uuid ?? null,
     sessionId: parentSessionId, cwd, isSidechain: false, userType: 'external' })).join('\n') + '\n')
-  config.lookupLegacyPeerCreator = async creator => creator === creatorAppId ? { parentSessionId, childAppSessionId } : undefined
+  if (scenario === 'legacy-notice-queued') await appendFile(parentFile, JSON.stringify({
+    type: 'queue-operation', operation: 'enqueue', queueVersion: 2, mode: 'prompt',
+    sessionId: parentSessionId, uuid: randomUUID(), timestamp: new Date().toISOString(),
+    content: 'Stop the helper job.',
+  }) + '\n')
+  config.peerCreatorAppSessionId = creatorAppId
+  config.lookupLegacyPeerCreator = async creator => creator === creatorAppId && scenario !== 'legacy-notice-no-creator'
+    ? { parentSessionId, childAppSessionId } : undefined
   config.tools = [...config.tools, createAnnounceTool(async (verb, args) => {
     if (verb !== 'peer.announce') throw new Error('Unexpected fixture host request')
     postedNotices.push(args)
@@ -204,6 +266,16 @@ controller.subscribe(event => {
   const { requestId, request } = event.request
   prompts.push(request)
   replies.push((async () => {
+    if (questionReply && request.tool_name === question.name) {
+      const { recordQuestionSelections, reconstructQuestionSelection } = await import('../utils/questionSelections.js')
+      const first = question.input.questions[0]!
+      const answers = { [first.question]: 'Inspect' }
+      recordQuestionSelections(request.tool_use_id, request.input.questions, answers, [
+        reconstructQuestionSelection(request.tool_use_id, 0, first, { optionIndices: [0] }),
+      ])
+      controller.respondToPermissionRequest(requestId, { behavior: 'allow', updatedInput: { ...request.input, answers } })
+      return
+    }
     const start = performance.now()
     if (scenario.startsWith('wait-')) await Bun.sleep(1200)
     if (scenario.startsWith('direct-')) await Bun.sleep(200)
@@ -241,9 +313,17 @@ if (surface === 'desktop') {
   if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
     kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
   } })
-  else await controller.submit(routed ? assignment : 'Run the isolated action and report the result.', routed ? {
-    origin: { kind: 'peer', name: 'Lead', appSessionId: 'fixture-lead', creationPrompt: true, ...(parentReference && { assignment: parentReference }) },
-  } : undefined)
+  else await controller.submit(routed ? assignment : mainEdit ? 'Inspect a.txt. Leave it untouched.' :
+    peerAction ? 'Inspect a.txt yourself. Do not create or contact another session.' :
+    'Run the isolated action and report the result.', routed ? {
+      origin: { kind: 'peer', name: 'Lead', appSessionId: 'fixture-lead', creationPrompt: true, ...(parentReference && { assignment: parentReference }) },
+    } : compacted ? { isMeta: true } : undefined)
+  if (backgroundWithdrawal) {
+    await backgroundReview.promise
+    await controller.submit('Stop the background task. Leave the file untouched.')
+    backgroundVerdict.resolve()
+    await backgroundFinished
+  }
 } else {
   const { QueryEngine } = await import('../QueryEngine.js')
   let engine: InstanceType<typeof QueryEngine>
@@ -326,8 +406,14 @@ if (scenario.startsWith('measure-')) {
     .filter(row => row.subtype === 'tool_execution_end')
     .map(row => ({ id: row.tool_use_id, durationMs: row.duration_ms }))
 }
+let savedReviews: unknown[] = []
+if (lateCorrection || backgroundWithdrawal || scenario.startsWith('trial-')) {
+  const { getTranscriptPath } = await import('../utils/sessionStorage.js')
+  const { readAutoModeReviews } = await import('./autoModeReviewPersistence.js')
+  savedReviews = readAutoModeReviews(getTranscriptPath())
+}
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
-  scenarios: scenario, requests, prompts, reviewEvents, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices,
+  scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
   wallMs: scriptWallMs, executions, effect: await effect(), files:
     Object.fromEntries(await Promise.all(['a', 'b', 'c', 'hooked'].map(async name => [name, await readFile(join(cwd, name + '.txt'), 'utf8')]))),
 }))

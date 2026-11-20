@@ -949,6 +949,7 @@ async function checkPermissionsAndCallTool(
   }
 
   let executionContextForCleanup: ToolUseContext | undefined
+  let contextualAttempt: Awaited<ReturnType<typeof createContextualAttempt>>
   try {
   // Validate input values. Each tool has its own validation logic
   const isValidCall = await tool.validateInput?.(
@@ -1303,7 +1304,7 @@ async function checkPermissionsAndCallTool(
   const permissionMode = toolUseContext.getAppState().toolPermissionContext.mode
   const scriptPolicyIsCurrent = !tool.isMcp && tool.name === REPL_TOOL_NAME
     ? captureCodeModePermissionPolicy(toolUseContext) : undefined
-  const contextualAttempt = getEffectiveAutoMode(toolUseContext.getAppState().toolPermissionContext) === null
+  contextualAttempt = getEffectiveAutoMode(toolUseContext.getAppState().toolPermissionContext) === null
     ? undefined : await createContextualAttempt(tool, processedInput, toolUseContext, assistantMessage, toolUseID)
   if (contextualAttempt) toolUseContext = { ...toolUseContext, contextualAutoAttempt: contextualAttempt }
   const permissionStart = Date.now()
@@ -2450,6 +2451,7 @@ async function checkPermissionsAndCallTool(
   }
   } finally {
     try {
+      contextualAttempt?.finishWithoutRelease()
       await preparation.dispose()
     } finally {
       clearUserApprovalReceipts(toolUseID)

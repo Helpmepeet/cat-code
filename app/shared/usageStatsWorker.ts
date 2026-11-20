@@ -9,7 +9,7 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RESERVED = new Set(['unknown', 'other']);
 const AUTO_OUTCOMES = ['allowed', 'policy_blocked', 'review_required', 'operational_error', 'cancelled', 'unknown_outcome', 'incomplete'];
-const AUTO_ROUTES = ['base', 'forced', 'guard', 'accept_edits', 'allowlist', 'stage1', 'stage2', 'unknown'];
+const AUTO_ROUTES = ['base', 'forced', 'guard', 'accept_edits', 'allowlist', 'contextual', 'stage1', 'stage2', 'unknown'];
 const ownKeys = (v: object, keys: readonly string[]) => {
     const actual = Object.keys(v).sort();
     return actual.length === keys.length && actual.every((k, i) => k === [...keys].sort()[i]);

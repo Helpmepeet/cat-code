@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { resolveSidecarLaunch } from '../../app/main/mainDecisions.js'
 
 const fixture = new URL('./contextualAuto.fixture.ts', import.meta.url).pathname
 
@@ -9,8 +10,14 @@ async function run(scenario: string) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cat-contextual-auto-')))
   try {
     await Promise.all([mkdir(join(root, 'config')), mkdir(join(root, 'workspace'))])
-    const child = Bun.spawn([process.execPath, '--feature=CODE_MODE', '--feature=TRANSCRIPT_CLASSIFIER',
-      '--feature=AUTO_MODE_UPSTREAM_PORT', '--feature=AUTO_MODE_CONTEXTUAL_REVIEW', fixture], {
+    const trial = scenario.startsWith('trial-')
+    const trialId = '00000000-0000-4000-8000-000000000001'
+    const runtimeArgs = trial ? resolveSidecarLaunch({
+      mainDir: new URL('../../app/main/', import.meta.url).pathname,
+      packaged: false, contextualAutoMode: 'experimental', contextualAutoModeSessionId: trialId,
+    }).argsFor('session').slice(0, -1) : ['--feature=CODE_MODE', '--feature=TRANSCRIPT_CLASSIFIER',
+      '--feature=AUTO_MODE_UPSTREAM_PORT', '--feature=AUTO_MODE_CONTEXTUAL_REVIEW']
+    const child = Bun.spawn([process.execPath, ...runtimeArgs, fixture], {
       cwd: join(root, 'workspace'), stdout: 'pipe', stderr: 'pipe',
       env: {
         PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin', HOME: root, TMPDIR: root,
@@ -19,6 +26,9 @@ async function run(scenario: string) {
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
         NODE_ENV: 'test', TEST_ENABLE_SESSION_PERSISTENCE: '1', CLAUDE_CODE_AUTO_MODE_MODEL: 'claude-sonnet-5-5',
         CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'experimental',
+        ...(trial && { CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna',
+          CLAUDE_CODE_CONTEXTUAL_AUTO_MODE_SESSION_ID: trialId,
+          CATCODE_SIDECAR_SESSION_ID: scenario === 'trial-selected' ? trialId : 'another-app-session' }),
         CONTEXTUAL_AUTO_TEST_ROOT: root, CONTEXTUAL_AUTO_TEST_SCENARIO: scenario,
       },
     })
@@ -36,18 +46,86 @@ async function run(scenario: string) {
   }
 }
 
-for (const receipt of ['matching', 'other-child']) {
-  test(`legacy notice with ${receipt} creation receipt cannot authorize the next edit`, async () => {
-    const proof = await run(`legacy-notice-${receipt}`)
-    const matching = receipt === 'matching'
+for (const state of ['matching', 'script', 'other-child', 'conflicting', 'no-anchor', 'no-creator', 'queued']) {
+  test(`legacy notice with ${state} parent evidence cannot authorize the next edit`, async () => {
+    const proof = await run(`legacy-notice-${state}`)
+    const matching = state === 'matching' || state === 'script'
     expect(proof.postedNotices).toHaveLength(matching ? 1 : 0)
-    expect(proof.prompts.map((p: any) => p.tool_name)).toEqual(matching ? ['Edit'] : ['Announce', 'Edit'])
+    expect(proof.prompts.map((p: any) => p.tool_name)).toEqual(matching || state === 'queued' ? ['Edit'] : ['Announce', 'Edit'])
     expect(proof.files.a).toBe('old')
     const notice = proof.requests.find((row: any) => row.tool === 'Announce')
     if (matching) expect(notice.content.assignment.parent).toContainEqual(expect.objectContaining({
-      origin: 'operator', text: 'Have a helper inspect a.txt. Leave it untouched.',
+      id: notice.content.assignment.parentAnchor, origin: 'operator', text: 'Have a helper inspect a.txt. Leave it untouched.',
     }))
     else expect(notice).toBeUndefined()
+  }, 30_000)
+}
+
+for (const state of ['host-identity', 'relay-marker']) {
+  test(`a compacted helper with ${state} needs permission before an ordinary edit`, async () => {
+    const proof = await run(`compacted-${state}`)
+    expect(proof.files.a).toBe('old')
+    expect(proof.prompts).toEqual([expect.objectContaining({ tool_name: 'Edit', human_only: true })])
+    expect(proof.requests).toHaveLength(0)
+  }, 30_000)
+}
+
+test('an ordinary main-session edit still reaches the contextual reviewer after an inspect-only request', async () => {
+  const proof = await run('main-inspect-only')
+  expect(proof.requests).toEqual([expect.objectContaining({ tool: 'Edit', contextual: true })])
+  expect(proof.files.a).toBe('old')
+}, 30_000)
+
+for (const [scenario, tool] of [['main-peer-create', 'CreatePeer'], ['main-peer-send', 'SendToPeer']] as const) {
+  test(`${tool} reaches contextual review before it can affect a peer session`, async () => {
+    const proof = await run(scenario)
+    expect(proof.requests).toEqual([expect.objectContaining({ tool, contextual: true })])
+    expect(proof.peerRequests).toBe(0)
+  }, 30_000)
+}
+
+test('typed desktop question answers reach the reviewer as operator evidence without releasing a follow-up edit', async () => {
+  const proof = await run('question-reply')
+  expect(proof.prompts).toEqual([expect.objectContaining({ tool_name: 'AskUserQuestion' })])
+  expect(proof.prompts[0].human_only).toBeUndefined()
+  expect(proof.requests).toHaveLength(1)
+  expect(proof.requests[0].content.conversation).toContainEqual(expect.objectContaining({
+    origin: 'operator', text: expect.stringContaining('Leave the file untouched.'),
+  }))
+  expect(proof.files.a).toBe('old')
+}, 30_000)
+
+test('a credential in sourced Auto Mode settings holds the action without a provider request', async () => {
+  const proof = await run('direct-credential-settings')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toEqual([expect.objectContaining({ tool_name: 'Bash', human_only: true })])
+  expect(proof.effect).toBeNull()
+}, 30_000)
+
+for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
+  test(`${scenario} discards a pending model allowance and records the reason`, async () => {
+    const proof = await run(scenario)
+    const review = proof.requests.find((request: any) => request.tool === 'Bash')
+    expect(review?.contextual).toBe(true)
+    expect(proof.effect).toBeNull()
+    const expected = { toolUseId: review.content.action.attempt, outcome: 'inconclusive',
+      reason: 'The assignment or action changed during review.', reviewer: expect.objectContaining({ verdict: 'allow' }) }
+    expect(proof.reviewEvents).toContainEqual(expect.objectContaining(expected))
+    expect(proof.savedReviews).toContainEqual(expect.objectContaining(expected))
+  }, 30_000)
+}
+
+for (const selected of [true, false]) {
+  test(`Dev trial launch uses the ${selected ? 'contextual Luna' : 'legacy'} reviewer for the ${selected ? 'selected' : 'other'} session`, async () => {
+    const proof = await run(selected ? 'trial-selected' : 'trial-other')
+    expect(proof.requests.length).toBeGreaterThan(0)
+    expect(proof.requests[0].contextual).toBe(selected)
+    if (selected) {
+      expect(proof.requests[0]).toMatchObject({ model: 'gpt-6-luna', provider: 'openai' })
+      expect(proof.savedReviews).toContainEqual(expect.objectContaining({ outcome: 'allowed',
+        reviewer: expect.objectContaining({ kind: 'contextual', verdict: 'allow',
+          profile: expect.objectContaining({ provider: 'openai', model: 'gpt-6-luna' }) }) }))
+    } else expect(proof.savedReviews.every((row: any) => row.reviewer === undefined)).toBe(true)
   }, 30_000)
 }
 

@@ -23,6 +23,15 @@ test('renders the simplified route groups and outcome labels without a duplicate
   expect(html).toContain('Stage 2 to Blocked: 2 recorded decisions, 2.2% of 92 allowed or blocked decisions')
 })
 
+test('includes contextual decisions in the flow under their own review route', () => {
+  const trial = structuredClone(summary)
+  trial.routes.push({ route: 'contextual', outcome: 'allowed', count: 1 })
+  trial.allTools.outcomes.allowed++
+  const html = renderToStaticMarkup(<UsageAutoModeFlow summary={trial} />)
+  expect(html).toContain('>Contextual review</text>')
+  expect(html).toContain('Contextual review to Allowed: 1 recorded decision')
+})
+
 test('does not render a zero-valued flow for unavailable or empty coverage', () => {
   const unavailable = structuredClone(summary)
   unavailable.allTools.coverage.state = 'unavailable'

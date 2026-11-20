@@ -101,12 +101,13 @@ export function sortedAutoModeCategories(summary: AutoModeUsageSummary) {
   )
 }
 
-const AUTO_MODE_OVERVIEW_ROUTES: Record<AutoModeUsageSummary['routes'][number]['route'], 'Base paths' | 'Stage 1' | 'Stage 2'> = {
+const AUTO_MODE_OVERVIEW_ROUTES: Record<AutoModeUsageSummary['routes'][number]['route'], 'Base paths' | 'Contextual review' | 'Stage 1' | 'Stage 2'> = {
   base: 'Base paths',
   forced: 'Base paths',
   guard: 'Base paths',
   accept_edits: 'Base paths',
   allowlist: 'Base paths',
+  contextual: 'Contextual review',
   stage1: 'Stage 1',
   stage2: 'Stage 2',
   unknown: 'Base paths',

@@ -5837,6 +5837,12 @@ export async function getSessionQueueOperations(
     // previously delivered UUIDs independently of the compacted model seed.
     keepCompactedHistory: true,
   })
+  return projectSessionQueueOperations(loaded)
+}
+
+export function projectSessionQueueOperations(
+  loaded: Pick<Awaited<ReturnType<typeof loadTranscriptFile>>, 'messages' | 'queueOperations'>,
+): { operations: SessionQueueOperation[]; messageUuids: Set<UUID> } {
   const messageUuids = new Set(loaded.messages.keys())
   for (const message of loaded.messages.values()) {
     if (message.type === 'user' && !message.origin && !message.isVirtual && !message.sourceToolAssistantUUID &&

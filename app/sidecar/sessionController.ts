@@ -609,6 +609,7 @@ export async function createNormalSidecarQueryEngineConfig(
         ? { initialMessages: [...initialMessages] }
         : {}),
       ...(appSessionId && binding.kind === 'project' && {
+        peerCreatorAppSessionId: readPeerIdentity().createdById,
         lookupLegacyPeerCreator: async (creator: string) => {
           if (readPeerIdentity().createdById !== creator) return undefined
           const roster = await requestPeerRoster(requestPeerHost, { timeoutMs: 1000 })

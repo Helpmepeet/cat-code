@@ -9,6 +9,12 @@ export function withToolActivity<T>(emit: Scope['emit'], run: () => T): T {
   return scope.run({ emit, calls: new Map() }, run)
 }
 
+/** A Script worker's bridge callbacks run outside the turn that owns its events. */
+export function bindToolActivity<Args extends unknown[], Result>(run: (...args: Args) => Result): (...args: Args) => Result {
+  const state = scope.getStore()
+  return state ? (...args) => scope.run(state, () => run(...args)) : run
+}
+
 export function recordToolReview(review: AutoModeReview): void {
   if (!isAutoModeReview(review)) return
   try { scope.getStore()?.emit(review) } catch { /* Display telemetry cannot affect a tool. */ }

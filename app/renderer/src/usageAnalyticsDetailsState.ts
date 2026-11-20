@@ -240,4 +240,4 @@ export function analyticsRouteTiles(summary: UsageRangeSummary, width = 600, hei
         height: Math.round(tile.y + tile.height) - Math.round(tile.y),
     }));
 }
-export const analyticsRouteLabels: Record<AutoModeUsageRoute, string> = { base: 'Base rules', forced: 'Forced', guard: 'Guard', accept_edits: 'Accept edits', allowlist: 'Allowed tools', stage1: 'Classifier, first pass', stage2: 'Classifier, second pass', unknown: 'Unknown route' };
+export const analyticsRouteLabels: Record<AutoModeUsageRoute, string> = { base: 'Base rules', forced: 'Forced', guard: 'Guard', accept_edits: 'Accept edits', allowlist: 'Allowed tools', contextual: 'Contextual review', stage1: 'Classifier, first pass', stage2: 'Classifier, second pass', unknown: 'Unknown route' };

@@ -23,6 +23,8 @@ import { updateTaskState } from '../../utils/task/framework.js'
 import { hasCompactedToolReceiptSource } from '../../utils/sessionStorage.js'
 import { assertCodeModeBackgroundAdmission } from '../../tasks/CodeModeTask.js'
 
+import { bindToolActivity } from '../../app-runtime/toolActivity.js'
+
 const FOREGROUND_WALL_TIME_MS = 10 * 60_000
 const BACKGROUND_WALL_TIME_MS = 2 * 60 * 60_000
 const detachedReceipts = new WeakSet<Message>()
@@ -559,6 +561,8 @@ export class CodeModeHost {
     }
     try {
       this.runtime ??= createRuntime({ limits: { wallTimeMs: this.timeLimits.runtimeMs } })
+      const call = dispatch.call.bind(dispatch)
+      const callTool = context.contextualAutoAttempt?.mode === 'experimental' ? bindToolActivity(call) : call
       const outcome = await this.runtime.run({
         cellId, source: input.code, signal: controller.signal,
         onHumanWaitChange: waiting => {
@@ -577,7 +581,7 @@ export class CodeModeHost {
             if (signal.aborted) stop()
             try {
               const line = request.sourceCellId && request.sourceCellId !== cellId ? undefined : request.line
-              return await dispatch.call(payload.name as string, payload.input, line, payload.nothrow === true) as JsonValue
+              return await callTool(payload.name as string, payload.input, line, payload.nothrow === true) as JsonValue
             } finally { signal.removeEventListener('abort', abortChild) }
           }
           if (dispatch.blockedReason || controller.signal.aborted) throw new Error(dispatch.blockedReason ?? 'Cell has ended')

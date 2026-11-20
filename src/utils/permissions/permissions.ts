@@ -647,6 +647,14 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     observation ?? null,
   )
   const attempt = context.contextualAutoAttempt?.id === toolUseID ? context.contextualAutoAttempt : undefined
+  const reviewContextually = async () => {
+    observation?.markRoute('contextual')
+    const decision = await attempt!.review()
+    if (decision.behavior === 'deny' && decision.decisionReason?.type === 'classifier') {
+      observation?.markPolicy('classifier_policy')
+    }
+    return decision
+  }
   if (attempt?.mode === 'experimental' && result.behavior !== 'deny') {
     const mustAsk = result.behavior === 'ask' && (
       result.decisionReason?.type === 'rule' ||
@@ -659,9 +667,12 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       if (tool.requiresUserInteraction?.() && !attempt.delegatedMutation) return result
       return attempt.requireHuman(result.message)
     }
-    // Delegate coverage through the held-action gate even when normal tool
-    // permissions already returned an allow.
-    if (attempt.delegatedMutation) return await attempt.review()
+    // These tools can affect another session even when their own checks return
+    // allow. Only an explicit permission rule can skip review for the lead.
+    const changesPeerSession = !tool.isMcp && !tool.mcpInfo &&
+      (tool.name === 'CreatePeer' || tool.name === 'SendToPeer')
+    if (attempt.delegatedMutation || (changesPeerSession &&
+        result.behavior === 'allow' && result.decisionReason?.type !== 'rule')) return await reviewContextually()
   }
   observation?.markRoute('base')
   if (
@@ -839,7 +850,9 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         result.behavior === 'ask' &&
         tool.name !== AGENT_TOOL_NAME &&
         tool.name !== REPL_TOOL_NAME &&
-        tool.name !== 'Announce'
+        tool.name !== 'Announce' &&
+        // A workspace path alone cannot establish task scope for an edit.
+        !(attempt?.mode === 'experimental' && !tool.isMcp && (tool.name === 'Edit' || tool.name === 'Write'))
       ) {
         try {
           const parsedInput = tool.inputSchema.parse(input)
@@ -927,7 +940,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       }
 
       if (attempt?.mode === 'experimental') {
-        const decision = await attempt.review()
+        const decision = await reviewContextually()
         if (decision.behavior === 'allow') persistDenialState(context, recordSuccess(denialState))
         else if (decision.behavior === 'deny' && decision.decisionReason?.type === 'classifier') {
           const updated = recordDenial(denialState)

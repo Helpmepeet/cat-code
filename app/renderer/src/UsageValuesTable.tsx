@@ -17,7 +17,7 @@ const outcomes: readonly { key: AutoModeUsageOutcome; label: string }[] = [
 ];
 const routeLabels: Record<string, string> = {
     base: 'Base checks', forced: 'Forced', guard: 'Safety check', accept_edits: 'Accept edits',
-    allowlist: 'Allow rules', stage1: 'First review', stage2: 'Second review', unknown: 'Unknown',
+    allowlist: 'Allow rules', contextual: 'Contextual review', stage1: 'First review', stage2: 'Second review', unknown: 'Unknown',
 };
 
 function Cell({ value, available = true }: { value: number; available?: boolean }) {

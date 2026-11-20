@@ -52,7 +52,7 @@ const OUTCOME_LABELS: Record<AutoModeDecisionGroup, string> = {
 }
 
 const TERMINAL_NODES = new Set(['allowed', 'blocked'])
-const ROUTE_NODES = new Set(['Base paths', 'Stage 1', 'Stage 2'])
+const ROUTE_NODES = new Set(['Base paths', 'Contextual review', 'Stage 1', 'Stage 2'])
 const TOP = 34
 const BOTTOM = 24
 const NODE_GAP = 20
