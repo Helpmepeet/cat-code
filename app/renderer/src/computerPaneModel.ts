@@ -31,7 +31,9 @@ export function selectComputerSteps(rows: readonly NestedTranscriptRow[]): Compu
     let app: string | null = null
     for (const row of branch) {
       if (row.kind === 'user-text' || row.kind === 'user-image' || row.kind === 'command-echo') app = null
-      if (row.kind === 'tool-use' && row.toolFamily === 'computer' && !seen.has(row.id)) {
+      if (row.kind === 'tool-use' && row.toolFamily === 'computer' &&
+        row.toolName !== 'mcp__codex-computer-use__computer_use_status' &&
+        row.toolName !== 'mcp__codex-computer-use__js_reset' && !seen.has(row.id)) {
         seen.add(row.id)
         const observation = row.result?.content ?? ''
         const input = row.input as { code?: unknown } | null

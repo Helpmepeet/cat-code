@@ -101,6 +101,22 @@ test('an empty step before the first capture never displays future output', asyn
   expect(tree.container.querySelector('.computer-pane-empty')?.textContent).toContain('Waiting for a screenshot')
 })
 
+test('pictureless groups use the plain list layout without changing failed row selection', async () => {
+  const failed = { ...steps[0]!, status: 'error' as const, observation: 'Window closed' }
+  const view = (withPicture: boolean) => <ComputerPane steps={[{ ...failed, image: withPicture ? image : null }]}
+    selectedId={failed.id} onSelect={() => {}} onClose={() => {}} />
+  const tree = await harness.mount(view(false))
+  const group = () => tree.container.querySelector('.computer-pane-group')!
+  const selectedReason = () => group().querySelector('.computer-pane-step[aria-current="true"] .computer-pane-reason')?.textContent
+  expect(group().hasAttribute('data-has-picture')).toBe(false)
+  expect(group().querySelector('.computer-pane-thumbnail')).toBeNull()
+  expect(selectedReason()).toBe('Window closed')
+  await tree.render(view(true))
+  expect(group().hasAttribute('data-has-picture')).toBe(true)
+  expect(group().querySelector('.computer-pane-thumbnail')).not.toBeNull()
+  expect(selectedReason()).toBe('Window closed')
+})
+
 test('permission denial explains how to enable screen recording', async () => {
   const tree = await harness.mount(<ComputerPane steps={[steps[0]!]} captures={new Map([['one', { status: 'denied' }]])} selectedId={null} onSelect={() => {}} onClose={() => {}} />)
   expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('Screen Recording is off for Cat Code')

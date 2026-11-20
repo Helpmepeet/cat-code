@@ -11,6 +11,14 @@ const computerFixture = (id: string, image = true): Extract<NestedTranscriptRow,
   children: [],
 })
 
+test('housekeeping calls are neither steps nor current activity', () => {
+  const call = (name: string) => ({ ...computerFixture(name, false), toolName: `mcp__codex-computer-use__${name}` })
+  const rows = ['js', 'js_complete', 'computer_use_status', 'js_reset'].map(call)
+  expect(selectComputerSteps(rows).map(step => step.id)).toEqual(['js', 'js_complete'])
+  expect(selectCurrentComputerStepId(rows)).toBe('js_complete')
+  expect(selectCurrentComputerStepId(rows.slice(2))).toBeNull()
+})
+
 test('targets carry forward until a hidden browser result, and can be restored by app observation', () => {
   const call = (id: string, code = '', content = '') => ({
     ...computerFixture(id), input: { code }, result: { content, isError: false, diff: null },

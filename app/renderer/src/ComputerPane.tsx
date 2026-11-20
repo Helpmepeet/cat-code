@@ -63,7 +63,7 @@ export function ComputerPane({ steps, captures, selectedId, onSelect, onClose, o
       <button type="button" className="computer-pane-latest" onClick={() => { void window.catcode?.openComputerCaptureSettings?.().catch(() => {}) }}>Open Privacy Settings</button>
     </div>}
     <div className="computer-pane-steps" aria-label="Computer steps">
-      {groups.map(group => <div className="computer-pane-group" key={group.steps[0]!.id}>
+      {groups.map(group => <div className="computer-pane-group" data-has-picture={group.picture ? true : undefined} key={group.steps[0]!.id}>
         {group.picture && <button type="button" className="computer-pane-thumbnail" aria-label={`Show screenshot: ${group.steps.find(step => step.id === group.picture?.stepId)?.title ?? 'Computer'}`}
           onClick={() => onSelect(group.picture!.stepId)}><img src={group.picture.src} alt="" loading="lazy" decoding="async" /></button>}
         <div className="computer-pane-group-rows">

@@ -100,6 +100,27 @@ test('text-only computer results reach the panel and update without taking anoth
   expect(commands).toEqual([])
 })
 
+test('housekeeping completions do not reveal Computer or request capture', async () => {
+  setup()
+  const captured: string[] = []
+  window.catcode.captureComputerWindow = async ({ app }) => {
+    captured.push(app)
+    return { status: 'denied' }
+  }
+  const tree = await harness.mount(view([]))
+  const calls = ['computer_use_status', 'js_reset', 'js_complete'].map(name => ({
+    ...step(name), toolName: `mcp__codex-computer-use__${name}`, input: { code: 'cua.getApp("Reminders")' },
+  }))
+  await tree.render(view(calls.slice(0, 2)))
+  expect(getFilePaneSession(id).visible).toBeNull()
+  expect(tree.container.querySelector('.computer-pane-step')).toBeNull()
+  expect(captured).toEqual([])
+  await tree.render(view(calls))
+  expect(getFilePaneSession(id).visible).toBe('computer')
+  expect(tree.container.querySelectorAll('.computer-pane-step')).toHaveLength(1)
+  expect(captured).toEqual(['Reminders'])
+})
+
 test('live completions request app captures even while Computer is hidden', async () => {
   setup()
   const captured: string[] = []
