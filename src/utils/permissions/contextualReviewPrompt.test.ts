@@ -6,6 +6,11 @@ test('accepts a complete native verdict with optional rationale and JSON fencing
     .toMatchObject({ decision: 'allow', risk: 'medium' })
 })
 
+test('accepts legacy user_authorization without changing the verdict', () => {
+  expect(parseContextualVerdict('{"decision":"allow","risk":"medium","user_authorization":"unknown"}'))
+    .toMatchObject({ decision: 'allow', risk: 'medium' })
+})
+
 test('an ambiguous decision or a high-risk allow cannot release the action', () => {
   for (const reply of [
     '{"decision":"deny","d\\u0065cision":"allow","risk":"low","rationale":"local"}',

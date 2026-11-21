@@ -120,6 +120,33 @@ function redactHistory(rows: ContextualEvidence['conversation']) {
     ...(row.proposal && { proposal: { ...row.proposal, text: redactOldText(row.proposal.text) } }) })
 }
 
+const REVIEW_SECRET = '[…]'
+const credentialField = /^(?:access[_-]?token|api[_-]?key|password)$/iu
+const credentialAssignment = /(\b(?:authorization:\s*bearer\s+|(?:access[_-]?token|api[_-]?key|password)["']?\s*[:=]\s*["']?))[^\s"'\\]{8,}/giu
+
+function redactReviewText(text: string): string {
+  const withoutKeys = text.replace(
+    /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----/giu,
+    REVIEW_SECRET,
+  )
+  return redactOldText(withoutKeys).replace(credentialAssignment, '$1' + REVIEW_SECRET)
+    .replaceAll('[REDACTED]', REVIEW_SECRET)
+}
+
+function redactReviewFields<T>(value: T): T {
+  if (typeof value === 'string') return redactReviewText(value) as T
+  if (Array.isArray(value)) return value.map(row => redactReviewFields(row)) as T
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([key, field]) => [
+      key, typeof field === 'string' && field.length >= 8 && credentialField.test(key)
+        ? REVIEW_SECRET : typeof field === 'string' && key.toLowerCase() === 'authorization'
+          ? field.replace(/^(\S+\s+).+$/u, '$1' + REVIEW_SECRET)
+          : redactReviewFields(field),
+    ])) as T
+  }
+  return value
+}
+
 function readMode(): ReviewMode | undefined {
   if (!feature('AUTO_MODE_CONTEXTUAL_REVIEW')) return undefined
   const value = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE
@@ -284,6 +311,14 @@ export async function createContextualAttempt(
       decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
   }
 
+  function denyReview(reason: string, outcome: 'blocked' | 'inconclusive' = 'blocked'): PermissionDecision {
+    emit(outcome, reason)
+    if (mode === 'experimental') {
+      recordAutoModeOutcome(toolUseId, outcome === 'inconclusive' ? 'automode-unavailable' : 'automode-blocked')
+    }
+    return { behavior: 'deny', message: reason, decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
+  }
+
   function stale(reason: string): PermissionDecision {
     emit('inconclusive', reason)
     return {
@@ -333,10 +368,10 @@ export async function createContextualAttempt(
       : undefined
     const conversation = [...authority.conversation, ...authority.pendingConversation]
     const runs = recentShellRuns(context.getCurrentAutoModeMessages?.() ?? context.messages, conversation, context.contextualWorkerAssignment?.excluded)
-    const evidence = {
+    const rawEvidence: ContextualEvidence = {
       ...(toolDescription && { toolDescription }),
       ...(!mcp && tool.name === 'Bash' && typeof input.description === 'string' && { agentStatedPurpose: input.description }),
-      ...(runs.length && { recentShellRuns: runs.map(run => run.proposedCommand && containsCredentialMaterial(run.proposedCommand)
+      ...(runs.length && { recentShellRuns: mode === 'experimental' ? runs : runs.map(run => run.proposedCommand && containsCredentialMaterial(run.proposedCommand)
         ? { ...run, proposedCommand: undefined } : run) }),
       action: { ...action, effect, attempt: toolUseId, actor: authority.actor,
         execution: { ...action.execution,
@@ -346,19 +381,31 @@ export async function createContextualAttempt(
           } }),
           ...(boundProjection && { resolvedAction: boundProjection.value }) },
         tool: tool.name, ...(cellId && generation && { script: { cellId, generation, source: context.contextualParentScriptSource } }) },
-      assignment: authority.assignment?.parent
+      assignment: mode !== 'experimental' && authority.assignment?.parent
         ? { ...authority.assignment, parent: redactHistory(authority.assignment.parent) } : authority.assignment,
-      conversation: redactHistory(conversation),
+      conversation: mode === 'experimental' ? conversation : redactHistory(conversation),
       priorDecisions: collectPermissionDecisionContexts(context.messages).slice(-16).map(decision => ({
         action: decision.toolName, outcome: decision.outcome,
       })),
-      workspaceInstructions: source && redactOldText(source),
+      workspaceInstructions: mode === 'experimental' ? source : source && redactOldText(source),
     }
+    const experimental = mode === 'experimental'
+    const evidence = experimental ? redactReviewFields(rawEvidence) : rawEvidence
+    const reviewerInstructions = experimental ? redactReviewFields(instructions) : instructions
     const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
-    const built = buildContextualReview(evidence, profile, instructions)
-    if (!built) return ask('The complete action and applicable instructions exceed the Auto Mode review limit.')
-    if (containsCredentialMaterial(JSON.stringify(evidence)) || containsCredentialMaterial(JSON.stringify(instructions))) {
-      return ask('The action or its context may contain credentials.')
+    const built = buildContextualReview(evidence, profile, reviewerInstructions, experimental)
+    if (!built) {
+      if (!experimental) return ask('The complete action and applicable instructions exceed the Auto Mode review limit.')
+      if (!buildContextualReview({ action: evidence.action, conversation: [] }, profile)) {
+        return denyReview('This action exceeds the Auto Mode review limit. Split this action into smaller calls and retry.')
+      }
+      return denyReview('The applicable instructions and action exceed the Auto Mode review limit. Report this blocker in chat.')
+    }
+    if (containsCredentialMaterial(JSON.stringify(evidence)) ||
+        containsCredentialMaterial(JSON.stringify(reviewerInstructions))) {
+      return experimental
+        ? denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
+        : ask('The action or its context may contain credentials.')
     }
     reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION, profile: { provider: profile.provider, model: profile.model,
       effort: profile.effort, promptDigest: built.promptDigest } }
@@ -373,7 +420,11 @@ export async function createContextualAttempt(
       return stale(context.abortController.signal.aborted
         ? 'The review was cancelled.' : 'The assignment or action changed during review.')
     }
-    if (result.status !== 'valid') return ask('Auto Mode could not complete this review.', 'inconclusive')
+    if (result.status !== 'valid') {
+      return experimental
+        ? denyReview('Auto Mode could not complete this review. Retry or report the blocker in chat.', 'inconclusive')
+        : ask('Auto Mode could not complete this review.', 'inconclusive')
+    }
     const { decision, rationale } = result.verdict
     const reason = containsCredentialMaterial(rationale) ? 'Auto Mode reviewed the proposed action.' : rationale
     if (decision === 'ask') return ask(reason)
@@ -382,13 +433,11 @@ export async function createContextualAttempt(
       if (mode === 'experimental') {
         const state = recordDenial(context.localDenialTracking ?? context.getAppState().denialTracking ?? createDenialTrackingState())
         persistDenialState(context, state)
-        if (!policy.shouldAvoidPermissionPrompts && state.consecutiveDenials >= DENIAL_LIMITS.maxConsecutive) {
-          return ask(`${state.consecutiveDenials} consecutive actions received a deny. Latest reason: ${reason}`)
+        if (state.consecutiveDenials >= DENIAL_LIMITS.maxConsecutive) {
+          return denyReview(`${state.consecutiveDenials} consecutive actions were denied. Stop and report the blocker in chat. Latest reason: ${reason}`)
         }
       }
-      emit('blocked', reason)
-      if (mode === 'experimental') recordAutoModeOutcome(toolUseId, 'automode-blocked')
-      return { behavior: 'deny', message: reason, decisionReason }
+      return denyReview(reason)
     }
     emit('allowed', reason)
     actionAllowed = true

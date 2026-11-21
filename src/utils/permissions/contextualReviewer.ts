@@ -19,14 +19,53 @@ export function contextualReviewerProfile(configuredModel: string) {
   return { provider, model, version: CONTEXTUAL_REVIEW_VERSION, effort: 'provider-default' as const }
 }
 
+function trimConversation(evidence: ContextualEvidence, budget: number): string | undefined {
+  const { assignment, conversation } = evidence
+  const parent = assignment?.parent ?? []
+  const anchor = parent.findIndex(row => row.id === assignment?.parentAnchor)
+  const newestOperator = conversation.findLast(row => row.origin === 'operator')
+  const removable = [
+    ...parent.filter((row, i) => row.id !== assignment?.parentAnchor &&
+      !(i > anchor && row.origin === 'operator')),
+    ...conversation.filter(row => row !== newestOperator && row !== conversation.at(-1)),
+  ]
+  function contentAfterRemoving(count: number) {
+    const removed = new Set(removable.slice(0, count))
+    return JSON.stringify({
+      ...evidence,
+      assignment: assignment?.parent ? { ...assignment, parent: parent.filter(row => !removed.has(row)) } : assignment,
+      conversation: conversation.filter(row => !removed.has(row)),
+    })
+  }
+
+  let start = 1
+  let end = removable.length
+  let result: string | undefined
+  while (start <= end) {
+    const count = Math.floor((start + end) / 2)
+    const content = contentAfterRemoving(count)
+    if (Buffer.byteLength(content) <= budget) {
+      result = content
+      end = count - 1
+    } else {
+      start = count + 1
+    }
+  }
+  return result
+}
+
 export function buildContextualReview(
   evidence: ContextualEvidence,
   profile: { model: string; provider: APIProvider },
   instructions?: unknown,
+  trimOlderConversation = false,
 ): { options: SideQueryOptions; requestDigest: string; promptDigest: string } | undefined {
   const system = contextualReviewSystem(evidence.action.tool, instructions)
-  const content = JSON.stringify(evidence)
-  if (Buffer.byteLength(system) + Buffer.byteLength(content) > CONTEXTUAL_REVIEW_MAX_BYTES) return undefined
+  const budget = CONTEXTUAL_REVIEW_MAX_BYTES - Buffer.byteLength(system)
+  const fullContent = JSON.stringify(evidence)
+  const content = Buffer.byteLength(fullContent) <= budget ? fullContent
+    : trimOlderConversation ? trimConversation(evidence, budget) : undefined
+  if (content === undefined) return undefined
   const options: SideQueryOptions = {
     ...profile,
     system,

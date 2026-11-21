@@ -91,14 +91,14 @@ for (const withdrawal of [false, true]) {
   }, 30_000)
 }
 
-test('the third consecutive model denial goes to a human and approval resets the streak', async () => {
+test('the third consecutive model denial tells the agent to report the blocker in chat', async () => {
   const proof = await run('native-denials-then-ask')
   expect(proof.requests).toHaveLength(5)
-  expect(proof.prompts.map((request: any) => request.tool_use_id)).toEqual(['action-2', 'action-4'])
-  expect(proof.prompts.every((p: any) => p.human_only === true)).toBe(true)
-  expect(proof.requests[2].content.recentShellRuns).toBeUndefined()
-  expect(proof.requests[3].content.recentShellRuns).toEqual([expect.objectContaining({ attempt: 'action-2', outcome: 'completed' })])
-  expect(proof.effect).toBe('effecteffect')
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBeNull()
+  expect(proof.reviewEvents).toContainEqual(expect.objectContaining({
+    toolUseId: 'action-2', outcome: 'blocked', reason: expect.stringContaining('Stop and report the blocker in chat'),
+  }))
 }, 30_000)
 
 test('three denials without an interactive approver keep every command held', async () => {
@@ -165,11 +165,52 @@ test('typed desktop question answers reach the reviewer as operator evidence wit
   expect(proof.effect).toBeNull()
 }, 30_000)
 
-test('a credential in sourced Auto Mode settings holds the action without a provider request', async () => {
+test('a credential in sourced Auto Mode settings is redacted while its rule is retained', async () => {
   const proof = await run('direct-credential-settings')
+  expect(proof.requests).toHaveLength(1)
+  const system = JSON.stringify(proof.requests[0].system)
+  expect(system).toContain('Synthetic example password = […]')
+  expect(system).not.toContain('fixturePass98765')
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
+}, 30_000)
+
+test('the request keeps action and operator intent while redacting credentials in both', async () => {
+  const proof = await run('native-credential-complete')
+  expect(proof.requests).toHaveLength(1)
+  const { action, conversation } = proof.requests[0].content
+  expect(action.input.command).toContain('password=[…] printf effect >> effects.txt')
+  expect(conversation.findLast((row: any) => row.origin === 'operator').text).toContain('configure the local destination.\n[…]')
+  expect(JSON.stringify(proof.requests)).not.toMatch(/actionSecretFixture123|fixture-private-key-body/)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
+}, 30_000)
+
+test('an incomplete private key prevents the action without a review or human prompt', async () => {
+  const proof = await run('native-credential-incomplete')
   expect(proof.requests).toHaveLength(0)
-  expect(proof.prompts).toEqual([expect.objectContaining({ tool_name: 'Bash', human_only: true })])
+  expect(proof.prompts).toHaveLength(0)
   expect(proof.effect).toBeNull()
+  expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reason: expect.stringContaining('could not safely redact') }))
+}, 30_000)
+
+test('older conversation is trimmed before the contextual reviewer receives a complete action', async () => {
+  const proof = await run('native-oversize-history')
+  expect(proof.requests).toHaveLength(1)
+  const { action, conversation } = proof.requests[0].content
+  expect(action.input.command).toBe('printf effect >> effects.txt')
+  expect(conversation.findLast((row: any) => row.origin === 'operator').text).toBe('Run the isolated action and report the result.')
+  expect(JSON.stringify(conversation)).not.toContain('OVERSIZE_EARLIER_CONTEXT')
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
+}, 30_000)
+
+test('an oversize action alone is denied with guidance to split it', async () => {
+  const proof = await run('native-oversize-action')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.sensitiveFileExists).toBe(false)
+  expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reason: expect.stringMatching(/split this action/i) }))
 }, 30_000)
 
 for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
@@ -389,7 +430,7 @@ for (const limit of ['host', 'runtime']) {
   }, 30_000)
 }
 
-for (const outcome of ['allow', 'mutated', 'unavailable', 'invalid']) {
+for (const outcome of ['allow', 'mutated']) {
   test(`desktop resolves only the held post-hook action when review is ${outcome}`, async () => {
     const result = await run(`direct-${outcome}`)
     expect(result.prompts).toHaveLength(1)
@@ -398,6 +439,16 @@ for (const outcome of ['allow', 'mutated', 'unavailable', 'invalid']) {
     expect(result.requests[0].content.action.execution.timeoutMs).toBe(5_000)
     expect(result.observedBeforeReply).toBeNull()
     expect(result.effect).toBe(outcome === 'mutated' ? null : 'effect')
+  }, 30_000)
+}
+
+for (const outcome of ['unavailable', 'invalid']) {
+  test(`desktop fails closed without a prompt when review is ${outcome}`, async () => {
+    const proof = await run(`direct-${outcome}`)
+    expect(proof.requests).toHaveLength(1)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.effect).toBeNull()
+    expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'inconclusive', reason: expect.stringContaining('Retry or report the blocker in chat') }))
   }, 30_000)
 }
 
@@ -416,7 +467,7 @@ for (const [surface, outcome] of [
 ]) {
   test(`${surface} human-only approval handles ${outcome}`, async () => {
     const result = await run(`direct-${surface}-${outcome}`)
-    if (outcome === 'nohost') {
+    if (outcome === 'nohost' || outcome === 'unavailable') {
       expect(result.prompts).toHaveLength(0)
       expect(result.effect).toBeNull()
       return
@@ -425,7 +476,7 @@ for (const [surface, outcome] of [
     expect(result.prompts[0].human_only).toBe(true)
     expect(result.hookRanBeforeHuman).toBe(true)
     expect(result.observedBeforeReply).toBeNull()
-    expect(result.effect).toBe(outcome === 'allow' || outcome === 'unavailable' ? 'effect' : null)
+    expect(result.effect).toBe(outcome === 'allow' ? 'effect' : null)
   }, 30_000)
 }
 

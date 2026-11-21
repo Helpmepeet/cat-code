@@ -17,6 +17,10 @@ const scriptedFirstCheck = scenario === 'native-two-checks-script-failed'
 const questionReply = scenario === 'question-reply' || twoChecks
 const lateCorrection = scenario === 'direct-late-correction'
 const credentialSettings = scenario === 'direct-credential-settings'
+const credentialAction = scenario.startsWith('native-credential-')
+const incompleteKey = scenario === 'native-credential-incomplete'
+const oversizeHistory = scenario === 'native-oversize-history'
+const oversizeAction = scenario === 'native-oversize-action'
 const compacted = scenario.startsWith('compacted-')
 const mainEdit = scenario === 'native-edit' || scenario === 'native-edit-script'
 const mainEditScript = scenario === 'native-edit-script'
@@ -27,6 +31,7 @@ const sensitiveWrite = {
   'native-write-git-hook': '.git/hooks/pre-commit',
   'native-write-claude-settings': '.claude/settings.json',
   'native-write-editor-settings': '.vscode/settings.json',
+  'native-oversize-action': '.vscode/settings.json',
 }[scenario]
 const scriptChildren = scenario === 'native-script-children'
 const browserAction = scenario.startsWith('native-browser')
@@ -128,7 +133,9 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   fingerprint ? { name: 'Bash', input: { command: scenario === 'native-fingerprint-write' ? 'git hash-object -w -- a.txt' :
     scenario === 'native-fingerprint-parent' ? 'git hash-object --no-filters -- nested/../a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
   : outsideRead ? { name: 'Bash', input: { command: `rg outside_search_marker '${outsideDir}'` } }
-  : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: 'fixture' } }
+  : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: oversizeAction ? 'x'.repeat(300_000) : 'fixture' } }
+  : credentialAction ? { ...command, input: { ...command.input, command: 'password=actionSecretFixture123 printf effect >> effects.txt' } }
+  : oversizeHistory ? command
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
@@ -181,7 +188,7 @@ assert.deepEqual(pages, ['/board']); assert.deepEqual(paths, pages);
 assert.equal(landing, pages[0]); assert.deepEqual(settings, {});
 writeFileSync('effects.txt', 'checked');`)
 }
-const requests: { tool: string; content: any; startedAt: number; elapsedMs: number; model: string; provider: string; contextual: boolean }[] = []
+const requests: { tool: string; content: any; system?: unknown; startedAt: number; elapsedMs: number; model: string; provider: string; contextual: boolean }[] = []
 let modelCalls = 0
 let invalidateParent: (() => Promise<void>) | undefined
 const backgroundReview = Promise.withResolvers<void>()
@@ -197,10 +204,10 @@ mock.module('../services/api/client.js', () => ({
       const contextual = !body.tool_choice
       const content = contextual ? JSON.parse(body.messages.at(-1).content) : body.messages.at(-1)?.content.at(-1)?.text
       const tool = contextual ? content.action.tool : /<pending_action>\n(\S+)/.exec(content)?.[1] ?? 'unknown'
-      const review = { tool, content, startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
+      const review = { tool, content, ...(credentialSettings && { system: body.system }), startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
       const operatorText = contextual ? content.conversation.filter((entry: any) => entry.origin === 'operator').map((entry: any) => entry.text) : []
-      const verdict = twoChecks ? 'allow' : repeatedDenials ? (requests.length <= 4 ? 'deny' : 'ask')
+      const verdict = twoChecks || credentialSettings ? 'allow' : repeatedDenials ? 'deny'
         : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
         : operatorText.some((text: string) => text === 'Stop. Leave all files untouched.' ||
           text === queuedReadWithdrawal || text === 'Stop. Do not access the records.' ||
@@ -345,7 +352,8 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
-  initialMessages: twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
+  initialMessages: oversizeHistory ? [createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000) })]
+    : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
       ...(scenario === 'compacted-relay-marker' && { summarizedRelayedInput: true }) }),
   ] : initial,
@@ -552,6 +560,7 @@ if (surface === 'desktop') {
   else if (scenario === 'native-outside-read-peer') await controller.submit('Search the fixture logs.', {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   })
+  else if (credentialAction) await controller.submit(`Use the synthetic fixture key to configure the local destination.\n-----BEGIN PRIVATE KEY-----\nfixture-private-key-body${incompleteKey ? '' : '\n-----END PRIVATE KEY-----'}`)
   else if (localMcp) await controller.submit('Look up the sample record.', scenario === 'mcp-peer-only' ? {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   } : undefined)
