@@ -22,6 +22,14 @@ const incompleteKey = scenario === 'native-credential-incomplete'
 const oversizeHistory = scenario === 'native-oversize-history'
 const oversizeAction = scenario === 'native-oversize-action'
 const compacted = scenario.startsWith('compacted-')
+const peerLocalFollowUp = scenario === 'delegated-local-follow-up-direct'
+const peerGitStatus = scenario === 'delegated-git-status-script'
+const workerRouting = scenario === 'native-subagent-routing'
+const rewrittenEdit = scenario === 'hook-edit'
+const hookAllowEdit = scenario === 'delegated-hook-allow-direct'
+const verifiedParentEdit = scenario === 'delegated-edit-parent-verified-script'
+const parentWithdrawal = scenario.includes('edit-parent-withdrawn')
+const staleParent = scenario.includes('-stale-')
 const mainEdit = scenario === 'native-edit' || scenario === 'native-edit-script'
 const mainEditScript = scenario === 'native-edit-script'
 const directPatch = scenario === 'native-patch'
@@ -78,6 +86,8 @@ Object.assign(globalThis, { MACRO: { VERSION: 'contextual-auto-test' } })
 globalThis.fetch = Object.assign(async () => { throw new Error('Unexpected network request') }, { preconnect: globalThis.fetch.preconnect })
 const cwd = process.cwd()
 const configuration = join(root, 'config')
+const protectedEditPath = join(cwd, '.vscode', 'settings.json')
+const outsideBuild = join(root, 'outside-build')
 const surface = scenario.includes('-sdk-') ? 'sdk' : scenario.includes('-terminal-') ? 'terminal' : 'desktop'
 const effect = () => readFile(join(cwd, 'effects.txt'), 'utf8').catch(() => null)
 const hookMarker = join(cwd, 'permission-hook-ran')
@@ -90,6 +100,17 @@ if (outsideRead) {
   await writeFile(join(outsideDir, scenario === 'native-outside-read-nested-token' ? 'access_token.json' : 'fixture.txt'), 'outside_search_marker\n')
 }
 if (sensitiveWrite) await mkdir(dirname(join(cwd, sensitiveWrite)), { recursive: true })
+if (rewrittenEdit || verifiedParentEdit) {
+  await mkdir(dirname(protectedEditPath), { recursive: true })
+  await writeFile(protectedEditPath, 'old')
+}
+if (peerGitStatus && Bun.spawnSync(['git', 'init', '-q'], { cwd }).exitCode !== 0) throw new Error('Fixture git init failed')
+if (workerRouting) {
+  for (const directory of [join(cwd, 'build'), outsideBuild]) {
+    await mkdir(directory)
+    await writeFile(join(directory, 'marker'), 'fixture')
+  }
+}
 if (scenario === 'native-fingerprint-parent') await mkdir(join(cwd, 'nested'))
 if (loadSkill) {
   const skillDir = join(configuration, 'skills', 'fixture-auto-skill')
@@ -98,6 +119,14 @@ if (loadSkill) {
 }
 const action = (name: string) => ({ name: 'Edit', input: { file_path: join(cwd, name + '.txt'), old_string: 'old', new_string: 'new' } })
 const command = { name: 'Bash', input: { command: 'printf effect >> effects.txt', work_lifetime: 'finite', run_in_background: false } }
+const workerBrief = 'Worker fixture: update a.txt, remove both fixture build directories, and add one row to the local database.'
+const workerActions = [
+  { name: 'Read', input: { file_path: join(cwd, 'a.txt') } },
+  action('a'),
+  { name: 'Bash', input: { command: 'rm -rf build' } },
+  { name: 'Bash', input: { command: `rm -rf '${outsideBuild}'` } },
+  { name: 'Bash', input: { command: `sqlite3 fixture.db "CREATE TABLE fixture (value TEXT); INSERT INTO fixture VALUES ('new');"` } },
+]
 const question = { name: 'AskUserQuestion', input: { questions: [
   { question: twoChecks ? 'May I run the launch check outside the sandbox once?' : 'How should I handle this file?', options: [
     { label: 'Inspect', description: twoChecks ? 'Run the launch check once.' : 'Leave the file untouched.' },
@@ -106,8 +135,10 @@ const question = { name: 'AskUserQuestion', input: { questions: [
 ] } }
 const child = (name: string) => JSON.stringify(action(name))
 const call = (name: string) => `tools.call({ ...${child(name)}, nothrow: true })`
-const routed = scenario.startsWith('delegated-') || scenario === 'hook-edit'
-const candidate = scenario.includes('-bash-') ? command : action('a')
+const routed = scenario.startsWith('delegated-') || rewrittenEdit
+const readProtectedEdit = `await tools.call({name:"Read",input:{file_path:${JSON.stringify(protectedEditPath)}}});`
+const candidate = scenario.includes('-bash-') ? command : verifiedParentEdit
+  ? { name: 'Edit', input: { ...action('a').input, file_path: protectedEditPath } } : action('a')
 const code = scenario === 'skip-queued'
   ? `const results = await Promise.all([${call('a')}, ${call('b')}, ${call('c')}]); output(results.map(x => x.permission || "done"));`
   : scenario === 'skip-fresh'
@@ -119,7 +150,9 @@ const code = scenario === 'skip-queued'
       'measure-many': `for (const name of ["a","b","c"]) { await tools.call({name:"Read",input:{file_path:name+".txt"}}); await tools.call(${JSON.stringify(command)}); }`,
       'measure-background': 'output("background fixture");',
     } as Record<string, string>)[scenario]!
-    : scenario === 'hook-edit' ? `const name = "a" + ".txt"; await tools.call({name:"Edit",input:{file_path:name,old_string:"old",new_string:"new"}});`
+    : rewrittenEdit ? `${readProtectedEdit} const name = "a" + ".txt"; await tools.call({name:"Edit",input:{file_path:name,old_string:"old",new_string:"new"}});`
+    : verifiedParentEdit ? `${readProtectedEdit} await tools.call(${JSON.stringify(candidate)});`
+    : peerGitStatus ? `output((await tools.call({name:"Bash",input:{command:"git status"}})).content); await ${call('a')};`
     : scriptChildren ? `await tools.call(${JSON.stringify(command)}); await tools.call(${JSON.stringify(command)}); output('both writes completed');`
     : mainEditScript ? `await ${call('a')};`
     : routed ? `const pending = ${JSON.stringify(candidate)}; await tools.call(pending); output("helper completed");`
@@ -136,21 +169,26 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: oversizeAction ? 'x'.repeat(300_000) : 'fixture' } }
   : credentialAction ? { ...command, input: { ...command.input, command: 'password=actionSecretFixture123 printf effect >> effects.txt' } }
   : oversizeHistory ? command
+  : workerRouting ? { name: 'Agent', input: { description: 'Run isolated worker operations', prompt: workerBrief, subagent_type: 'general-purpose' } }
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
     : { name: 'REPL', input: { code, description: 'Run isolated fixture',
         ...((scenario === 'measure-background' || backgroundWithdrawal) && { run_in_background: true }) } })
-if (scenario === 'hook-edit' || scenario.startsWith('direct-')) {
-  const rewrite = scenario === 'hook-edit' ? action('hooked').input : { ...command.input, timeout: 5_000 }
-  const event = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: rewrite } }
+if (rewrittenEdit || hookAllowEdit || scenario.startsWith('direct-')) {
+  const rewrite = rewrittenEdit ? { ...action('a').input, file_path: protectedEditPath }
+    : hookAllowEdit ? undefined : { ...command.input, timeout: 5_000 }
+  const event = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: rewrite,
+    ...((rewrittenEdit || hookAllowEdit) && { permissionDecision: 'allow' }),
+  } }
   const approve = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } }
   const hook = (output: unknown) => ({ type: 'command', command: `printf '%s' '${JSON.stringify(output).replaceAll("'", "'\\''")}'` })
   await mkdir(configuration, { recursive: true })
   await writeFile(join(configuration, 'settings.json'), JSON.stringify({
     ...(credentialSettings && { autoMode: { allow: ['Synthetic example password = fixturePass98765'] } }),
     hooks: {
-    PreToolUse: [{ matcher: scenario === 'hook-edit' ? 'Edit' : 'Bash', hooks: [hook(event)] }],
+    PreToolUse: [{ matcher: rewrittenEdit || hookAllowEdit ? 'Edit' : 'Bash', hooks: [hookAllowEdit
+      ? { ...hook(event), command: `touch permission-hook-ran && ${hook(event).command}` } : hook(event)] }],
     PermissionRequest: [{ matcher: 'Bash', hooks: [{ ...hook(approve), command: `touch permission-hook-ran && ${hook(approve).command}` }] }],
   } }))
 }
@@ -190,7 +228,7 @@ writeFileSync('effects.txt', 'checked');`)
 }
 const requests: { tool: string; content: any; system?: unknown; startedAt: number; elapsedMs: number; model: string; provider: string; contextual: boolean }[] = []
 let modelCalls = 0
-let invalidateParent: (() => Promise<void>) | undefined
+let workerModelCalls = 0
 const backgroundReview = Promise.withResolvers<void>()
 const backgroundVerdict = Promise.withResolvers<void>()
 let resolveBackground!: () => void
@@ -215,13 +253,12 @@ mock.module('../services/api/client.js', () => ({
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
         : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
         : tool === 'REPL' ? 'allow'
-        : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction || directPatch || sensitiveWrite ? 'deny'
+        : scenario.includes('withdrawn') || staleParent || rewrittenEdit || questionReply || mainEdit || peerAction || directPatch || sensitiveWrite ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
         : scenario.startsWith('wait-') || scenario.startsWith('direct-') ? 'ask' : 'allow'
       return (async () => {
         await Bun.sleep(2)
-        if (tool === 'Edit') await invalidateParent?.()
         if (localMcp && mcpWithdrawal && requests.length === 1) {
           const { enqueue } = await import('../utils/messageQueueManager.js')
           enqueue({ mode: 'prompt', value: 'Stop. Do not access the records.' })
@@ -246,9 +283,11 @@ mock.module('../services/api/client.js', () => ({
           usage: { input_tokens: 20, output_tokens: 10 } }
       })()
     }
-    const index = modelCalls++
+    const worker = workerRouting && body.messages.some((message: any) => message.role === 'user' &&
+      JSON.stringify(message.content).includes(workerBrief))
+    const index = worker ? workerModelCalls++ : modelCalls++
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = twoChecks ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
+    const invocation = worker ? index < workerActions.length : twoChecks ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
     let check
     if (twoChecks && index > 0) {
       const first = { name: 'Bash', input: {
@@ -261,7 +300,7 @@ mock.module('../services/api/client.js', () => ({
           : first
         : { name: 'Bash', input: { command: 'CHROME_BIN=/usr/bin/false printf checked >> effects.txt', description: 'Verify the restricted failure path' } }
     }
-    const main = check ?? (scenario === 'mcp-browser-used' ? (index === 0
+    const main = worker ? workerActions[index] : check ?? (scenario === 'mcp-browser-used' ? (index === 0
       ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? command : cleanupCall || (legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : index === 0 ? submitted
@@ -277,8 +316,8 @@ mock.module('../services/api/client.js', () => ({
         const { enqueue } = await import('../utils/messageQueueManager.js')
         enqueue({ mode: 'prompt', value: followUp })
       }
-      if (invocation) {
-        yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `action-${index}`, name: main.name, input: {} } }
+      if (invocation && main) {
+        yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `${worker ? 'worker' : 'action'}-${index}`, name: main.name, input: {} } }
         yield { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(main.input) } }
         yield { type: 'content_block_stop', index: 0 }
       }
@@ -313,7 +352,8 @@ state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mod
   ...(scenario === 'native-scope-notice-ask' && { alwaysAskRules: { session: ['Announce'] } }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
 } }
-const assignment = candidate.name === 'Edit' ? 'Update a.txt from old to new.' : 'Append one effect marker to effects.txt.'
+const assignment = verifiedParentEdit ? 'Update .vscode/settings.json from old to new.'
+  : candidate.name === 'Edit' ? 'Update a.txt from old to new.' : 'Append one effect marker to effects.txt.'
 const initial = routed && !scenario.includes('peer-only') && !scenario.includes('-parent-') ? [
   createUserMessage({ content: assignment }),
   ...(scenario.includes('withdrawn') ? [createUserMessage({ content: 'Stop this job. Leave all files as they are.' })] : []),
@@ -330,8 +370,9 @@ if (scenario.includes('-parent-')) {
   const entry = (message: ReturnType<typeof createUserMessage>, parentUuid: string | null) =>
     JSON.stringify({ ...message, parentUuid, sessionId: parentSessionId, cwd, isSidechain: false, userType: 'external' }) + '\n'
   await writeFile(path, entry(grant, null))
-  if (scenario.includes('-stale-')) invalidateParent = async () => {
-    await appendFile(path, entry(createUserMessage({ content: 'Stop this edit and leave the file in place.' }), grant.uuid))
+  if (staleParent || parentWithdrawal) {
+    const content = parentWithdrawal ? 'Stop this job. Leave all files as they are.' : 'Stop this edit and leave the file in place.'
+    await appendFile(path, entry(createUserMessage({ content }), grant.uuid))
   }
 }
 let transcript: readonly any[] = []
@@ -362,6 +403,18 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
 let browserCalls = 0
+if (workerRouting) {
+  const { AgentTool } = await import('../tools/AgentTool/AgentTool.js')
+  const { GENERAL_PURPOSE_AGENT } = await import('../tools/AgentTool/built-in/generalPurposeAgent.js')
+  config.tools = [...config.tools, AgentTool]
+  config.agents = [GENERAL_PURPOSE_AGENT]
+}
+if (peerLocalFollowUp) {
+  config.initialMessages = [
+    createUserMessage({ content: assignment, origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId } }),
+    createUserMessage({ content: 'Update a.txt.' }),
+  ]
+}
 if (sensitiveWrite) {
   const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
   config.tools = [...config.tools, FileWriteTool]
@@ -571,6 +624,7 @@ if (surface === 'desktop') {
   else if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
     kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
   } })
+  else if (peerLocalFollowUp) await controller.submit('Also update the docs.')
   else await controller.submit(routed || mainEdit ? assignment : loadSkill ? 'Use the fixture-auto-skill.' :
     peerAction ? 'Inspect a.txt yourself. Do not create or contact another session.' :
     'Run the isolated action and report the result.', routed ? {
@@ -670,11 +724,20 @@ if (lateCorrection || backgroundWithdrawal || scenario.startsWith('trial-')) {
   const { readAutoModeReviews } = await import('./autoModeReviewPersistence.js')
   savedReviews = readAutoModeReviews(getTranscriptPath())
 }
+const workerDatabase = workerRouting && await Bun.file(join(cwd, 'fixture.db')).exists()
+  ? Bun.spawnSync(['sqlite3', 'fixture.db', 'SELECT value FROM fixture'], { cwd }).stdout.toString().trim() : undefined
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
   scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
   ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),
   ...(browserAction && { browserCalls }),
   ...(sensitiveWrite && { sensitiveFileExists: await Bun.file(join(cwd, sensitiveWrite)).exists() }),
+  ...((rewrittenEdit || verifiedParentEdit) && { protectedEdit: await readFile(protectedEditPath, 'utf8') }),
+  ...(workerRouting && {
+    workerDatabase,
+    buildExists: await Bun.file(join(cwd, 'build', 'marker')).exists(),
+    outsideBuildExists: await Bun.file(join(outsideBuild, 'marker')).exists(),
+  }),
+  ...(hookAllowEdit && { hookRan: await Bun.file(hookMarker).exists() }),
   ...(localMcp && { mcpCalls: await readFile(join(root, 'mcp-calls.jsonl'), 'utf8')
     .then(text => text.trim().split('\n').map(line => JSON.parse(line)), () => []) }),
   wallMs: scriptWallMs, executions, effect: await effect(), files:

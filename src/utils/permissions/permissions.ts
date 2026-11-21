@@ -665,7 +665,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     )
     if (mustAsk && result.behavior === 'ask') {
       // Dedicated interactive tools must continue to receive their typed answer.
-      if (tool.requiresUserInteraction?.() && !attempt.delegatedMutation) return result
+      if (tool.requiresUserInteraction?.() && !(attempt.delegated && attempt.mayChangeState)) return result
       return attempt.requireHuman(result.message)
     }
     if (result.behavior === 'ask') {
@@ -684,7 +684,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     // allow. Only an explicit permission rule can skip review for the lead.
     const changesPeerSession = !tool.isMcp && !tool.mcpInfo &&
       (tool.name === 'CreatePeer' || tool.name === 'SendToPeer')
-    if (attempt.delegatedMutation || (changesPeerSession &&
+    if (attempt.needsWithdrawalReview() || (changesPeerSession &&
         result.behavior === 'allow' && result.decisionReason?.type !== 'rule')) return await reviewContextually()
   }
   observation?.markRoute('base')

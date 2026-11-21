@@ -377,8 +377,10 @@ export async function resolveHookPermissionDecision(
       toolUseContext,
     )
     if (ruleCheck === null) {
-      if (toolUseContext.contextualAutoAttempt?.mode === 'experimental' &&
-          toolUseContext.contextualAutoAttempt.delegatedMutation) {
+      const attempt = toolUseContext.contextualAutoAttempt
+      // Run the usual permission route so routine helper actions and reviewed
+      // actions receive the same decision with or without a hook allow.
+      if (attempt?.mode === 'experimental' && attempt.delegatedStateChange) {
         return {
           decision: await canUseTool(tool, hookInput, toolUseContext, assistantMessage, toolUseID),
           input: hookInput,

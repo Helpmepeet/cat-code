@@ -2003,7 +2003,7 @@ export const fetchToolsForClient = memoizeWithLRU(
             async checkPermissions(input, context) {
               const attempt = context.contextualAutoAttempt
               if (attempt?.mode === 'experimental' && (attempt.isReviewException ||
-                  (!attempt.delegatedMutation && admitBrowserSelection(client, tool.name, input, attempt)))) {
+                  (!attempt.delegated && admitBrowserSelection(client, tool.name, input, attempt)))) {
                 return { behavior: 'allow' as const, updatedInput: input }
               }
               return {

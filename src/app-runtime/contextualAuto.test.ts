@@ -46,20 +46,20 @@ async function run(scenario: string) {
 }
 
 for (const state of ['matching', 'script', 'other-child', 'conflicting', 'no-anchor', 'no-creator', 'queued']) {
-  test(`legacy notice with ${state} parent evidence cannot authorize the next edit`, async () => {
+  test(`legacy notice and workspace edit respect the ${state} parent state`, async () => {
     const proof = await run(`legacy-notice-${state}`)
     expect(proof.postedNotices).toHaveLength(state === 'queued' ? 0 : 1)
-    expect(proof.prompts.map((p: any) => p.tool_name)).toEqual(['Edit'])
-    expect(proof.files.a).toBe('old')
-    expect(proof.requests.some((row: any) => row.tool === 'Announce')).toBe(false)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.files.a).toBe(state === 'queued' ? 'old' : 'new')
+    expect(proof.requests).toHaveLength(0)
   }, 30_000)
 }
 
 for (const state of ['host-identity', 'relay-marker']) {
-  test(`a compacted helper with ${state} needs permission before an ordinary edit`, async () => {
+  test(`a compacted helper with ${state} can make an ordinary edit without review`, async () => {
     const proof = await run(`compacted-${state}`)
-    expect(proof.files.a).toBe('old')
-    expect(proof.prompts).toEqual([expect.objectContaining({ tool_name: 'Edit', human_only: true })])
+    expect(proof.files.a).toBe('new')
+    expect(proof.prompts).toHaveLength(0)
     expect(proof.requests).toHaveLength(0)
   }, 30_000)
 }
@@ -245,18 +245,17 @@ for (const contextual of [true, false]) {
 for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
   test(`desktop Auto Mode holds a real MCP search through ${outcome}`, async () => {
     const proof = await run(`mcp-${outcome}`)
-    expect(proof.mcpCalls).toHaveLength(outcome === 'allow' ? 1 : 0)
+    expect(proof.mcpCalls).toHaveLength(outcome === 'allow' || outcome === 'peer-only' ? 1 : 0)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.requests).toContainEqual(expect.objectContaining({
+      contextual: true, content: expect.objectContaining({ action: expect.objectContaining({
+        tool: 'mcp__fixture__records', effect: 'Invoke the named tool with the supplied arguments.', input: { key: 'sample' },
+        execution: expect.objectContaining({ server: 'fixture', serverTool: 'records' }),
+      }) }),
+    }))
     if (outcome === 'peer-only') {
-      expect(proof.requests).toHaveLength(0)
-      expect(proof.prompts).toEqual([expect.objectContaining({ human_only: true, tool_name: 'mcp__fixture__records' })])
-    } else {
-      expect(proof.prompts).toHaveLength(0)
-      expect(proof.requests).toContainEqual(expect.objectContaining({
-        contextual: true, content: expect.objectContaining({ action: expect.objectContaining({
-          tool: 'mcp__fixture__records', effect: 'Invoke the named tool with the supplied arguments.', input: { key: 'sample' },
-          execution: expect.objectContaining({ server: 'fixture', serverTool: 'records' }),
-        }) }),
-      }))
+      expect(proof.requests[0].content.assignment).toMatchObject({ origin: 'peer', text: 'Look up the sample record.' })
+      expect(proof.requests[0].content.assignment.parentAnchor).toBeUndefined()
     }
     if (outcome === 'withdrawal') {
       expect(proof.requests.at(-1).content.conversation.at(-1)).toMatchObject({
@@ -371,30 +370,62 @@ for (const entry of ['direct', 'script']) {
   for (const tool of ['edit', 'bash']) {
     for (const source of ['verified', 'peer-only', 'withdrawn', 'stopped']) {
       test(`${entry} ${tool} respects ${source} authority`, async () => {
-        const proof = await run(`delegated-${tool}-${source}-${entry}`)
+        const parentWithdrawal = tool === 'edit' && source === 'withdrawn'
+        const proof = await run(`delegated-${tool}-${parentWithdrawal ? 'parent-' : ''}${source}-${entry}`)
+        const released = source === 'verified' || source === 'peer-only'
         expect(tool === 'edit' ? proof.files.a : proof.effect).toBe(
-          tool === 'edit' ? source === 'verified' ? 'new' : 'old' : source === 'verified' ? 'effect' : null,
+          tool === 'edit' ? released ? 'new' : 'old' : released ? 'effect' : null,
         )
-        if (source === 'peer-only') {
-          expect(proof.prompts).toHaveLength(1)
-          expect(proof.prompts[0].human_only).toBe(true)
-          expect(proof.prompts[0].tool_name).toBe(tool === 'edit' ? 'Edit' : 'Bash')
-        } else {
-          expect(proof.prompts).toHaveLength(0)
-        }
-        if (source === 'peer-only' || source === 'stopped') {
-          expect(proof.requests.some((row: any) => row.tool === (tool === 'edit' ? 'Edit' : 'Bash'))).toBe(false)
-        }
-        if (source === 'verified' || source === 'withdrawn') {
-          const review = proof.requests.find((row: any) => row.tool === (tool === 'edit' ? 'Edit' : 'Bash'))
-          expect(review?.content.action.script !== undefined).toBe(entry === 'script')
-          if (entry === 'script') expect(review?.content.action.script.source).toContain('await tools.call')
-          expect(review?.content.conversation.map((row: any) => row.origin)).toContain('operator')
-        }
+        expect(proof.prompts).toHaveLength(0)
+        const reviewed = source !== 'stopped' && (tool === 'bash' || parentWithdrawal)
+        expect(proof.requests.map((row: any) => row.tool)).toEqual(reviewed ? [tool === 'edit' ? 'Edit' : 'Bash'] : [])
+        if (!reviewed) return
+        const { action, conversation, assignment } = proof.requests[0].content
+        expect(action.script !== undefined).toBe(entry === 'script')
+        if (entry === 'script') expect(action.script.source).toContain('await tools.call')
+        if (parentWithdrawal) {
+          const [grant, withdrawal] = assignment.parent
+          expect(assignment.parentAnchor).toBe(grant.id)
+          expect(withdrawal).toMatchObject({ origin: 'operator', text: 'Stop this job. Leave all files as they are.' })
+          expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reviewer: expect.objectContaining({ verdict: 'deny' }) }))
+        } else if (source === 'peer-only') {
+          expect(assignment).toMatchObject({ origin: 'peer', text: 'Append one effect marker to effects.txt.' })
+          expect(assignment.parentAnchor).toBeUndefined()
+        } else expect(conversation.map((row: any) => row.origin)).toContain('operator')
       }, 30_000)
     }
   }
 }
+
+test('a peer session runs an in-workspace git status and Edit without review', async () => {
+  const proof = await run('delegated-git-status-script')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.scripts[0].output).toContain('On branch')
+  expect(proof.files.a).toBe('new')
+}, 30_000)
+
+test('a later local operator message in a peer session does not trigger review', async () => {
+  const proof = await run('delegated-local-follow-up-direct')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.files.a).toBe('new')
+}, 30_000)
+
+test('a subagent runs base-allowed edits and reviews an outside deletion and database write', async () => {
+  const proof = await run('native-subagent-routing')
+  expect(proof.prompts).toHaveLength(0)
+  const reviews = proof.requests.filter((row: any) => row.contextual)
+  expect(reviews.map((row: any) => row.tool)).toEqual(['Bash', 'Bash'])
+  const [remove, database] = reviews.map((row: any) => row.content)
+  expect(remove.action.input.command).toMatch(/^rm -rf '.*\/outside-build'$/)
+  expect(database.action.input.command).toMatch(/^sqlite3 fixture\.db /)
+  expect(remove.assignment).toMatchObject({ origin: 'worker-launch', parentAnchor: expect.any(String) })
+  expect(proof.files.a).toBe('new')
+  expect(proof.buildExists).toBe(false)
+  expect(proof.outsideBuildExists).toBe(false)
+  expect(proof.workerDatabase).toBe('new')
+}, 30_000)
 
 for (const queued of [true, false]) {
   test(`skipping B settles ${queued ? 'prequeued' : 'fresh'} C correctly`, async () => {
@@ -454,10 +485,19 @@ for (const outcome of ['unavailable', 'invalid']) {
 
 test('a computed Script edit uses the rewritten target for review and leaves it untouched on denial', async () => {
   const result = await run('hook-edit')
-  expect(result.requests.find((request: any) => request.tool === 'Edit')?.content.action.input.file_path).toEndWith('/hooked.txt')
+  expect(result.requests.find((request: any) => request.tool === 'Edit')?.content.action.input.file_path).toEndWith('/.vscode/settings.json')
   expect(result.files).toEqual({ a: 'old', b: 'old', c: 'old', hooked: 'old' })
+  expect(result.protectedEdit).toBe('old')
   expect(result.prompts).toHaveLength(0)
-  expect(result.scripts[0].calls[0].result.permission).toBe('denied')
+  expect(result.scripts[0].calls.find((call: any) => call.name === 'Edit')?.result.permission).toBe('denied')
+}, 30_000)
+
+test('a hook allow lets a routine peer edit run without review', async () => {
+  const proof = await run('delegated-hook-allow-direct')
+  expect(proof.hookRan).toBe(true)
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.files.a).toBe('new')
 }, 30_000)
 
 for (const [surface, outcome] of [
@@ -491,7 +531,17 @@ for (const state of ['verified', 'stale']) {
   test(`peer script uses the ${state} parent assignment record`, async () => {
     const result = await run(`delegated-edit-parent-${state}-script`)
     const review = result.requests.find((request: any) => request.tool === 'Edit')
-    expect(review?.content.assignment.parent[0].text).toBe('Update a.txt from old to new.')
-    expect(result.files.a).toBe(state === 'verified' ? 'new' : 'old')
+    expect(result.prompts).toHaveLength(0)
+    const { parent, parentAnchor } = review.content.assignment
+    expect(parentAnchor).toBe(parent[0].id)
+    if (state === 'verified') {
+      expect(parent[0].text).toBe('Update .vscode/settings.json from old to new.')
+      expect(result.protectedEdit).toBe('new')
+    } else {
+      expect(parent[0].text).toBe('Update a.txt from old to new.')
+      expect(parent[1].text).toBe('Stop this edit and leave the file in place.')
+      expect(result.files.a).toBe('old')
+      expect(result.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reviewer: expect.objectContaining({ verdict: 'deny' }) }))
+    }
   }, 30_000)
 }

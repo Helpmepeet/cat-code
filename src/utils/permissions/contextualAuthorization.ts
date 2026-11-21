@@ -175,7 +175,7 @@ export async function createContextualAttempt(
   const snapshot = structuredClone(input)
   const action = projectAction(tool, snapshot, context)
   const peerParent = await resolveContextualPeerParent(context,
-    !mcp && tool.name === 'Announce' ? context.lookupLegacyPeerCreator : undefined)
+    mode === 'experimental' || (!mcp && tool.name === 'Announce') ? context.lookupLegacyPeerCreator : undefined)
   let authority = readContextualAuthority(context, peerParent)
   const policy: ToolPermissionContext = structuredClone(context.getAppState().toolPermissionContext)
   const instructions = getSourcedAutoModeInstructions()
@@ -190,9 +190,18 @@ export async function createContextualAttempt(
       (tool.name === 'Bash' && allowedOutsideRead)
   }
 
-  function delegatedMutation(): boolean {
+  function delegatedStateChange(): boolean {
     return authority.delegated && mayChangeState(tool, snapshot) &&
       (mcp || tool.name !== 'REPL') && !isReviewException()
+  }
+
+  function needsWithdrawalReview(): boolean {
+    if (!delegatedStateChange()) return false
+    const { parent, parentAnchor } = authority.assignment ?? {}
+    const anchor = parent?.findIndex(row => row.id === parentAnchor) ?? -1
+    if (anchor >= 0 && parent?.some((row, index) => index > anchor && row.origin === 'operator')) return true
+    // A peer can see the operator's messages in its own conversation.
+    return Boolean(context.agentId && authority.conversation.filter(row => row.origin === 'operator').length > 1)
   }
   const latestOperator = authority.conversation.findLast(row => row.origin === 'operator' && row.id)
   const newOperatorTurn = latestOperator && !context.messages.some(row => row.uuid === latestOperator.id)
@@ -209,6 +218,7 @@ export async function createContextualAttempt(
   let attemptId = randomUUID()
   let startedAt = Date.now()
   let review: Promise<PermissionDecision> | undefined
+  let reviewStarted = false
   let actionAllowed = false
   let requiresHuman = false
   let humanAllowed = false
@@ -339,10 +349,11 @@ export async function createContextualAttempt(
   }
 
   async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
+    reviewStarted = true
     if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
     if (!refreshInstructions()) return stale('The assignment or action changed before review.')
     reviewedInstructions = true
-    if (delegatedMutation() && !authority.verifiedSource) {
+    if (mode === 'shadow' && delegatedStateChange() && !authority.verifiedSource) {
       return ask('This helper has no verified user assignment for the requested action.')
     }
     let toolDescription: string | undefined
@@ -447,7 +458,10 @@ export async function createContextualAttempt(
   return {
     id: toolUseId, mode, routineNoticeDecision,
     get isReviewException() { return isReviewException() },
-    get delegatedMutation() { return delegatedMutation() },
+    get delegated() { return authority.delegated },
+    get mayChangeState() { return mayChangeState(tool, snapshot) },
+    get delegatedStateChange() { return delegatedStateChange() },
+    needsWithdrawalReview,
     recordAllowedOutsideRead() { allowedOutsideRead = true },
     get requiresHuman() { return requiresHuman },
     review: () => review ??= reviewHeldAction(),
@@ -463,7 +477,7 @@ export async function createContextualAttempt(
     isCurrent: current,
     release(candidate: Input, releasedContext: ToolUseContext): boolean {
       if (used) return false
-      if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation() && !actionAllowed)) {
+      if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : reviewStarted && !actionAllowed)) {
         stale('The approval no longer matches the current action, assignment or permissions.')
         return false
       }
