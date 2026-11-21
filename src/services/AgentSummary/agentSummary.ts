@@ -76,6 +76,7 @@ export function startAgentSummarization(
     try {
       // Read current messages from transcript
       const transcript = await getAgentTranscript(agentId)
+      if (stopped) return
       if (!transcript || transcript.messages.length < 3) {
         // Not enough context yet — finally block will schedule next attempt
         logForDebugging(

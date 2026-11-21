@@ -22,6 +22,7 @@ import { isFastModeSupportedByModel } from './fastMode.js'
 import { normalizeModelStringForAPI } from './model/model.js'
 import { type APIProvider, resolveRequestProvider } from './model/providers.js'
 import { getInitialSettings } from './settings/settings.js'
+import { recordWorkerUsage } from './workerUsage.js'
 
 type MessageParam = Anthropic.MessageParam
 type TextBlockParam = Anthropic.TextBlockParam
@@ -269,6 +270,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   const now = Date.now()
   const lastCompletion = getLastApiCompletionTimestamp()
   const usage = response.usage ?? EMPTY_USAGE
+  recordWorkerUsage(response.usage, model)
   logEvent('tengu_api_success', {
     requestId:
       requestId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,

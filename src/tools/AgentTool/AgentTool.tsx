@@ -19,7 +19,7 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import { selectAvailableMcpServerNames } from '../../services/mcp/mcpState.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
-import { backgroundAgentTask, completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getTokenCountFromTracker, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { backgroundAgentTask, completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
@@ -52,6 +52,7 @@ import { getParentSessionId, isTeammate } from '../../utils/teammate.js';
 import { isInProcessTeammate } from '../../utils/teammateContext.js';
 import { teleportToRemote } from '../../utils/teleport.js';
 import { getAssistantMessageContentLength } from '../../utils/tokens.js';
+import { getWorkerUsage, startWorkerUsage } from '../../utils/workerUsage.js';
 import { createAgentId } from '../../utils/uuid.js';
 import { createAgentWorktree, hasWorktreeChanges, removeAgentWorktree } from '../../utils/worktree.js';
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js';
@@ -1476,6 +1477,7 @@ export const AgentTool = buildTool({
       // Wrap entire sync agent execution in context for analytics attribution
       // and optionally in a worktree cwd override for filesystem isolation
       return runWithAgentContext(syncAgentContext, () => wrapWithCwd(async () => {
+        startWorkerUsage();
         const agentMessages: MessageType[] = [];
         const agentStartTime = Date.now();
         const syncTracker = createProgressTracker();
@@ -1691,6 +1693,7 @@ export const AgentTool = buildTool({
                         emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
                       }
                     });
+                    stopBackgroundedSummarization?.();
                     const terminalLeaseAccount = reportableLeaseAccount(
                       backgroundedTaskId,
                       resolvedAgentModel,
@@ -1699,7 +1702,6 @@ export const AgentTool = buildTool({
                     const agentResult = finalizeAgentTool(agentMessages, backgroundedTaskId, {
                       ...metadata,
                       agentName,
-                      totalTokensOverride: getTokenCountFromTracker(tracker),
                       // Read here because `completeAgentTask`/`failAgentTask`
                       // release the lease immediately after this result is
                       // built. Reaches TaskOutput and the resumed-run card, NOT
@@ -1755,7 +1757,7 @@ export const AgentTool = buildTool({
                         setAppState: rootSetAppState,
                         finalMessage,
                         usage: {
-                          totalTokens: getTokenCountFromTracker(tracker),
+                          totalTokens: agentResult.totalTokens,
                           toolUses: agentResult.totalToolUseCount,
                           durationMs: agentResult.totalDurationMs
                         },
@@ -1797,7 +1799,7 @@ export const AgentTool = buildTool({
                       setAppState: rootSetAppState,
                       finalMessage,
                       usage: {
-                        totalTokens: getTokenCountFromTracker(tracker),
+                        totalTokens: agentResult.totalTokens,
                         toolUses: agentResult.totalToolUseCount,
                         durationMs: agentResult.totalDurationMs
                       },
@@ -1805,6 +1807,8 @@ export const AgentTool = buildTool({
                       ...worktreeResult
                     });
                   } catch (error) {
+                    stopBackgroundedSummarization?.();
+                    const totalTokens = getWorkerUsage(backgroundedTaskId)?.totalTokens ?? 0;
                     if (error instanceof AbortError) {
                       // Transition status BEFORE worktree cleanup so
                       // TaskOutput unblocks even if git hangs (gh-20236).
@@ -1849,7 +1853,7 @@ export const AgentTool = buildTool({
                         toolUseId: toolUseContext.toolUseId,
                         finalMessage: partialResult,
                         usage: {
-                          totalTokens: getTokenCountFromTracker(tracker),
+                          totalTokens,
                           toolUses: tracker.toolUseCount,
                           durationMs: Date.now() - metadata.startTime
                         },
@@ -1894,7 +1898,7 @@ export const AgentTool = buildTool({
                       toolUseId: toolUseContext.toolUseId,
                       finalMessage: partialResult,
                       usage: {
-                        totalTokens: getTokenCountFromTracker(tracker),
+                        totalTokens,
                         toolUses: tracker.toolUseCount,
                         durationMs: Date.now() - metadata.startTime
                       },
@@ -2230,7 +2234,6 @@ export const AgentTool = buildTool({
         const agentResult = finalizeAgentTool(agentMessages, syncAgentId, {
           ...metadata,
           agentName,
-          totalTokensOverride: getTokenCountFromTracker(syncTracker),
           ...(syncLeaseAccount ? { account: syncLeaseAccount } : {}),
         });
         if (feature('TRANSCRIPT_CLASSIFIER')) {
@@ -2478,6 +2481,7 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
           text: `${continuationText}\nmodel: ${data.model ?? 'unknown'}${errorText}${worktreeInfoText}${changedFilesText}
 <usage>total_tokens: ${data.totalTokens}
 input_tokens: ${usage.input_tokens}
+output_tokens: ${usage.output_tokens}
 cached_input_tokens: ${usage.cache_read_input_tokens ?? 0}
 cache_creation_tokens: ${usage.cache_creation_input_tokens ?? 0}
 tool_uses: ${data.totalToolUseCount}

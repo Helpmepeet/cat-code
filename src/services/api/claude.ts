@@ -237,6 +237,7 @@ import { returnValue } from 'src/utils/generators.js'
 import { headlessProfilerCheckpoint } from 'src/utils/headlessProfiler.js'
 import { isMcpInstructionsDeltaEnabled } from 'src/utils/mcpInstructionsDelta.js'
 import { calculateUSDCost } from 'src/utils/modelCost.js'
+import { recordWorkerUsage } from 'src/utils/workerUsage.js'
 import { endQueryProfile, queryCheckpoint, queryTimingBoundary } from 'src/utils/queryProfiler.js'
 import {
   modelSupportsAdaptiveThinking,
@@ -2240,6 +2241,7 @@ async function* queryModel(
   let partialMessage: BetaMessage | undefined = undefined
   const contentBlocks: (BetaContentBlock | ConnectorTextBlock)[] = []
   let usage: NonNullableUsage = EMPTY_USAGE
+  let reportedWorkerUsage: NonNullableUsage | undefined
   let costUSD = 0
   let stopReason: BetaStopReason | null = null
   let didFallBackToNonStreaming = false
@@ -2362,6 +2364,7 @@ async function* queryModel(
       partialMessage = undefined
       contentBlocks.length = 0
       usage = EMPTY_USAGE
+      reportedWorkerUsage = undefined
       stopReason = null
       isAdvisorInProgress = false
       research = undefined
@@ -2581,6 +2584,8 @@ async function* queryModel(
             partialMessage = part.message
             ttftMs = Date.now() - start
             usage = updateUsage(usage, part.message?.usage)
+            recordWorkerUsage(usage, resolvedModel)
+            reportedWorkerUsage = usage
             // Capture research from message_start if available (internal only).
             // Always overwrite with the latest value.
             if (
@@ -2835,6 +2840,10 @@ async function* queryModel(
           }
           case 'message_delta': {
             usage = updateUsage(usage, part.usage)
+            // Usage events replace the totals for this attempt. Recording
+            // each snapshot also preserves the usage reported before an abort.
+            recordWorkerUsage(usage, resolvedModel, reportedWorkerUsage)
+            reportedWorkerUsage = usage
             // Capture research from message_delta if available (internal only).
             // Always overwrite with the latest value. Also write back to
             // already-yielded messages since message_delta arrives after
@@ -3575,6 +3584,7 @@ async function* queryModel(
       }
       usage = updateUsage(EMPTY_USAGE, fallbackUsage)
       stopReason = fallbackMessage.message.stop_reason
+      recordWorkerUsage(fallbackMessage.message.usage, resolvedModel)
       const fallbackCost = calculateUSDCost(resolvedModel, fallbackUsage)
       costUSD += addToTotalSessionCost(
         fallbackCost,

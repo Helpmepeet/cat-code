@@ -8,6 +8,8 @@ if (!root || process.cwd() !== join(root, 'workspace') ||
   throw new Error('Isolated compaction fixture required')
 }
 const [scope, strategy] = process.argv.slice(2)
+const background = scope === 'background'
+const parentTurn = Promise.withResolvers<void>()
 const model = 'claude-sonnet-4-5'
 const archiveDir = join(root, 'archive')
 const readFiles = ['oldest-read-evidence', 'newest-read-evidence']
@@ -26,7 +28,10 @@ function messageResponse(id: string, output: ToolCall | string): Response {
       type: 'message_start',
       message: {
         id, type: 'message', role: 'assistant', model, content: [],
-        stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 0 },
+        stop_reason: null, stop_sequence: null, usage: {
+          input_tokens: 100, cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 5, output_tokens: 0,
+        },
       },
     },
     {
@@ -38,6 +43,10 @@ function messageResponse(id: string, output: ToolCall | string): Response {
       delta: tool ? { type: 'input_json_delta', partial_json: JSON.stringify(tool.input) } : { type: 'text_delta', text: output },
     },
     { type: 'content_block_stop', index: 0 },
+    {
+      type: 'message_delta', delta: { stop_reason: null, stop_sequence: null },
+      usage: { output_tokens: 10 },
+    },
     {
       type: 'message_delta', delta: { stop_reason: tool ? 'tool_use' : 'end_turn', stop_sequence: null },
       usage: { output_tokens: 15 },
@@ -55,6 +64,7 @@ let compactingRequests = 0
 let responseCount = 0
 let recoveryPath: string | undefined
 let preservedRead = false
+let receiptUsage: Record<string, number> = {}
 globalThis.fetch = (async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : input)
   if (url.origin !== 'https://compaction.invalid' || url.pathname !== '/v1/messages') {
@@ -80,7 +90,7 @@ globalThis.fetch = (async (input, init) => {
     )
     return messageResponse(id, 'Finished after compaction.')
   }
-  if (scope === 'worker' && !userText.includes(workerPrompt)) {
+  if (scope !== 'main' && !userText.includes(workerPrompt)) {
     if (!parentRequestedAgent) {
       parentRequestedAgent = true
       return messageResponse(id, {
@@ -89,13 +99,19 @@ globalThis.fetch = (async (input, init) => {
           description: 'Inspect isolated evidence files',
           subagent_type: 'general-purpose',
           prompt: workerPrompt,
-          run_in_background: false,
+          run_in_background: background,
         },
       })
     }
+    const receipt = JSON.stringify(body.messages).match(/<usage>(.*?)<\/usage>/)?.[1]
+    receiptUsage = Object.fromEntries(
+      Array.from((receipt ?? '').replace(/\\n/g, '\n').matchAll(/^([a-z_]+): (\d+)/gm),
+        ([, key, value]) => [key, Number(value)]),
+    )
     return messageResponse(id, 'Parent received the worker result.')
   }
   const round = compactingRequests++
+  if (background && round === 0) await parentTurn.promise
   if (round < readRounds) {
     return messageResponse(id, {
       name: 'Read',
@@ -122,6 +138,8 @@ const { createFileStateCacheWithSizeLimit } = await import('../utils/fileStateCa
 const { flushSessionStorage } = await import('../utils/sessionStorage.js')
 const { createQueryEngineAppSession } = await import('./createQueryEngineAppSession.js')
 const { createQueryEngineSessionController } = await import('./createQueryEngineSessionController.js')
+const { getCommandQueue } = await import('../utils/messageQueueManager.js')
+const { parseTaskNotificationDetails } = await import('../utils/taskNotification.js')
 
 enableConfigs()
 const sessionId = getSessionId()
@@ -150,21 +168,45 @@ const session = createQueryEngineAppSession({
 try {
   const controller = createQueryEngineSessionController(session)
   await controller.submit('Inspect the isolated evidence files.')
+  parentTurn.resolve()
+  let liveNotification: string | undefined
+  if (background) {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const entry = getCommandQueue().find(command => command.mode === 'task-notification')
+      if (typeof entry?.value === 'string') {
+        liveNotification = entry.value
+        break
+      }
+      await Bun.sleep(25)
+    }
+    if (!liveNotification) throw new Error('Background completion did not reach the queue')
+  }
   await flushSessionStorage()
-  let transcript = join(archiveDir, `${sessionId}.jsonl`)
-  if (scope === 'worker') {
+  const parentTranscript = join(archiveDir, `${sessionId}.jsonl`)
+  let transcript = parentTranscript
+  let savedNotification: string | undefined
+  if (scope !== 'main') {
     const subagents = join(archiveDir, sessionId, 'subagents')
     // The dispatched Agent has metadata. The summarization fork also has a
     // transcript, but it is not the worker archive that should be linked.
     const metadata = (await readdir(subagents)).filter(file => file.endsWith('.meta.json'))
     if (metadata.length !== 1) throw new Error(`Expected one worker, found ${metadata.length}`)
     transcript = join(subagents, metadata[0]!.replace(/\.meta\.json$/, '.jsonl'))
+    if (background) {
+      savedNotification = (await readFile(parentTranscript, 'utf8')).trim().split('\n')
+        .map(line => JSON.parse(line))
+        .find(entry => entry.type === 'subagent-terminal' && entry.status === 'completed')
+        ?.notification
+    }
   }
   const archive = await readFile(transcript, 'utf8')
   console.log(JSON.stringify({
     transcript,
     recoveryPath,
     preservedRead,
+    receiptUsage,
+    liveUsage: liveNotification && parseTaskNotificationDetails(liveNotification)?.usage,
+    savedUsage: savedNotification && parseTaskNotificationDetails(savedNotification)?.usage,
     olderReadInArchive: archive.includes(readFiles[0]!),
   }))
 } finally {

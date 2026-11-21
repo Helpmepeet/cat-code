@@ -24,6 +24,7 @@ import {
 } from '../utils/model/model.js'
 import { jsonStringify } from '../utils/slowOperations.js'
 import { isToolReferenceBlock } from '../utils/toolSearch.js'
+import { recordWorkerUsage } from '../utils/workerUsage.js'
 import { getAPIMetadata, getExtraBodyParams } from './api/claude.js'
 import { getAnthropicClient } from './api/client.js'
 import { EMPTY_USAGE } from './api/emptyUsage.js'
@@ -647,6 +648,7 @@ export async function countTokensViaHaikuFallback(
   })
 
   const usage = response.usage ?? EMPTY_USAGE
+  recordWorkerUsage(response.usage, model)
   if (!response.usage) {
     logForDebugging(
       `[token-estimation] missing_usage model=${normalizeModelStringForAPI(model)}`,

@@ -412,11 +412,11 @@ export function renderToolResultMessage(data: Output, progressMessagesForMessage
     detailParts.push(`cache: ${cacheParts.join(', ')}`);
   }
   // Cost estimate
-  if (outputModel) {
-    const cost = calculateUSDCost(outputModel, normalizedUsage as Parameters<typeof calculateUSDCost>[1]);
-    if (cost > 0) {
-      detailParts.push(`~$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`);
-    }
+  const cost = data.estimatedCostUSD ?? (outputModel
+    ? calculateUSDCost(outputModel, normalizedUsage as Parameters<typeof calculateUSDCost>[1])
+    : 0);
+  if (cost > 0) {
+    detailParts.push(`~$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`);
   }
 
   const finalAssistantMessage = createAssistantMessage({

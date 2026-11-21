@@ -34,7 +34,6 @@ import {
   enqueueAgentNotification,
   failAgentTask as failAsyncAgent,
   getProgressUpdate,
-  getTokenCountFromTracker,
   isLocalAgentTask,
   killAsyncAgent,
   type ProgressTracker,
@@ -68,7 +67,7 @@ import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { formatTaskNotificationText } from '../../utils/taskNotification.js'
 import { appendSubagentTerminal } from '../../utils/sessionStorage.js'
 import { unregisterActiveSubagent } from '../../utils/cleanupRegistry.js'
-import { getTokenCountFromUsage } from '../../utils/tokens.js'
+import { getWorkerUsage, startWorkerUsage } from '../../utils/workerUsage.js'
 import {
   getForkWorkerResultJsonSchema,
   parseForkWorkerResult,
@@ -421,6 +420,7 @@ export const agentToolResultSchema = lazySchema(() =>
     totalToolUseCount: z.number(),
     totalDurationMs: z.number(),
     totalTokens: z.number(),
+    estimatedCostUSD: z.number().optional(),
     usage: z
       .object({
         input_tokens: z.number(),
@@ -668,7 +668,6 @@ export function finalizeAgentTool(
     agentType: string
     agentName?: string
     isAsync: boolean
-    totalTokensOverride?: number
     continuationCapabilities?: AgentContinuationCapabilities
     /**
      * The Codex account this run leased, snapshotted by the caller while the
@@ -687,7 +686,6 @@ export function finalizeAgentTool(
     agentType,
     agentName,
     isAsync,
-    totalTokensOverride,
     continuationCapabilities,
     account,
   } = metadata
@@ -738,26 +736,8 @@ export function finalizeAgentTool(
     }
   }
 
-  // Report 3.5 instrumentation: usage is written back by mutation after
-  // content_block_stop (see src/services/api/claude.ts:2332-2350). If finalize
-  // fires in that window the message exists with no usage and the downstream
-  // getDisplayedTokenCountFromUsage call hits `undefined is not an object
-  // (evaluating 'O.input_tokens')`. Log before the access so we know which
-  // callsite fired during an incident.
-  if (!lastAssistantMessage.message.usage) {
-    const contentTypes = lastAssistantMessage.message.content
-      .map(c => c.type)
-      .join(',')
-    logForDebugging(
-      `[agent-tool] finalize_missing_usage agent_type=${agentType} ` +
-      `last_msg_stop_reason=${lastAssistantMessage.message.stop_reason ?? 'null'} ` +
-      `content_types=${contentTypes} total_msgs=${agentMessages.length}`,
-      { level: 'warn' },
-    )
-  }
-  const totalTokens = lastAssistantMessage.message.usage
-    ? getTokenCountFromUsage(lastAssistantMessage.message.usage)
-    : (totalTokensOverride ?? 0)
+  const runUsage = getWorkerUsage(agentId)
+  const totalTokens = runUsage?.totalTokens ?? 0
   const totalToolUseCount = countToolUses(agentMessages)
   const executedModel = agentMessages.findLast(message =>
     message.type === 'assistant' && message.message.model && message.message.model !== SYNTHETIC_MODEL,
@@ -805,7 +785,10 @@ export function finalizeAgentTool(
     totalDurationMs: Date.now() - startTime,
     totalTokens,
     totalToolUseCount,
-    usage: lastAssistantMessage.message.usage,
+    ...(runUsage && {
+      usage: runUsage.usage,
+      estimatedCostUSD: runUsage.estimatedCostUSD,
+    }),
   }
 }
 
@@ -1086,18 +1069,15 @@ export async function runAsyncAgentLifecycle({
   if (!lifecycleOwnership || lifecycleOwnership.agentId !== taskId) {
     throw new Error(`Agent ${taskId} already has an active lifecycle`)
   }
+  startWorkerUsage()
   let stopSummarization: (() => void) | undefined
   const agentMessages: MessageType[] = []
   const tracker = createProgressTracker()
   const recordUnsuccessfulOutcome = (
     status: 'failed' | 'killed',
     finalMessage: string | undefined,
-    error?: string,
-    usage = {
-      totalTokens: getTokenCountFromTracker(tracker),
-      toolUses: tracker.toolUseCount,
-      durationMs: Date.now() - metadata.startTime,
-    },
+    error: string | undefined,
+    usage: { totalTokens: number; toolUses: number; durationMs: number },
   ) => {
     const task = toolUseContext.getAppState().tasks[taskId]
     const notification = isLocalAgentTask(task) && (runId === undefined || task.runId === runId)
@@ -1211,7 +1191,6 @@ export async function runAsyncAgentLifecycle({
         : undefined
     const agentResult = finalizeAgentTool(agentMessages, taskId, {
       ...metadata,
-      totalTokensOverride: getTokenCountFromTracker(tracker),
       ...(terminalAccount ? { account: terminalAccount } : {}),
     })
 
@@ -1232,7 +1211,7 @@ export async function runAsyncAgentLifecycle({
         finalMessage = formatFinalMessage(finalMessage)
       }
       recordUnsuccessfulOutcome('failed', finalMessage, apiErrorMsg, {
-        totalTokens: getTokenCountFromTracker(tracker),
+        totalTokens: agentResult.totalTokens,
         toolUses: agentResult.totalToolUseCount,
         durationMs: agentResult.totalDurationMs,
       })
@@ -1253,7 +1232,7 @@ export async function runAsyncAgentLifecycle({
         setAppState: rootSetAppState,
         finalMessage,
         usage: {
-          totalTokens: getTokenCountFromTracker(tracker),
+          totalTokens: agentResult.totalTokens,
           toolUses: agentResult.totalToolUseCount,
           durationMs: agentResult.totalDurationMs,
         },
@@ -1285,7 +1264,7 @@ export async function runAsyncAgentLifecycle({
       setAppState: rootSetAppState,
       finalMessage,
       usage: {
-        totalTokens: getTokenCountFromTracker(tracker),
+        totalTokens: agentResult.totalTokens,
         toolUses: agentResult.totalToolUseCount,
         durationMs: agentResult.totalDurationMs,
       },
@@ -1295,6 +1274,11 @@ export async function runAsyncAgentLifecycle({
     })
   } catch (error) {
     stopSummarization?.()
+    const usage = {
+      totalTokens: getWorkerUsage(taskId)?.totalTokens ?? 0,
+      toolUses: tracker.toolUseCount,
+      durationMs: Date.now() - metadata.startTime,
+    }
     if (error instanceof AbortError) {
       // killAsyncAgent is a no-op if TaskStop already set status='killed' —
       // but only this catch handler has agentMessages, so the notification
@@ -1313,7 +1297,7 @@ export async function runAsyncAgentLifecycle({
           'user_kill_async' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       })
       const partialResult = extractPartialResult(agentMessages)
-      recordUnsuccessfulOutcome('killed', partialResult)
+      recordUnsuccessfulOutcome('killed', partialResult, undefined, usage)
       await recordWorkerSessionTerminal({
         sessionId: parentSessionId,
         agentId: taskId,
@@ -1331,11 +1315,7 @@ export async function runAsyncAgentLifecycle({
         toolUseId: toolUseContext.toolUseId,
         runId,
         finalMessage: partialResult,
-        usage: {
-          totalTokens: getTokenCountFromTracker(tracker),
-          toolUses: tracker.toolUseCount,
-          durationMs: Date.now() - metadata.startTime,
-        },
+        usage,
         ...worktreeResult,
       })
       return
@@ -1343,7 +1323,7 @@ export async function runAsyncAgentLifecycle({
     const msg = errorMessage(error)
     failAsyncAgent(taskId, msg, rootSetAppState, runId)
     const partialResult = extractPartialResult(agentMessages)
-    recordUnsuccessfulOutcome('failed', partialResult, msg)
+    recordUnsuccessfulOutcome('failed', partialResult, msg, usage)
     await recordWorkerSessionTerminal({
       sessionId: parentSessionId,
       agentId: taskId,
@@ -1362,11 +1342,7 @@ export async function runAsyncAgentLifecycle({
       toolUseId: toolUseContext.toolUseId,
       runId,
       finalMessage: partialResult,
-      usage: {
-        totalTokens: getTokenCountFromTracker(tracker),
-        toolUses: tracker.toolUseCount,
-        durationMs: Date.now() - metadata.startTime,
-      },
+      usage,
       ...worktreeResult,
     })
   } finally {
