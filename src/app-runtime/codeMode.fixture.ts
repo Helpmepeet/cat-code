@@ -92,6 +92,9 @@ const scripts = scenario === 'auto-limit' ? [
 ] : scenario === 'instructions-shell' ? [
   `var note = await tools.call({name:"Bash",input:{command:"cd nested && cat note.txt",work_lifetime:"finite",run_in_background:false}}); output(note.content);`,
   `output("finished");`,
+] : scenario === 'search-exact' ? [
+  `const first = async query => (await tools.discover({op:"search",query,max:1})).matches[0]?.name;
+  output({name: await first("Bash"), alias: await first("Brief"), partial: await first("bas")});`,
 ] : [
   `var file = ${JSON.stringify(join(root, 'workspace', 'sample.txt'))}; await tools.call({name:"Write",input:{file_path:file,content:"before\\n"}}); var read = await tools.call({name:"Read",input:{file_path:file}}); await tools.call({name:"Edit",input:{file_path:file,old_string:"before",new_string:"after"}}); var caught = false; try { await tools.call({name:"Bash",input:{command:"bash -c 'exit 7'",work_lifetime:"finite",run_in_background:false}}); } catch (e) { caught = true; } var failure = await tools.call({name:"Bash",input:{command:"printf diagnostic-from-failed-test >&2; bash -c 'exit 7'",work_lifetime:"finite",run_in_background:false},nothrow:true}); var failedDiagnostic = failure.content; var receipt = await tools.call({name:"Bash",input:{command:"printf survived > survived.txt",work_lifetime:"finite",run_in_background:false}}); output({caught,failedDiagnostic,failed:failure.isError});`,
   `output({retained:caught, discovery:await tools.discover({op:"describe",name:"Bash"})});`,
@@ -180,6 +183,11 @@ const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const notebookTools = scenario === 'notebook'
   ? [(await import('../tools/NotebookEditTool/NotebookEditTool.js')).NotebookEditTool]
   : []
+const discoveryTools = scenario === 'search-exact' ? [
+  (await import('../tools/FilePatchTool/FilePatchTool.js')).FilePatchTool,
+  (await import('../tools/BriefTool/BriefTool.js')).BriefTool,
+  (await import('../tools/ResumeAgentTool/ResumeAgentTool.js')).ResumeAgentTool,
+] : []
 const { SkillTool } = await import('../tools/SkillTool/SkillTool.js')
 const { TaskStopTool } = await import('../tools/TaskStopTool/TaskStopTool.js')
 if (isBackgroundCompaction) {
@@ -296,7 +304,7 @@ const session = createQueryEngineAppSession({
     engine = new QueryEngine(config)
     return engine
   },
-  cwd: process.cwd(), tools: [REPLTool, BashTool, FileReadTool, FileWriteTool, FileEditTool, SkillTool, TaskStopTool, ...notebookTools, ...parallelGlobTools], commands, mcpClients: [], agents: [],
+  cwd: process.cwd(), tools: [REPLTool, BashTool, FileReadTool, FileWriteTool, FileEditTool, SkillTool, TaskStopTool, ...notebookTools, ...parallelGlobTools, ...discoveryTools], commands, mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => {
     state = update(state)
     if (Object.values(state.tasks).some((task: any) => task.type === 'code_mode' && task.delivery === 'delivered')) backgroundDelivered()

@@ -25,6 +25,18 @@ async function withCodingEvidence(scenario: string, check: (evidence: any, works
   } finally { await rm(root, { recursive: true, force: true }) }
 }
 
+test('Script discovery ranks exact names and aliases above text matches', async () => {
+  await withCodingEvidence('search-exact', async evidence => {
+    const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode')?.toolUseResult
+    expect(result?.status).toBe('completed')
+    expect(JSON.parse(result.output.split('\n\n[Code Mode]')[0])).toEqual({
+      name: 'Bash',
+      alias: 'SendUserMessage',
+      partial: 'apply_patch',
+    })
+  })
+}, 35_000)
+
 test('real-engine Code Mode catches Bash failure, executes the next effect, and retains variables', async () => {
   await withCodingEvidence('coding', async (evidence, workspace) => {
     const results = evidence.transcript.filter((message: any) => message.toolUseResult?.kind === 'code-mode').map((message: any) => message.toolUseResult)

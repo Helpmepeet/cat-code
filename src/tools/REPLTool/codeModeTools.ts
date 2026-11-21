@@ -156,7 +156,8 @@ export async function describeCodeModeTool(context: ToolUseContext, name: string
 export async function searchCodeModeTools(context: ToolUseContext, query: string, max = 5) {
   if (typeof query !== 'string' || query.length > 4096) throw new Error('Search query must be at most 4096 characters')
   if (!Number.isInteger(max) || max < 1 || max > 20) throw new Error('Search limit must be an integer from 1 to 20')
-  const words = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))]
+  const normalizedQuery = query.trim().toLowerCase()
+  const words = [...new Set(normalizedQuery.split(/\s+/).filter(Boolean))]
   if (words.length > 32) throw new Error('Use at most 32 tool-search terms')
   const eligible = context.options.tools.filter(tool => !codeModeExclusion(tool, context))
   let indexComplete = true
@@ -172,9 +173,14 @@ export async function searchCodeModeTools(context: ToolUseContext, query: string
     const source = `${tool.name} ${description.slice(0, 4096)} ${(tool.aliases ?? []).slice(0, 16).map(alias => alias.slice(0, 512)).join(' ')} ${(tool.searchHint ?? '').slice(0, 512)} ${keys.slice(0, 64).map(key => key.slice(0, 256)).join(' ')}`
     if (source.length > 4096 || keys.length > 64 || (tool.aliases?.length ?? 0) > 16 || (tool.searchHint?.length ?? 0) > 512) indexComplete = false
     const text = source.slice(0, 4096).toLowerCase()
-    return { tool, keys, previewError, description, descriptionError, score: words.reduce((score, word) => score + Number(text.includes(word)), 0) }
-  }))).filter(item => words.length === 0 || item.score > 0)
-    .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
+    const exactMatch = normalizedQuery !== '' && (
+      tool.name.toLowerCase() === normalizedQuery ||
+      tool.aliases?.some(alias => alias.toLowerCase() === normalizedQuery) === true
+    )
+    const score = words.reduce((score, word) => score + Number(text.includes(word)), 0)
+    return { tool, keys, previewError, description, descriptionError, exactMatch, score }
+  }))).filter(item => words.length === 0 || item.exactMatch || item.score > 0)
+    .sort((a, b) => Number(b.exactMatch) - Number(a.exactMatch) || b.score - a.score || a.tool.name.localeCompare(b.tool.name))
   const matches = ranked.slice(0, max).map(({ tool, keys, previewError, description, descriptionError }) => {
       const descriptionComplete = !descriptionError && description.length <= 512
       return {
