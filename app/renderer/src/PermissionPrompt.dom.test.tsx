@@ -203,23 +203,30 @@ test('folding measures wrapped rendered height, survives expansion and resizes w
   } finally { globalThis.ResizeObserver = previousObserver; style.mockRestore(); bounds.mockRestore() }
 })
 
-test('opening full command input with the keyboard does not approve the sandbox override', async () => {
+test('the footer discloses full command input without answering the request', async () => {
   const input = { command, description: 'Check the beta build', dangerouslyDisableSandbox: true }
-  const approval = { ...request, request: { ...request.request, input } }
-  let allowed = 0
-  const tree = await harness.mount(<PermissionPrompt keyboardTarget request={approval} onAllow={() => { allowed++ }} onDeny={() => {}} />)
+  const approval = { ...request, request: { ...request.request, input, permission_suggestions: [] } }
+  let allowed = 0, denied = 0
+  const tree = await harness.mount(<PermissionPrompt keyboardTarget request={approval} onAllow={() => { allowed++ }} onDeny={() => { denied++ }} />)
   await settleFocus()
   expect(tree.container.textContent).toContain('Requested to run outside the Bash sandbox.')
-  const summary = tree.container.querySelector('summary')!
-  await act(async () => { summary.focus() })
-  expect(harness.document.activeElement).toBe(summary)
-  expect((await key(summary, 'Enter')).defaultPrevented).toBe(false)
-  expect(allowed).toBe(0)
+  const toggle = button(tree.container, 'Full input')
+  expect(toggle.parentElement?.contains(button(tree.container, 'Run'))).toBe(true)
+  const panel = harness.document.getElementById(toggle.getAttribute('aria-controls')!)!
+  expect(panel.hidden).toBe(true)
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  await act(async () => { toggle.focus() })
+  expect(harness.document.activeElement).toBe(toggle)
+  expect((await key(toggle, 'Enter')).defaultPrevented).toBe(false)
   // Happy DOM does not synthesize native keyboard activation from keydown.
-  await act(async () => { summary.click() })
-  const details = summary.closest('details')!
-  expect(details.open).toBe(true)
-  expect(JSON.parse(details.querySelector('pre')!.textContent!)).toEqual(input)
+  await act(async () => { toggle.click() })
+  expect(panel.hidden).toBe(false)
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  expect(JSON.parse(panel.textContent!)).toEqual(input)
+  await act(async () => { toggle.click() })
+  expect(panel.hidden).toBe(true)
+  expect(allowed).toBe(0)
+  expect(denied).toBe(0)
 })
 
 test('copy uses the complete original command and the shared copied check state', async () => {

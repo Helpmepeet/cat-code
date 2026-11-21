@@ -34,8 +34,10 @@ export function CommandPermissionContent({
   const reason = request.decision_reason && request.decision_reason !==
     `Claude requested permissions to use ${request.tool_name}, but you haven't granted it yet.`
     ? request.decision_reason : undefined
+  const [inputShown, setInputShown] = useState(false)
+  const inputId = useId()
   const formattedInput = useMemo(() => formatPermissionInput(request.input), [request.input])
-  const command = typeof input?.command === 'string' ? input.command : formattedInput
+  const command = typeof input?.command === 'string' ? input.command : undefined
   const sandboxOverride = request.tool_name === 'Bash' && input?.dangerouslyDisableSandbox === true
   const atSelectionLimit = selectedSuggestions.length >= MAX_SUGGESTION_SELECTIONS
   const suggestions = request.permission_suggestions ?? []
@@ -60,13 +62,7 @@ export function CommandPermissionContent({
         {sandboxOverride ? <p className="text-tone-warn">Requested to run outside the Bash sandbox.</p> : null}
       </div>
     ) : null}
-    <PermissionShellBlock command={command} bash={request.tool_name === 'Bash' && typeof input?.command === 'string'} />
-    {typeof input?.command === 'string' ? (
-      <details className="command-permission-input">
-        <summary>Full input</summary>
-        <pre aria-label="Command input" tabIndex={0}>{formattedInput}</pre>
-      </details>
-    ) : null}
+    <PermissionShellBlock command={command ?? formattedInput} bash={request.tool_name === 'Bash' && command !== undefined} />
     <div className="command-permission-footer">
       {suggestions.length > 0 ? <div className="command-permission-suggestions">
         {suggestions.map((suggestion, index) => <CommandSuggestion
@@ -80,6 +76,13 @@ export function CommandPermissionContent({
           <p className="command-permission-selection-limit" role="status">Up to {MAX_SUGGESTION_SELECTIONS} suggestions per approval. Deselect one to choose another.</p>
         ) : null}
       </div> : null}
+      {command !== undefined ? <button
+        type="button"
+        className="command-permission-input-toggle"
+        aria-expanded={inputShown}
+        aria-controls={inputId}
+        onClick={() => setInputShown(shown => !shown)}
+      >Full input</button> : null}
       <div className="command-permission-actions">
         <button type="button" className="command-permission-button command-permission-deny rounded-md border border-shell-seam text-text-muted disabled:opacity-40" disabled={submitted} onClick={onDeny}>
           <ActionCloseIcon /><span>Deny</span>{keysLive ? <span className="command-permission-key">esc</span> : null}
@@ -89,6 +92,7 @@ export function CommandPermissionContent({
         </button>
       </div>
     </div>
+    {command !== undefined ? <pre id={inputId} className="command-permission-input" aria-label="Command input" hidden={!inputShown} tabIndex={0}>{formattedInput}</pre> : null}
   </>
 }
 
