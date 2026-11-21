@@ -22,7 +22,7 @@ const endpoint = gpt
 const requests: Array<{
   tools: Array<{ name: string; description?: string; defer_loading?: boolean }>
   system?: Array<{ text: string }>
-  instructions?: string
+  input?: Array<{ role?: string; content?: Array<{ text?: string }> }>
   messages?: unknown[]
 }> = []
 const unexpectedFetches: string[] = []
@@ -116,7 +116,9 @@ try {
     await writeFile(historyPath, JSON.stringify({ sessionId, messages: session.getMessages() }))
   }
   const body = requests[0]!
-  const prompt = body.instructions ?? body.system?.map(block => block.text).join('\n') ?? ''
+  const prompt = gpt
+    ? body.input?.[0]?.content?.map(block => block.text).join('\n') ?? ''
+    : body.system?.map(block => block.text).join('\n') ?? ''
   console.log(JSON.stringify({
     tools: body.tools.filter(tool => !tool.defer_loading).map(tool => tool.name),
     scriptGuidance: prompt.split('\n').find(line => line.includes('REPL runs JavaScript')),

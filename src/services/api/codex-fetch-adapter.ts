@@ -7,7 +7,7 @@
  *
  * Supports:
  * - Text messages (user/assistant)
- * - System prompts → instructions
+ * - Stable system prompts → leading developer input
  * - Tool definitions (Anthropic input_schema → OpenAI parameters)
  * - Tool use (tool_use → function_call, tool_result → function_call_output)
  * - Streaming events translation
@@ -1538,6 +1538,7 @@ async function prepareCodexPDFDocuments(
 export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   codexBody: Record<string, unknown>
   codexModel: string
+  stableInstructions: string
 } {
   const openAIAssembly = anthropicBody._openaiInstructionAssembly as
     | OpenAIInstructionAssemblyPayload
@@ -1552,7 +1553,7 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
   }
 
   const codexModel = mapClaudeModelToCodex(claudeModel)
-  const instructions = openAIAssembly.instructions
+  const stableInstructions = openAIAssembly.instructions
   const toolChoice = translateToolChoice(anthropicBody.tool_choice, anthropicTools)
   const translatedTools = anthropicTools.length > 0
     ? translateTools(anthropicTools)
@@ -1579,20 +1580,15 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     }
   }
 
-  // Convert messages
-  const input = translateMessages(openAIAssembly.inputMessages, deferredTools)
-  if (openAIAssembly.developerContext) {
-    input.unshift({
-      type: 'message',
-      role: 'developer',
-      content: [
-        {
-          type: 'input_text',
-          text: openAIAssembly.developerContext,
-        },
-      ],
-    })
-  }
+  // Rebuild the provider prefix on full sends, including after compaction and
+  // resume. The transcript stays free of these provider-specific copies.
+  const developerInput = [stableInstructions, openAIAssembly.developerContext]
+    .filter((text): text is string => Boolean(text))
+    .map(text => ({ type: 'message', role: 'developer', content: [{ type: 'input_text', text }] }))
+  const input: Array<Record<string, unknown>> = [
+    ...developerInput,
+    ...translateMessages(openAIAssembly.inputMessages, deferredTools),
+  ]
 
   // prompt_cache_key is overwritten at the call site with the conversation_id
   // (see the fetch adapter below) to match upstream openai/codex semantics.
@@ -1600,7 +1596,6 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     model: codexModel,
     store: false,
     stream: true,
-    instructions,
     input,
     tool_choice: toolChoice,
     parallel_tool_calls: true,
@@ -1703,8 +1698,8 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     // whenever reasoning is set (codex-rs/core/src/client.rs:833). Without
     // this the server never returns encrypted reasoning blobs, the next turn's
     // input[] cannot replay them, and the server's KV-cache of the prior turn
-    // stops matching our prefix — so the cache ceiling gets pinned to the
-    // `instructions` block alone. Requesting encrypted reasoning lets us
+    // stops matching our prefix, limiting cache reuse to developer instructions.
+    // Requesting encrypted reasoning lets us
     // round-trip it as an opaque `thinking.signature` and grow the cached
     // prefix with the real conversation.
     addCodexInclude(codexBody, 'reasoning.encrypted_content')
@@ -1714,7 +1709,7 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     addCodexInclude(codexBody, OPENAI_WEB_SEARCH_SOURCES_INCLUDE)
   }
 
-  return { codexBody, codexModel }
+  return { codexBody, codexModel, stableInstructions }
 }
 
 /**
@@ -2658,7 +2653,7 @@ async function processCodexEvents(
                 // encrypted_content blob) in conversation history and replays
                 // them on the next turn. Without the replay, the server's
                 // KV-cache prefix diverges from ours after turn 1 — caching
-                // gets pinned to the `instructions` block alone.
+                // gets pinned to the developer instruction prefix alone.
                 // We smuggle the encrypted blob through as an Anthropic
                 // thinking block's `signature` field (the native round-trip
                 // channel for opaque reasoning state). When a visible
@@ -3984,7 +3979,7 @@ export function createCodexFetch(
     const poolManagedCredentials = resolvedTokens?.source === 'pool'
 
     // Translate to Codex format
-    const { codexBody, codexModel } = translateToCodexBody(
+    const { codexBody, codexModel, stableInstructions } = translateToCodexBody(
       await prepareCodexPDFDocuments(anthropicBody),
     )
     const isStreamingAnthropicRequest = anthropicBody.stream === true
@@ -4004,8 +3999,7 @@ export function createCodexFetch(
     codexBody.prompt_cache_key = conversationId
 
     // Pre-request cache diagnostic log
-    const instructions = typeof codexBody.instructions === 'string' ? codexBody.instructions : ''
-    const instructionsHash = createHash('sha1').update(instructions).digest('hex').slice(0, 8)
+    const instructionsHash = createHash('sha1').update(stableInstructions).digest('hex').slice(0, 8)
     const inputMessages = Array.isArray(codexBody.input) ? codexBody.input : []
     const effort = typeof (codexBody.reasoning as Record<string, unknown> | undefined)?.effort === 'string'
       ? (codexBody.reasoning as Record<string, unknown>).effort
@@ -4013,7 +4007,7 @@ export function createCodexFetch(
     logForDebugging(
       `[codex-cache] request account=${currentAccountId.slice(0, 12)} model=${codexModel} ` +
       `conv=${conversationId.slice(0, 8)} ` +
-      `instructions=${instructions.length}B hash=${instructionsHash} ` +
+      `instructions=${stableInstructions.length}B hash=${instructionsHash} ` +
       `messages=${inputMessages.length} effort=${effort}`,
     )
 
@@ -4232,6 +4226,7 @@ export function createCodexFetch(
               credential: currentCredential,
               credentialUse: options.credentialUse,
               onCredentialUse: recordCredentialUse,
+              instructionsHash,
             } satisfies CodexWebSocketCredentialContext,
           )
           const wsSourceWithAbortCleanup: AsyncIterable<Record<string, unknown>> = {

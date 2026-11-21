@@ -183,7 +183,9 @@ test('a child cannot consume its parent date correction, and a fresh child gets 
     expect(JSON.stringify(request.input)).toContain("Today's date is 2026-10-26.")
     expect(JSON.stringify(request.input)).toContain("Today's date is now 2026-10-27.")
   }
-  expect(parentRequests[1]!.instructions).toBe(parentRequests[0]!.instructions)
+  const [firstParentPrefix] = parentRequests[0]!.input as unknown[]
+  expect(firstParentPrefix).toMatchObject({ role: 'developer' })
+  expect((parentRequests[1]!.input as unknown[])[0]).toEqual(firstParentPrefix)
   expect((JSON.stringify(childRequests[1]!.input).match(/Today's date is now 2026-10-27\./g) ?? [])).toHaveLength(1)
   expect(await getUserContext()).toBe(userContext)
 })

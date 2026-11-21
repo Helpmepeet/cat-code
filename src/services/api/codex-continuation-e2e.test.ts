@@ -191,8 +191,9 @@ describe('codex continuation e2e: normalization → translation → reconciliati
   test('plain two-turn conversation stays incremental through the full pipeline', () => {
     const turn1Messages = [userMsg('hello')]
     const turn1Input = transcriptToCodexInput(turn1Messages)
-    expect(turn1Input).toHaveLength(1)
-    expect(turn1Input[0]).toMatchObject({ role: 'user', content: 'hello' })
+    expect(turn1Input).toHaveLength(2)
+    expect(turn1Input[0]).toMatchObject({ role: 'developer' })
+    expect(turn1Input[1]).toMatchObject({ role: 'user', content: 'hello' })
 
     const { sentInput, outputItems } = simulateCanonicalState(turn1Input, 'Hi there!')
 
@@ -245,9 +246,9 @@ describe('codex continuation e2e: normalization → translation → reconciliati
       toolResultMsg(callId, 'const x = 1'),
     ]
     const turn1Input = transcriptToCodexInput(turn1Messages)
-    expect(turn1Input).toHaveLength(3)
-    expect(turn1Input[1]).toMatchObject({ type: 'function_call', name: 'Read' })
-    expect(turn1Input[2]).toMatchObject({ type: 'function_call_output' })
+    expect(turn1Input).toHaveLength(4)
+    expect(turn1Input[2]).toMatchObject({ type: 'function_call', name: 'Read' })
+    expect(turn1Input[3]).toMatchObject({ type: 'function_call_output' })
 
     const { sentInput, outputItems } = simulateCanonicalState(turn1Input, 'File read complete.')
 

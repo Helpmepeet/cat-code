@@ -307,7 +307,7 @@ describe('codex-fetch-adapter', () => {
     expect(absent.codexBody.service_tier).toBeUndefined()
   })
 
-  test('translateToCodexBody sends developer context as developer input message', () => {
+  test('translateToCodexBody sends volatile context after the stable developer prefix', () => {
     const { codexBody } = translateToCodexBody({
       model: 'claude-sonnet-4-6',
       _openaiInstructionAssembly: {
@@ -322,7 +322,13 @@ describe('codex-fetch-adapter', () => {
       },
     })
 
+    expect(codexBody.instructions).toBeUndefined()
     expect(codexBody.input).toEqual([
+      {
+        type: 'message',
+        role: 'developer',
+        content: [{ type: 'input_text', text: 'stable instructions' }],
+      },
       {
         type: 'message',
         role: 'developer',
@@ -1213,7 +1219,9 @@ describe('codex-fetch-adapter', () => {
       },
     })
 
-    expect(codexBody.input).toEqual([
+    const toolItems = (codexBody.input as Array<Record<string, unknown>>).filter(item =>
+      item.type === 'function_call' || item.type === 'function_call_output')
+    expect(toolItems).toEqual([
       {
         type: 'function_call',
         call_id: 'call_image_tool',

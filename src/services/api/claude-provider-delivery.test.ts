@@ -287,7 +287,7 @@ test.each(['fallback', 'delta', 'inline'] as const)(
       if (requestBodies.length === count) throw new Error(`No outbound request: ${JSON.stringify(receivedEvents)}`)
       expect(requestBodies.length).toBe(count + 1)
       return requestBodies.at(-1)! as {
-        instructions: string
+        instructions?: string
         input: Array<{ type: string; role?: string; phase?: string; call_id?: string; output?: unknown; content?: unknown; tools?: Array<{ name: string }> }>
         tools: Array<{ name: string }>
       }
@@ -304,15 +304,18 @@ test.each(['fallback', 'delta', 'inline'] as const)(
       const first = await capture([...initialMessages, ...announcements])
       expect(JSON.stringify(first.input)).toContain('mcp__delivery__read')
       expect(first.tools.some(tool => tool.name === 'mcp__delivery__read')).toBe(mode === 'inline')
-      expect(first.instructions).toBe('Stable delivery instructions')
-      expect(first.input[0]).toMatchObject({ type: 'message', role: 'developer' })
-      expect(JSON.stringify(first.input[0])).toContain('Volatile git marker')
+      expect(first.instructions).toBeUndefined()
+      expect(first.input[0]).toMatchObject({
+        type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Stable delivery instructions' }],
+      })
+      expect(first.input[1]).toMatchObject({ type: 'message', role: 'developer' })
+      expect(JSON.stringify(first.input[1])).toContain('Volatile git marker')
       const sentInput = JSON.stringify(first.input)
       expect(sentInput.split('# project\\nStable project rules')).toHaveLength(2)
       expect(sentInput.indexOf('Stable project rules')).toBeLessThan(sentInput.indexOf('Inspect tools and continue'))
       if (mode === 'fallback') {
         expect(JSON.stringify(first.input)).toContain('<available-deferred-tools>')
-        expect(JSON.stringify(first.input[0])).toContain('Before using any chrome browser tools')
+        expect(JSON.stringify(first.input[1])).toContain('Before using any chrome browser tools')
       } else if (mode === 'delta') {
         expect(announcements.length).toBe(2)
         expect(JSON.stringify(first.input)).toContain('Delivery server guidance')
@@ -360,7 +363,8 @@ test.each(['fallback', 'delta', 'inline'] as const)(
       expect(restored.input[callIndex + 1]).toMatchObject({ type: 'function_call_output', call_id: 'interrupted' })
       expect(restored.input[callIndex + 1]!.output).toContain('Tool result missing')
       expect(restored.input.filter(item => item.role === 'assistant').map(item => item.phase)).toEqual(['commentary', 'final_answer'])
-      expect(restored.instructions).toBe(first.instructions)
+      expect(restored.instructions).toBeUndefined()
+      expect(restored.input[0]).toEqual(first.input[0])
       expect(JSON.stringify(malformedHistory)).toBe(historyBefore)
 
       if (mode === 'fallback') {

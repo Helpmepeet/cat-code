@@ -427,8 +427,9 @@ async function measureToolSchemaTokens(
 }
 
 /**
- * Measure the non-message content of the next request: system prompt, the
- * userContext/systemContext blocks, and the serialized tool schemas.
+ * Measure content outside the transcript: system prompt, userContext and
+ * systemContext blocks, and serialized tool schemas. Codex also renders its
+ * developer prefix from these blocks at the wire boundary, after estimation.
  *
  * This is the value tokenCountWithEstimation's NON_MESSAGE_REQUEST_OVERHEAD_TOKENS
  * floor stands in for when nobody can measure it. Deterministic, no API calls,

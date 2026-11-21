@@ -6,6 +6,7 @@ import type { Message } from '../../types/message.js'
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../../constants/prompts.js'
 
 export type OpenAIInstructionAssembly = {
+  /** Stable developer prefix, separate from replayed transcript messages. */
   instructions: string
   inputMessages: Message[]
   developerContext?: string

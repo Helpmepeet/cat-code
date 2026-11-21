@@ -167,7 +167,10 @@ describe('sideQuery', () => {
       }
       await sideQuery({ ...options, model: 'gpt-6-luna', provider: 'openai' })
       const { codexBody } = translateToCodexBody(capturedBody!)
-      expect(codexBody.instructions).toBe(options.system)
+      expect(codexBody.instructions).toBeUndefined()
+      expect((codexBody.input as unknown[])[0]).toMatchObject({
+        role: 'developer', content: [{ type: 'input_text', text: options.system }],
+      })
       expect(codexBody.reasoning).toMatchObject({ effort: 'medium' })
 
       await sideQuery({ ...options, model: 'claude-sonnet-4-6', provider: 'firstParty' })

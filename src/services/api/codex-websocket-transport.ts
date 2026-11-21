@@ -6,7 +6,7 @@
  * incremental request with `previous_response_id`, allowing the server to
  * chain KV-cache across turns instead of re-matching from scratch each time.
  *
- * Without this, the server can only cache the stable `instructions` prefix
+ * Without this, the server may cache only the stable developer prefix
  * (~13,824 tokens). With it, the cached prefix grows with the conversation.
  */
 
@@ -124,6 +124,7 @@ export type CodexWebSocketCredentialContext = Readonly<{
   credential: CodexCredentialHandle
   credentialUse?: CodexCredentialUseOptions
   onCredentialUse?: (credential: CodexCredentialHandle) => void
+  instructionsHash?: string
 }>
 
 type ResolvedCredentialContext = {
@@ -1199,14 +1200,18 @@ export function reconcileCanonicalDelta(
     return { delta: null, mismatchReason: replacedToolResult }
   }
 
-  // Unlike harmless normalization drift, changing a historical declaration
-  // changes which tools the server sees. Never retain a removed or stale schema
-  // behind previous_response_id, even when the item counts still match.
+  // Developer instructions and tool declarations must match the server's
+  // history. A full input replaces any changed prefix or volatile context.
   for (let i = 0; i < previousInput.length; i++) {
+    const previous = previousInput[i]!
+    const current = currentInput[i] ?? {}
+    if ((previous.role === 'developer' || current.role === 'developer') &&
+        !responseItemsEqual(previous, current)) {
+      return { delta: null, mismatchReason: `developer_context_changed index=${i}` }
+    }
     if (
-      (previousInput[i]?.type === 'additional_tools' ||
-        currentInput[i]?.type === 'additional_tools') &&
-      !responseItemsEqual(previousInput[i]!, currentInput[i] ?? {})
+      (previous.type === 'additional_tools' || current.type === 'additional_tools') &&
+      !responseItemsEqual(previous, current)
     ) {
       return {
         delta: null,
@@ -1492,7 +1497,8 @@ async function* _streamTurnAttempt(
   const completedOutputItems: Array<Record<string, unknown>> = []
 
   const instructions = typeof codexBody.instructions === 'string' ? codexBody.instructions : ''
-  const instructionsHash = createHash('sha1').update(instructions).digest('hex').slice(0, 8)
+  const instructionsHash = resolvedContext.instructionsHash ??
+    createHash('sha1').update(instructions).digest('hex').slice(0, 8)
   const currentEffort = (codexBody.reasoning as { effort?: string } | undefined)?.effort ?? null
 
   // Send-path mode for JSONL diagnostic entry.

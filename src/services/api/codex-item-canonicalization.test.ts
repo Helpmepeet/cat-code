@@ -144,7 +144,7 @@ describe('canonicalizeCodexItem: message round-trip', () => {
       },
     })
     const replayed = (codexBody.input as Array<Record<string, unknown>>).find(
-      it => it.type === 'message',
+      it => it.type === 'message' && it.role === 'assistant',
     )
     expect(canonical.phase).toBe(phase === 'commentary' || phase === 'final_answer' ? phase : undefined)
     expect(JSON.stringify(canonical)).toBe(JSON.stringify(replayed))

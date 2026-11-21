@@ -183,7 +183,9 @@ test.skipIf(!hasRenderer)('a GPT worker full-PDF read delivers rendered page con
   const wire = translateToCodexBody({ model: 'gpt-6.1-sol', _openaiInstructionAssembly: {
     instructions: 'Summarize the pages.', inputMessages: normalized,
   } }).codexBody
-  const content = (wire.input as Array<{ content: Array<{ type: string; image_url?: string }> }>).flatMap(message => message.content)
+  const content = (wire.input as Array<{ role?: string; content: Array<{ type: string; image_url?: string }> }>)
+    .filter(message => message.role === 'user')
+    .flatMap(message => message.content)
   expect(content).toHaveLength(2)
   expect(content.every(part => part.type === 'input_image' && part.image_url!.startsWith('data:image/jpeg;base64,'))).toBe(true)
   expect(FileReadTool.mapToolResultToToolResultBlockParam(read.data, 'pdf-read').content).toContain('PDF pages extracted: 2 page(s)')
