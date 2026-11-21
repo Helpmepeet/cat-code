@@ -80,6 +80,7 @@ import {
   getGPTSessionGuidanceSection,
   getGPTDefaultAgentPrompt,
 } from './promptStyles/gpt.js'
+import { DIRECT_SCRIPT_TOOL_GUIDANCE } from './promptStyles/scriptToolGuidance.js'
 
 // Dead code elimination: conditional imports for feature-gated modules
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -327,7 +328,7 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
 
   const items = [
     enabledTools.has(REPL_TOOL_NAME)
-      ? `${REPL_TOOL_NAME} runs JavaScript over your granted tools and returns selected output. Use it for dependent tool workflows or filtering large intermediate results; direct coding tools remain available. Follow its discovery, state-reset, and instruction-yield contract.`
+      ? DIRECT_SCRIPT_TOOL_GUIDANCE
       : null,
     ...(providedToolSubitems.length > 0
       ? [

@@ -53,6 +53,7 @@ import {
 } from '../corePolicy.js'
 import type { OutputStyleConfig } from '../outputStyles.js'
 import type { GPTPromptFamily } from '../promptStyle.js'
+import { DIRECT_SCRIPT_TOOL_GUIDANCE } from './scriptToolGuidance.js'
 
 // Inlined to avoid the circular dependency: prompts.ts → gpt.ts → prompts.ts
 function prependBullets(items: Array<string | string[]>): string[] {
@@ -227,7 +228,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
 
   const items = [
     enabledTools.has(REPL_TOOL_NAME)
-      ? `${REPL_TOOL_NAME} runs JavaScript over your granted tools and returns selected output. Use it for dependent tool workflows or filtering large intermediate results; direct coding tools remain available. Follow its discovery, state-reset, and instruction-yield contract.`
+      ? DIRECT_SCRIPT_TOOL_GUIDANCE
       : null,
     `Read files systematically when the requested coverage requires it. Keep output bounded to what the task needs.`,
     ...(enabledTools.has(GREP_TOOL_NAME)

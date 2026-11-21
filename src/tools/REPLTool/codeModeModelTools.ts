@@ -13,3 +13,9 @@ export function codeModeModelTools(tools: Tools, enabled: boolean): Tools {
   }
   return tools.filter(tool => tool.isMcp || tool.mcpInfo || !scriptFirstTools.has(tool.name))
 }
+
+export function usesScriptForCodingTools(tools: Tools): boolean {
+  const builtIns = tools.filter(tool => !tool.isMcp && !tool.mcpInfo)
+  return builtIns.some(tool => tool.name === REPL_TOOL_NAME) &&
+    !builtIns.some(tool => !tool.shouldDefer && scriptFirstTools.has(tool.name))
+}

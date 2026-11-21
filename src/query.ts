@@ -53,7 +53,7 @@ import type {
 } from './types/message.js'
 import { logError } from './utils/log.js'
 import { retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
-import { codeModeModelTools } from './tools/REPLTool/codeModeModelTools.js'
+import { codeModeModelTools, usesScriptForCodingTools } from './tools/REPLTool/codeModeModelTools.js'
 import {
   PROMPT_TOO_LONG_ERROR_MESSAGE,
   isPromptTooLongMessage,
@@ -79,6 +79,7 @@ import {
 } from './services/api/errorUtils.js'
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { buildProviderInstructionAssembly } from './services/api/instructionAssembly.js'
+import { withScriptFirstToolGuidance } from './constants/promptStyles/scriptToolGuidance.js'
 import { withTemporaryHarnessFeedback } from './constants/temporaryHarnessFeedback.js'
 import {
   createAgentPendingMessageAttachment,
@@ -906,7 +907,11 @@ async function* queryLoop(
     // it predates the experiment and is already the control-arm baseline.
     const mediaRecoveryEnabled =
       reactiveCompact?.isReactiveCompactEnabled() ?? false
-    const requestSystemPrompt = withTemporaryHarnessFeedback(systemPrompt)
+    const requestSystemPrompt = withTemporaryHarnessFeedback(
+      usesScriptForCodingTools(modelTools)
+        ? withScriptFirstToolGuidance(systemPrompt)
+        : systemPrompt,
+    )
     if (
       !compactionResult &&
       querySource !== 'compact' &&
