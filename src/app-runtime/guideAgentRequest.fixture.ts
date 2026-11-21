@@ -54,6 +54,8 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
   return new Response(events.join(''), { headers: { 'Content-Type': 'text/event-stream', 'request-id': id } })
 }, { preconnect: () => { throw new Error('Network preconnect forbidden') } })
 
+const { setInlinePlugins } = await import('../bootstrap/state.js')
+const { getCommands } = await import('../commands.js')
 const { enableConfigs } = await import('../utils/config.js')
 const { getDefaultAppState } = await import('../state/AppStateStore.js')
 const { AgentTool } = await import('../tools/AgentTool/AgentTool.js')
@@ -62,6 +64,9 @@ const { createFileStateCacheWithSizeLimit } = await import('../utils/fileStateCa
 const { createQueryEngineAppSession } = await import('./createQueryEngineAppSession.js')
 
 enableConfigs()
+const cwd = process.cwd()
+setInlinePlugins([join(root, 'fixture-plugin')])
+const commands = await getCommands(cwd)
 const initialState = getDefaultAppState()
 let state: typeof initialState = {
   ...initialState,
@@ -72,7 +77,7 @@ let state: typeof initialState = {
   },
 }
 const session = createQueryEngineAppSession({
-  cwd: process.cwd(), commands: [], agents: [CLAUDE_CODE_GUIDE_AGENT], mcpClients: [],
+  cwd, commands, agents: [CLAUDE_CODE_GUIDE_AGENT], mcpClients: [],
   tools: [AgentTool],
   getAppState: () => state, setAppState: update => { state = update(state) },
   readFileCache: createFileStateCacheWithSizeLimit(20),

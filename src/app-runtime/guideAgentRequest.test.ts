@@ -4,14 +4,33 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-test('the guide provider request exposes feature states without raw settings', async () => {
+test('the guide provider request exposes feature states and unique skills without raw settings', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'guide-request-')))
   const config = join(root, 'config')
   const workspace = join(root, 'workspace')
+  const plugin = join(root, 'fixture-plugin')
+  const pluginManifest = join(plugin, '.claude-plugin')
+  const pluginSkill = join(plugin, 'skills', 'check-feature')
+  const projectSkill = join(workspace, '.cat-code', 'skills', 'check-project')
+  const pluginDescription = 'Check a feature provided by the synthetic plugin.'
+  const projectDescription = 'Check a feature provided by the synthetic project.'
   const envMarker = 'isolated-guide-env-marker'
   const unrelatedMarker = 'isolated-guide-unrelated-setting-marker'
   try {
-    await Promise.all([mkdir(config), mkdir(workspace)])
+    await Promise.all([
+      mkdir(config),
+      mkdir(pluginManifest, { recursive: true }),
+      mkdir(pluginSkill, { recursive: true }),
+      mkdir(projectSkill, { recursive: true }),
+    ])
+    await Promise.all([
+      writeFile(join(pluginManifest, 'plugin.json'), JSON.stringify({
+        name: 'fixture-plugin',
+        version: '1.0.0',
+      })),
+      writeFile(join(pluginSkill, 'SKILL.md'), `---\ndescription: ${pluginDescription}\n---\nCheck the plugin feature.`),
+      writeFile(join(projectSkill, 'SKILL.md'), `---\ndescription: ${projectDescription}\n---\nCheck the project feature.`),
+    ])
     await writeFile(join(config, 'settings.json'), JSON.stringify({
       env: { GUIDE_FIXTURE_ENV: envMarker },
       guideFixtureUnrelatedSetting: unrelatedMarker,
@@ -51,6 +70,8 @@ test('the guide provider request exposes feature states without raw settings', a
       expect(request).toContain('Hooks: disabled')
       expect(request).toContain('Always thinking: enabled')
       expect(request).toContain('Auto memory: disabled')
+      expect(request.split(projectDescription).length - 1).toBe(1)
+      expect(request.split(pluginDescription).length - 1).toBe(1)
     } finally {
       clearTimeout(timeout)
     }

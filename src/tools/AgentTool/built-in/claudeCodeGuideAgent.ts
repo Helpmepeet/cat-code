@@ -152,7 +152,9 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
     const contextSections: string[] = []
 
     // 1. Custom skills
-    const customCommands = commands.filter(cmd => cmd.type === 'prompt')
+    const customCommands = commands.filter(
+      cmd => cmd.type === 'prompt' && cmd.source !== 'plugin',
+    )
     if (customCommands.length > 0) {
       const commandList = customCommands
         .map(cmd => `- /${cmd.name}: ${cmd.description}`)
