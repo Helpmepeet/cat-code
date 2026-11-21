@@ -2419,6 +2419,7 @@ export function normalizeMessagesForAPI(
             message.attachment,
             planModeCapabilities,
             agentViaScript,
+            availableToolNames,
           )
           const attachmentMessage = checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
             'tengu_chair_sermon',
@@ -3735,15 +3736,20 @@ Answer the user's query comprehensively. If you need clarification, report the u
 function getAutoModeInstructions(attachment: {
   reminderType: 'full' | 'sparse'
   fileEditingTools?: string[]
-}): UserMessage[] {
+}, declaredTools?: ReadonlySet<string>): UserMessage[] {
   if (attachment.reminderType === 'sparse') {
     return getAutoModeSparseInstructions()
   }
-  return getAutoModeFullInstructions(attachment.fileEditingTools)
+  // The saved attachment can include tools now hidden by Script-first mode.
+  const fileEditingTools = attachment.fileEditingTools?.filter(
+    name => !declaredTools || declaredTools.has(name),
+  )
+  return getAutoModeFullInstructions(fileEditingTools, declaredTools?.has(BashTool.name))
 }
 
 function getAutoModeFileEditingInstruction(
   fileEditingTools: readonly string[] = [],
+  bashDeclared = false,
 ): string {
   const editToolName = [FILE_PATCH_TOOL_NAME, FileEditTool.name]
     .find(name => fileEditingTools.includes(name))
@@ -3756,25 +3762,24 @@ function getAutoModeFileEditingInstruction(
   return [
     'For authorized file modifications in Auto Mode, strongly prefer available native file-editing tools over shell-based edits.',
     toolGuidance,
-    'Shell-based edits, including Python scripts run through Bash, may incur additional security-review latency.',
+    bashDeclared
+      ? `Shell-based edits, including Python scripts run through ${BashTool.name}, may incur additional security-review latency.`
+      : 'Shell-based edits may incur additional security-review latency.',
     'Use scripts or commands when they significantly reduce the number of operations or better fit the task, such as bulk transformations, formatters, or generated files.',
     'Avoid unnecessary shell invocations for file modifications.',
   ].filter(Boolean).join(' ')
 }
 
-function getAutoModeFullInstructions(fileEditingTools?: string[]): UserMessage[] {
+function getAutoModeFullInstructions(fileEditingTools?: string[], bashDeclared?: boolean): UserMessage[] {
   const content = `## Auto Mode Active
 
 Auto mode is active. The user chose continuous, autonomous execution. You should:
 
-1. **Execute immediately** — Start implementing right away. Make reasonable assumptions and proceed on low-risk work.
-2. **Minimize interruptions** — Prefer making reasonable assumptions over asking questions for routine decisions.
-3. **Prefer action over planning** — Do not enter plan mode unless the user explicitly asks. When in doubt, start coding.
-4. **Expect course corrections** — The user may provide suggestions or course corrections at any point; treat those as normal input.
-5. **Do not take overly destructive actions** — Auto mode is not a license to destroy. Anything that deletes data or modifies shared or production systems still needs explicit user confirmation. If you reach such a decision point, ask and wait, or course correct to a safer method instead.
-6. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.
+1. **Expect course corrections** — The user may provide suggestions or course corrections at any point; treat those as normal input.
+2. **Do not take overly destructive actions** — Auto mode is not a license to destroy. Anything that deletes data or modifies shared or production systems still needs explicit user confirmation. If you reach such a decision point, ask and wait, or course correct to a safer method instead.
+3. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.
 
-${getAutoModeFileEditingInstruction(fileEditingTools)}`
+${getAutoModeFileEditingInstruction(fileEditingTools, bashDeclared)}`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
@@ -3782,7 +3787,7 @@ ${getAutoModeFileEditingInstruction(fileEditingTools)}`
 }
 
 function getAutoModeSparseInstructions(): UserMessage[] {
-  const content = `Auto mode still active (see full instructions earlier in conversation). Execute autonomously, minimize interruptions, prefer action over planning. For authorized file modifications, prefer available native editing tools; use scripts or commands when they offer a substantial advantage.`
+  const content = `Auto mode still active (see full instructions earlier in conversation). Execute autonomously. For authorized file modifications, prefer available native editing tools; use scripts or commands when they offer a substantial advantage.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
@@ -3799,6 +3804,7 @@ function normalizeAttachmentForRequest(
   attachment: Attachment,
   planModeCapabilities?: PlanModeCapabilities,
   agentViaScript = false,
+  declaredTools?: ReadonlySet<string>,
 ): UserMessage[] {
   const resumeView = getWorkspaceResumeAttachmentView(attachment)
   if (resumeView === null) return []
@@ -4226,7 +4232,7 @@ You have exited plan mode. You can now make edits, run tools, and take actions.$
       ])
     }
     case 'auto_mode': {
-      return getAutoModeInstructions(attachment)
+      return getAutoModeInstructions(attachment, declaredTools)
     }
     case 'auto_mode_exit': {
       const content = `## Exited Auto Mode
