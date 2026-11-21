@@ -25,6 +25,11 @@ const imagePath = join(root, 'workspace', 'pixel.png')
 if (scenario === 'script-image') {
   await writeFile(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP9sAAAAASUVORK5CYII=', 'base64'))
 }
+const pdfPath = join(root, 'workspace', 'page.pdf')
+if (scenario === 'script-pdf') {
+  // A one-page PDF with an empty graphics stream.
+  await writeFile(pdfPath, Buffer.from('JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA0MCA0MF0gL0NvbnRlbnRzIDQgMCBSID4+CmVuZG9iago0IDAgb2JqCjw8IC9MZW5ndGggMyA+PgpzdHJlYW0KcSBRCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDUKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjAwIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNSAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMjUyCiUlRU9GCg==', 'base64'))
+}
 if (scenario === 'notebook' || scriptNotebook) {
   const notebook = JSON.stringify({
     nbformat: 4, nbformat_minor: 5, metadata: {},
@@ -103,6 +108,8 @@ const scripts = scenario === 'auto-limit' ? [
   output({name: await first("Bash"), alias: await first("Brief"), partial: await first("bas")});`,
 ] : scenario === 'script-image' ? [
   `output(await tools.call({name:"Read",input:{file_path:${JSON.stringify(imagePath)}}}));`,
+] : scenario === 'script-pdf' ? [
+  `output(await tools.call({name:"Read",input:{file_path:${JSON.stringify(pdfPath)}}}));`,
 ] : scriptNotebook ? [
   `const result = await tools.call({name:"Read",input:{file_path:${JSON.stringify(notebookPath)}}});
   output(JSON.stringify(result.content).includes("private-" + "notebook-cell") ? "Read the cell in Script" : "Read did not contain the cell");`,

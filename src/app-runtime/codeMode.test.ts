@@ -154,6 +154,20 @@ test('Script Read sends a native PNG without exposing its bytes to Script', asyn
   })
 }, 35_000)
 
+test('Script Read delivers the supplemental PDF once, outside its guest result', async () => {
+  await withCodingEvidence('script-pdf', async (evidence, workspace) => {
+    const pdf = (await readFile(join(workspace, 'page.pdf'))).toString('base64')
+    const request: BetaMessageParam[] = evidence.modelBodies[1].messages
+    const blocks = request.flatMap(message => typeof message.content === 'string' ? [] : message.content)
+    expect(blocks.filter(block => block.type === 'document').map(block => block.source)).toEqual([
+      { type: 'base64', media_type: 'application/pdf', data: pdf },
+    ])
+    expect(JSON.stringify(request).split(pdf)).toHaveLength(2)
+    const guest = JSON.parse(scriptResultInRequest(request, 'cell-0').split('\n\n[Code Mode]')[0]!)
+    expect(guest).toMatchObject({ dataComplete: false, isError: false })
+  })
+}, 35_000)
+
 test('Script Read lets NotebookEdit change only the notebook that Script read', async () => {
   await withCodingEvidence('script-notebook', async (evidence, workspace) => {
     expect(evidence.modelBodies[0].tools.map((tool: { name: string }) => tool.name)).not.toContain('NotebookEdit')

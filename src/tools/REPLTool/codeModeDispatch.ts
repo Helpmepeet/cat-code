@@ -342,7 +342,11 @@ export class CodeModeDispatch {
             }
             const mediaData = message.toolUseResult && typeof message.toolUseResult === 'object' &&
               'type' in message.toolUseResult && ['image', 'pdf', 'parts', 'notebook'].includes(String(message.toolUseResult.type))
-            if (mediaData) result = { ...(result as Record<string, unknown>), dataComplete: false, dataUnavailable: modelImages.length ? 'Image bytes are available only to the model' : 'Structured media requires direct tool delivery' }
+            if (mediaData) result = {
+              ...(result as Record<string, unknown>),
+              dataComplete: false,
+              dataUnavailable: 'Structured media is unavailable to the interpreter',
+            }
             if (!tool.isMcp && !mediaData && (typeof paired.content === 'string' || !(paired.content ?? []).some(block => block.type !== 'text')) && message.toolUseResult !== undefined) {
               const data = projectGuestData(message.toolUseResult, 96 * 1024)
               result = {
@@ -392,6 +396,13 @@ export class CodeModeDispatch {
               this.stop('Read yielded to deliver an image to the model')
               await this.following(createUserMessage({ content: modelImages, isMeta: true }))
             }
+            continue
+          }
+          if (tool === FileReadTool && received && !failed && message.sourceToolAssistantUUID === assistant.uuid &&
+              Array.isArray(blocks) && blocks.length > 0 && blocks.every(block => block.type === 'image' || block.type === 'document')) {
+            // FileRead emits PDF documents and rendered pages as supplemental messages.
+            this.stop('Read yielded to deliver media to the model')
+            await this.following(message)
             continue
           }
           if (Array.isArray(blocks) && blocks.some(block => block.type !== 'text')) {
