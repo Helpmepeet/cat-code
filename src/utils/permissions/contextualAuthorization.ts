@@ -307,12 +307,11 @@ export async function createContextualAttempt(
       return { behavior: 'deny', message: reason, decisionReason: { type: 'other', reason } }
     }
     const workspace = workspaceInstructionsForReview(context.autoModeInstructionContext) ?? ''
-    // Audience limits apply to the roster even when they never name the tool.
-    // Treat uncertain recipients as a reason to review the actual notice.
-    const audienceLimit = /\b(?:discree\w*|discretion|privacy|visibility|embargo\w*|under wraps|in confidence|(?:your|our|my) eyes only|to yourself|between (?:the )?(?:two of us|you and me|us)|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to|leave|leaves) (?:of )?(?:this|our|the current) (?:chat|conversation|session))\b/iu
-    const standingNoticeRule = /(?:do not|never|must not|avoid|ask before|only|don't)[^.!?\n]{0,100}\b(?:announc\w*|roster|peers?|shar\w*|disclos\w*|post|publici\w*)\b|\b(?:announc\w*|roster|shar\w*|post)\b[^.!?\n]{0,80}(?:forbidden|prohibited|approval|private)/iu
+    // Workspace guides also discuss UI visibility and paths such as app/shared.
+    const audienceLimit = /\b(?:discree\w*|privacy|(?:task|work|session) visibility|visibility (?:is |stays )?(?:limited|restricted)|embargo\w*|under wraps|in confidence|(?:your|our|my) eyes only|to yourself|between (?:the )?(?:two of us|you and me|us)|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to|leave|leaves) (?:of )?(?:this|our|the current) (?:chat|conversation|session))\b/iu
+    const standingNoticeRule = /\b(?:under wraps|in confidence|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to) (?:of )?(?:this|our|the current) (?:chat|conversation|session)|visibility (?:is |stays )?(?:limited|restricted))\b|(?:do not|don't|never|must not|avoid|ask before)[^.!?\n]{0,100}\b(?:announc\w*|roster|scope notices?)\b|\b(?:announc\w*|roster|scope notices?)\b[^.!?\n]{0,80}\b(?:forbidden|prohibited|requires? approval|private)\b/iu
     if ([...operatorText, authority.assignment?.text ?? '', ...settings].some(text => audienceLimit.test(text)) ||
-        audienceLimit.test(workspace) || standingNoticeRule.test(workspace)) return undefined
+        standingNoticeRule.test(workspace)) return undefined
     actionAllowed = true
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
   }

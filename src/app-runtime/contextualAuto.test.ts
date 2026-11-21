@@ -304,6 +304,13 @@ for (const source of ['chat', 'discreet', 'policy', 'workspace']) {
   }, 30_000)
 }
 
+test('workspace maintenance instructions do not send an Announce notice to review', async () => {
+  const proof = await run('native-scope-notice-workspace-maintenance')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.postedNotices).toHaveLength(1)
+}, 30_000)
+
 for (const scenario of ['native-scope-notice', 'native-scope-notice-note', 'native-scope-notice-sensitive', 'native-scope-notice-private',
   'native-fingerprint', 'native-fingerprint-rule', 'native-scope-notice-ask', 'native-fingerprint-write',
   'native-fingerprint-parent', 'native-helper-goal', 'native-helper-symbol']) {
