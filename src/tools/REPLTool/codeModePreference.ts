@@ -38,6 +38,20 @@ async function loadPreference(sessionId: string): Promise<boolean> {
   }
 }
 
+// A fork is opened through resume, so its creator seeds the new ID before
+// publishing the transcript. Regular fresh chats do this on their first request.
+export async function saveDefaultCodeModePreference(
+  sessionId: string,
+  mayWrite?: () => boolean,
+): Promise<string | undefined> {
+  if (!CODE_MODE_DEFAULT_FOR_NEW_SESSIONS || isSessionPersistenceDisabled()) return
+  const path = preferencePath(sessionId)
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  if (mayWrite && !mayWrite()) return
+  await writeFileAtomicDurable(path, 'on\n', { mode: 0o600 })
+  return path
+}
+
 export async function initializeCodeModePreference(context: PreferenceContext): Promise<void> {
   const sessionId = getSessionId()
   if (context.getAppState().codeModePreference?.sessionId === sessionId) return
@@ -46,11 +60,11 @@ export async function initializeCodeModePreference(context: PreferenceContext): 
   let saveFailed = false
   if (fresh && enabled && !isSessionPersistenceDisabled()) {
     try {
-      const path = preferencePath(sessionId)
-      await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-      if (getSessionId() !== sessionId) return
-      assertActiveTranscriptLease(sessionId)
-      await writeFileAtomicDurable(path, 'on\n', { mode: 0o600 })
+      await saveDefaultCodeModePreference(sessionId, () => {
+        if (getSessionId() !== sessionId) return false
+        assertActiveTranscriptLease(sessionId)
+        return true
+      })
     } catch (error) {
       logError(error)
       enabled = false

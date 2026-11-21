@@ -1,9 +1,12 @@
 import type * as React from 'react'
 import { randomUUID, type UUID } from 'crypto'
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir, unlink } from 'fs/promises'
 import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
 import type { LocalJSXCommandContext } from '../../commands.js'
 import { logEvent } from '../../services/analytics/index.js'
+import { saveDefaultCodeModePreference } from '../../tools/REPLTool/codeModePreference.js'
+import { AtomicWriteDurabilityUncertainError, writeFileAtomicDurable } from '../../utils/atomicFile.js'
+import { logError } from '../../utils/log.js'
 import { beginCodeModeConversationChange } from '../../tasks/CodeModeTask.js'
 import type { LocalJSXCommandOnDone } from '../../types/command.js'
 import type {
@@ -214,11 +217,18 @@ async function createForkFromActiveConversation(
   }
   lines.push(jsonStringify(forkEntry))
 
-  // Write the fork session file
-  await writeFile(forkSessionPath, lines.join('\n') + '\n', {
-    encoding: 'utf8',
-    mode: 0o600,
+  const modePath = await saveDefaultCodeModePreference(forkSessionId).catch(error => {
+    logError(error)
+    return undefined
   })
+  try {
+    await writeFileAtomicDurable(forkSessionPath, lines.join('\n') + '\n', { mode: 0o600 })
+  } catch (error) {
+    if (modePath && !(error instanceof AtomicWriteDurabilityUncertainError)) {
+      await unlink(modePath).catch(logError)
+    }
+    throw error
+  }
 
   return {
     sessionId: forkSessionId,

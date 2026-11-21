@@ -24,6 +24,7 @@ import {
 } from '../../utils/sessionStorage.js'
 import { call, createFork, createForkBeforeUserMessage } from './branch.js'
 import { createTaskStateBase } from '../../Task.js'
+import { initializeCodeModePreference } from '../../tools/REPLTool/codeModePreference.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { CodeModeTaskState } from '../../tasks/CodeModeTask.js'
 
@@ -79,6 +80,16 @@ describe('conversation branching', () => {
     }
   })
 
+  async function reopenedCodeMode(id: UUID) {
+    switchSession(asSessionId(id))
+    let state = getDefaultAppState()
+    await initializeCodeModePreference({
+      getAppState: () => state,
+      setAppState: update => { state = update(state) },
+    })
+    return state.codeModePreference?.enabled
+  }
+
   test('HEAD forks the canonical active chain instead of file order', async () => {
     const firstUser = randomUUID()
     const firstAssistant = randomUUID()
@@ -121,6 +132,8 @@ describe('conversation branching', () => {
       firstUser,
       firstAssistant,
     ])
+    expect(await reopenedCodeMode(fork.sessionId)).toBe(true)
+    expect(await reopenedCodeMode(sessionId)).toBe(false)
   })
 
   test('repeated forks use isolated storage for title collision searches', async () => {
@@ -300,6 +313,7 @@ describe('conversation branching', () => {
     await expect(createForkBeforeUserMessage(firstUser)).rejects.toThrow(
       'Cannot branch before the first prompt',
     )
+    expect(await reopenedCodeMode(fork.sessionId)).toBe(true)
   })
 
   function messageEntry(
