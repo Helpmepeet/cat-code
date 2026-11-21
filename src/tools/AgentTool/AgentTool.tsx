@@ -63,6 +63,7 @@ import { formatAgentId } from '../../utils/agentId.js';
 import { recipientNameKey } from '../../utils/recipientIdentity.js';
 import { allocateTeamRecipient, RecipientConflictError, tombstoneFailedRecipient, transitionTeamRecipient } from '../../utils/swarm/teamHelpers.js';
 import { setAgentColor } from './agentColorManager.js';
+import { getVisibleAgentDefinitions } from './agentDefinitionVisibility.js';
 import { runWithAgentLifecycleOwnership } from './agentLifecycleOwnership.js';
 import { agentToolResultSchema, prepareBackgroundAgentHandoff, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, filterToolsForAgent, finalizeAgentTool, formatForkWorkerResultForNotification, getAgentContinuationCapabilities, getForkWorkerResultOutputFormat, getLastToolUseName, runAsyncAgentLifecycle, type AgentContinuationMetadata } from './agentToolUtils.js';
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
@@ -70,7 +71,7 @@ import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES }
 import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEnabled, isInForkChild } from './forkSubagent.js';
 import { resolveRequestProvider, type APIProvider } from '../../utils/model/providers.js';
 import type { AgentDefinition } from './loadAgentsDir.js';
-import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
+import { hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
 import { runAgent } from './runAgent.js';
 import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorMessage, renderToolUseMessage, renderToolUseProgressMessage, renderToolUseRejectedMessage, renderToolUseTag, userFacingName, userFacingNameBackgroundColor } from './UI.js';
@@ -665,21 +666,7 @@ export const AgentTool = buildTool({
   }) {
     const toolPermissionContext = await getToolPermissionContext();
 
-    // Get MCP servers that have tools available
-    const mcpServersWithTools: string[] = [];
-    for (const tool of tools) {
-      if (tool.name?.startsWith('mcp__')) {
-        const parts = tool.name.split('__');
-        const serverName = parts[1];
-        if (serverName && !mcpServersWithTools.includes(serverName)) {
-          mcpServersWithTools.push(serverName);
-        }
-      }
-    }
-
-    // Filter agents: first by MCP requirements, then by permission rules
-    const agentsWithMcpRequirementsMet = filterAgentsByMcpRequirements(agents, mcpServersWithTools);
-    const filteredAgents = filterDeniedAgents(agentsWithMcpRequirementsMet, toolPermissionContext, AGENT_TOOL_NAME);
+    const filteredAgents = getVisibleAgentDefinitions(agents, tools, toolPermissionContext, allowedAgentTypes);
 
     // Use inline env check instead of coordinatorModule to avoid circular
     // dependency issues during test module loading.
@@ -692,7 +679,7 @@ export const AgentTool = buildTool({
     return await getPrompt(
       filteredAgents,
       isCoordinator,
-      allowedAgentTypes,
+      undefined,
       provider,
       capabilities,
     );

@@ -116,7 +116,6 @@ import type {
 } from 'src/entrypoints/agentSdkTypes.js'
 import { EXPLORE_AGENT } from 'src/tools/AgentTool/built-in/exploreAgent.js'
 import { PLAN_AGENT } from 'src/tools/AgentTool/built-in/planAgent.js'
-import { areExplorePlanAgentsEnabled } from 'src/tools/AgentTool/builtInAgents.js'
 import { AGENT_TOOL_NAME } from 'src/tools/AgentTool/constants.js'
 import { ASK_USER_QUESTION_TOOL_NAME, QUESTION_ANSWER_BOUNDARY } from 'src/tools/AskUserQuestionTool/prompt.js'
 import { BashTool } from 'src/tools/BashTool/BashTool.js'
@@ -133,6 +132,8 @@ import {
 } from 'src/tools/FilePatchTool/constants.js'
 import { GLOB_TOOL_NAME } from 'src/tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from 'src/tools/GrepTool/prompt.js'
+import { REPL_TOOL_NAME } from 'src/tools/REPLTool/constants.js'
+import { TOOL_SEARCH_TOOL_NAME } from 'src/tools/ToolSearchTool/constants.js'
 import type { DeepImmutable } from 'src/types/utils.js'
 import { getStrictToolResultPairing } from '../bootstrap/state.js'
 import type { SpinnerMode } from '../components/Spinner.js'
@@ -159,7 +160,6 @@ import { TASK_OUTPUT_TOOL_NAME } from '../tools/TaskOutputTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from '../tools/TaskUpdateTool/constants.js'
 import type { PermissionMode } from '../types/permissions.js'
 import { normalizeToolInput, normalizeToolInputForAPI } from './api.js'
-import { getCurrentProjectConfig } from './config.js'
 import { logAntError, logForDebugging } from './debug.js'
 import { stripIdeContextTags } from './displayTags.js'
 import { hasEmbeddedSearchTools } from './embeddedTools.js'
@@ -2129,6 +2129,7 @@ export function normalizeMessagesForAPI(
   messages: Message[],
   tools: Tools = [],
   provider: APIProvider = getAPIProvider(),
+  planModeCapabilities?: PlanModeCapabilities,
 ): (UserMessage | AssistantMessage)[] {
   // Build set of available tool names for filtering unavailable tool references
   const availableToolNames = new Set(tools.map(t => t.name))
@@ -2413,8 +2414,9 @@ export function normalizeMessagesForAPI(
           return
         }
         case 'attachment': {
-          const rawAttachmentMessage = normalizeAttachmentForAPI(
+          const rawAttachmentMessage = normalizeAttachmentForRequest(
             message.attachment,
+            planModeCapabilities,
           )
           const attachmentMessage = checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
             'tengu_chair_sermon',
@@ -3390,19 +3392,50 @@ export function wrapMessagesInSystemReminder(
   })
 }
 
+export type PlanModeCapabilities = {
+  toolNames: ReadonlySet<string>
+  agentTypes?: ReadonlySet<string>
+  canDiscoverPlanApproval: boolean
+}
+
 function getPlanModeInstructions(attachment: {
   reminderType: 'full' | 'sparse'
   isSubAgent?: boolean
   planFilePath: string
   planExists: boolean
-}): UserMessage[] {
+}, capabilities?: PlanModeCapabilities): UserMessage[] {
   if (attachment.isSubAgent) {
     return getPlanModeV2SubAgentInstructions(attachment)
   }
   if (attachment.reminderType === 'sparse') {
-    return getPlanModeV2SparseInstructions(attachment)
+    return getPlanModeV2SparseInstructions(attachment, capabilities)
   }
-  return getPlanModeV2Instructions(attachment)
+  return getPlanModeV2Instructions(attachment, capabilities)
+}
+
+function getPlanFileInfo(
+  attachment: { planFilePath: string; planExists: boolean },
+  capabilities?: PlanModeCapabilities,
+): string {
+  const { planFilePath, planExists } = attachment
+  const fileState = planExists
+    ? `A plan file already exists at ${planFilePath}. You can read it and make incremental edits`
+    : `No plan file exists yet. You should create your plan at ${planFilePath}`
+  const candidateTools = planExists
+    ? [FileEditTool.name, FILE_PATCH_TOOL_NAME, FileWriteTool.name]
+    : [FileWriteTool.name, FILE_PATCH_TOOL_NAME]
+  const directTool = candidateTools.find(name => capabilities?.toolNames.has(name))
+  if (directTool) return `${fileState} using the ${directTool} tool.`
+  const route = capabilities?.toolNames.has(REPL_TOOL_NAME)
+    ? `using the file tools available through ${REPL_TOOL_NAME}`
+    : 'using an available file-writing tool'
+  return `${fileState} ${route}. If no available tool can write the plan file, report that blocker and stop.`
+}
+
+function getPlanModeApprovalFallback(capabilities?: PlanModeCapabilities): string {
+  return capabilities?.canDiscoverPlanApproval
+    ? `When the plan file is ready, use ${TOOL_SEARCH_TOOL_NAME} to find the plan approval tool, then call it.`
+    : 'If the plan approval tool is unavailable, report the blocker and stay in plan mode.'
 }
 
 // --
@@ -3462,48 +3495,29 @@ function getPlanPhase4Section(): string {
 }
 
 function getPlanModeV2Instructions(attachment: {
-  isSubAgent?: boolean
-  planFilePath?: string
-  planExists?: boolean
-}): UserMessage[] {
-  if (attachment.isSubAgent) {
-    return []
-  }
-
+  planFilePath: string
+  planExists: boolean
+}, capabilities?: PlanModeCapabilities): UserMessage[] {
   // When interview phase is enabled, use the iterative workflow.
   if (isPlanModeInterviewPhaseEnabled()) {
-    return getPlanModeInterviewInstructions(attachment)
+    return getPlanModeInterviewInstructions(attachment, capabilities)
   }
 
-  const agentCount = getPlanModeV2AgentCount()
-  const exploreAgentCount = getPlanModeV2ExploreAgentCount()
-  const planFileInfo = attachment.planExists
-    ? `A plan file already exists at ${attachment.planFilePath}. You can read it and make incremental edits using the ${FileEditTool.name} tool.`
-    : `No plan file exists yet. You should create your plan at ${attachment.planFilePath} using the ${FileWriteTool.name} tool.`
+  const canExplore = capabilities?.agentTypes?.has(EXPLORE_AGENT.agentType)
+  const canPlan = capabilities?.agentTypes?.has(PLAN_AGENT.agentType)
+  const canAsk = capabilities?.toolNames.has(ASK_USER_QUESTION_TOOL_NAME)
+  const canExit = capabilities?.toolNames.has(ExitPlanModeV2Tool.name)
 
-  const content = `Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
-
-## Plan File Info:
-${planFileInfo}
-You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
-
-## Plan Workflow
-
-### Phase 1: Initial Understanding
-Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the ${EXPLORE_AGENT.agentType} subagent type.
-
-1. Focus on understanding the user's request and the code associated with their request. Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist.
-
+  const exploreAgentCount = canExplore ? getPlanModeV2ExploreAgentCount() : 0
+  const exploreGuidance = canExplore ? `
 2. **Launch up to ${exploreAgentCount} ${EXPLORE_AGENT.agentType} agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase.
    - Use 1 agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.
    - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
    - Quality over quantity - ${exploreAgentCount} agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
-   - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigating testing patterns
+   - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigating testing patterns` : ''
 
-### Phase 2: Design
-Goal: Design an implementation approach.
-
-Launch ${PLAN_AGENT.agentType} agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
+  const agentCount = canPlan ? getPlanModeV2AgentCount() : 0
+  const designGuidance = canPlan ? `Launch ${PLAN_AGENT.agentType} agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
 
 You can launch up to ${agentCount} agent(s) in parallel.
 
@@ -3530,44 +3544,73 @@ Example perspectives by task type:
 In the agent prompt:
 - Provide comprehensive background context from Phase 1 exploration including filenames and code path traces
 - Describe requirements and constraints
-- Request a detailed implementation plan
+- Request a detailed implementation plan` : 'Design the implementation yourself using the user’s intent and your exploration results from Phase 1.'
+
+  const clarification = canAsk
+    ? `Use ${ASK_USER_QUESTION_TOOL_NAME} to clarify any remaining questions with the user`
+    : 'Ask the user directly to clarify any remaining questions'
+  const approvalTitle = canExit ? `Call ${ExitPlanModeV2Tool.name}` : 'Plan Approval'
+  const approval = canExit
+    ? `Once the answers your plan depends on have arrived and the final plan file is ready, call ${ExitPlanModeV2Tool.name} to request approval. Asking a question is not receiving its answer.`
+    : getPlanModeApprovalFallback(capabilities)
+  const waitForAnswers = canAsk
+    ? `End your turn after asking with ${ASK_USER_QUESTION_TOOL_NAME} when the plan depends on the answer${canExit ? `, or call ${ExitPlanModeV2Tool.name} when ready for approval` : ''}. ${QUESTION_ANSWER_BOUNDARY}`
+    : 'End your turn after asking when the plan depends on the answer.'
+  const approvalBoundary = canAsk && canExit
+    ? `Use ${ASK_USER_QUESTION_TOOL_NAME} ONLY to clarify requirements or choose between approaches. Use ${ExitPlanModeV2Tool.name} to request plan approval. Do NOT ask about plan approval in any other way - no text questions, no AskUserQuestion. Phrases like "Is this plan okay?", "Should I proceed?", "How does this plan look?", "Any changes before we start?", or similar MUST use ${ExitPlanModeV2Tool.name}.`
+    : `Do NOT ask about plan approval via text${canAsk ? ` or ${ASK_USER_QUESTION_TOOL_NAME}` : ''}.`
+  const content = `Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
+
+## Plan File Info:
+${getPlanFileInfo(attachment, capabilities)}
+You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
+
+## Plan Workflow
+
+### Phase 1: Initial Understanding
+Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions.${canExplore ? ` Critical: In this phase you should only use the ${EXPLORE_AGENT.agentType} subagent type.` : ''}
+
+1. Focus on understanding the user's request and the code associated with their request. Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist.
+${exploreGuidance}
+
+### Phase 2: Design
+Goal: Design an implementation approach.
+
+${designGuidance}
 
 ### Phase 3: Review
 Goal: Review the plan(s) from Phase 2 and ensure alignment with the user's intentions.
-1. Read the critical files identified by agents to deepen your understanding
+1. Read the critical files identified ${canExplore || canPlan ? 'by agents ' : ''}to deepen your understanding
 2. Ensure that the plans align with the user's original request
-3. Use ${ASK_USER_QUESTION_TOOL_NAME} to clarify any remaining questions with the user
+3. ${clarification}
 
 ${getPlanPhase4Section()}
 
-### Phase 5: Call ${ExitPlanModeV2Tool.name}
-Once the answers your plan depends on have arrived and the final plan file is ready, call ${ExitPlanModeV2Tool.name} to request approval. Asking a question is not receiving its answer.
-End your turn after asking with ${ASK_USER_QUESTION_TOOL_NAME} when the plan depends on the answer, or call ${ExitPlanModeV2Tool.name} when ready for approval. ${QUESTION_ANSWER_BOUNDARY}
+### Phase 5: ${approvalTitle}
+${approval}
+${waitForAnswers}
 
-**Important:** Use ${ASK_USER_QUESTION_TOOL_NAME} ONLY to clarify requirements or choose between approaches. Use ${ExitPlanModeV2Tool.name} to request plan approval. Do NOT ask about plan approval in any other way - no text questions, no AskUserQuestion. Phrases like "Is this plan okay?", "Should I proceed?", "How does this plan look?", "Any changes before we start?", or similar MUST use ${ExitPlanModeV2Tool.name}.
+**Important:** ${approvalBoundary}
 
-NOTE: At any point in time through this workflow you should feel free to ask the user questions or clarifications using the ${ASK_USER_QUESTION_TOOL_NAME} tool. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.`
+NOTE: At any point in time through this workflow you should feel free to ask the user questions or clarifications${canAsk ? ` using the ${ASK_USER_QUESTION_TOOL_NAME} tool` : ''}. Don't make large assumptions about user intent. The goal is to present a well researched plan to the user, and tie any loose ends before implementation begins.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
   ])
 }
 
-function getReadOnlyToolNames(): string {
+function getPlanModeReadGuidance(capabilities?: PlanModeCapabilities): string {
   // Ant-native builds alias find/grep to embedded bfs/ugrep and remove the
   // dedicated Glob/Grep tools from the registry, so point at find/grep via
   // Bash instead.
-  const tools = hasEmbeddedSearchTools()
-    ? [FILE_READ_TOOL_NAME, '`find`', '`grep`']
-    : [FILE_READ_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME]
-  const { allowedTools } = getCurrentProjectConfig()
-  // allowedTools is a tool-name allowlist. find/grep are shell commands, not
-  // tool names, so the filter is only meaningful for the non-embedded branch.
-  const filtered =
-    allowedTools && allowedTools.length > 0 && !hasEmbeddedSearchTools()
-      ? tools.filter(t => allowedTools.includes(t))
-      : tools
-  return filtered.join(', ')
+  const tools = [FILE_READ_TOOL_NAME, GLOB_TOOL_NAME, GREP_TOOL_NAME]
+    .filter(name => capabilities?.toolNames.has(name))
+  if (capabilities?.toolNames.has(BashTool.name) && hasEmbeddedSearchTools()) {
+    tools.push('`find` and `grep` through Bash')
+  }
+  if (tools.length > 0) return `Use ${tools.join(', ')} to read code.`
+  if (capabilities?.toolNames.has(REPL_TOOL_NAME)) return `Use the available read-only tools through ${REPL_TOOL_NAME} to read code.`
+  return 'Use available read-only tools to read code.'
 }
 
 /**
@@ -3578,17 +3621,18 @@ function getReadOnlyToolNames(): string {
  * 3. Use AskUserQuestion throughout to clarify and gather input
  */
 function getPlanModeInterviewInstructions(attachment: {
-  planFilePath?: string
-  planExists?: boolean
-}): UserMessage[] {
-  const planFileInfo = attachment.planExists
-    ? `A plan file already exists at ${attachment.planFilePath}. You can read it and make incremental edits using the ${FileEditTool.name} tool.`
-    : `No plan file exists yet. You should create your plan at ${attachment.planFilePath} using the ${FileWriteTool.name} tool.`
+  planFilePath: string
+  planExists: boolean
+}, capabilities?: PlanModeCapabilities): UserMessage[] {
+  const canAsk = capabilities?.toolNames.has(ASK_USER_QUESTION_TOOL_NAME)
+  const canExplore = capabilities?.agentTypes?.has(EXPLORE_AGENT.agentType)
+  const canExit = capabilities?.toolNames.has(ExitPlanModeV2Tool.name)
+  const ask = canAsk ? `use ${ASK_USER_QUESTION_TOOL_NAME}` : 'ask the user directly'
 
   const content = `Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
 
 ## Plan File Info:
-${planFileInfo}
+${getPlanFileInfo(attachment, capabilities)}
 
 ## Iterative Planning Workflow
 
@@ -3598,9 +3642,9 @@ You are pair-planning with the user. Explore the code to build context, ask the 
 
 Repeat this cycle until the plan is complete:
 
-1. **Explore** — Use ${getReadOnlyToolNames()} to read code. Look for existing functions, utilities, and patterns to reuse.${areExplorePlanAgentsEnabled() ? ` You can use the ${EXPLORE_AGENT.agentType} agent type to parallelize complex searches without filling your context, though for straightforward queries direct tools are simpler.` : ''}
+1. **Explore** — ${getPlanModeReadGuidance(capabilities)} Look for existing functions, utilities, and patterns to reuse.${canExplore ? ` You can use the ${EXPLORE_AGENT.agentType} agent type to parallelize complex searches without filling your context, though for straightforward queries direct tools are simpler.` : ''}
 2. **Update the plan file** — After each discovery, immediately capture what you learned. Don't wait until the end.
-3. **Ask the user** — When you hit an ambiguity or decision you can't resolve from code alone, use ${ASK_USER_QUESTION_TOOL_NAME}. ${QUESTION_ANSWER_BOUNDARY} Return to step 1 only after an answer resolves that ambiguity.
+3. **Ask the user** — When you hit an ambiguity or decision you can't resolve from code alone, ${ask}.${canAsk ? ` ${QUESTION_ANSWER_BOUNDARY}` : ''} Return to step 1 only after an answer resolves that ambiguity.
 
 ### First Turn
 
@@ -3609,7 +3653,7 @@ Start by quickly scanning a few key files to form an initial understanding of th
 ### Asking Good Questions
 
 - Never ask what you could find out by reading the code
-- Batch related questions together (use multi-question ${ASK_USER_QUESTION_TOOL_NAME} calls)
+- Batch related questions together${canAsk ? ` (use multi-question ${ASK_USER_QUESTION_TOOL_NAME} calls)` : ''}
 - Focus on things only the user can answer: requirements, preferences, tradeoffs, edge case priorities
 - Scale depth to the task — a vague feature request needs many rounds; a focused bug fix may need one or none
 
@@ -3624,15 +3668,15 @@ Your plan file should be divided into clear sections using markdown headers, bas
 
 ### When to Converge
 
-Your plan is ready when you've addressed all ambiguities and it covers: what to change, which files to modify, what existing code to reuse (with file paths), and how to verify the changes. Call ${ExitPlanModeV2Tool.name} when the plan is ready for approval.
+Your plan is ready when you've addressed all ambiguities and it covers: what to change, which files to modify, what existing code to reuse (with file paths), and how to verify the changes. ${canExit ? `Call ${ExitPlanModeV2Tool.name} when the plan is ready for approval.` : getPlanModeApprovalFallback(capabilities)}
 
 ### Ending Your Turn
 
 End your turn for either of these reasons:
-- You asked with ${ASK_USER_QUESTION_TOOL_NAME} and need its answer. Include the question in your final message. ${QUESTION_ANSWER_BOUNDARY}
-- Calling ${ExitPlanModeV2Tool.name} when the plan is ready for approval
+- You asked${canAsk ? ` with ${ASK_USER_QUESTION_TOOL_NAME}` : ''} and need its answer. Include the question in your final message.${canAsk ? ` ${QUESTION_ANSWER_BOUNDARY}` : ''}
+- ${canExit ? `Calling ${ExitPlanModeV2Tool.name} when the plan is ready for approval` : 'Calling the plan approval tool or reporting that it is unavailable'}
 
-**Important:** Use ${ExitPlanModeV2Tool.name} to request plan approval. Do NOT ask about plan approval via text or AskUserQuestion.`
+**Important:** ${canExit ? `Use ${ExitPlanModeV2Tool.name} to request plan approval. ` : ''}Do NOT ask about plan approval via text${canAsk ? ` or ${ASK_USER_QUESTION_TOOL_NAME}` : ''}.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
@@ -3641,12 +3685,17 @@ End your turn for either of these reasons:
 
 function getPlanModeV2SparseInstructions(attachment: {
   planFilePath: string
-}): UserMessage[] {
+}, capabilities?: PlanModeCapabilities): UserMessage[] {
   const workflowDescription = isPlanModeInterviewPhaseEnabled()
     ? 'Follow iterative workflow: explore codebase, interview user, write to plan incrementally.'
     : 'Follow 5-phase workflow.'
 
-  const content = `Plan mode still active (see full instructions earlier in conversation). Read-only except plan file (${attachment.planFilePath}). ${workflowDescription} Ask clarifying questions with ${ASK_USER_QUESTION_TOOL_NAME}, then end your turn if waiting for an answer. ${QUESTION_ANSWER_BOUNDARY} Use ${ExitPlanModeV2Tool.name} for plan approval. Never ask about plan approval via text or AskUserQuestion.`
+  const canAsk = capabilities?.toolNames.has(ASK_USER_QUESTION_TOOL_NAME)
+  const guidance = canAsk ? ` with ${ASK_USER_QUESTION_TOOL_NAME}` : ' directly'
+  const approval = capabilities?.toolNames.has(ExitPlanModeV2Tool.name)
+    ? `Use ${ExitPlanModeV2Tool.name} for plan approval.`
+    : getPlanModeApprovalFallback(capabilities)
+  const content = `Plan mode still active (see full instructions earlier in conversation). Read-only except plan file (${attachment.planFilePath}). ${workflowDescription} Ask clarifying questions${guidance}, then end your turn if waiting for an answer.${canAsk ? ` ${QUESTION_ANSWER_BOUNDARY}` : ''} ${approval} Never ask about plan approval via text${canAsk ? ` or ${ASK_USER_QUESTION_TOOL_NAME}` : ''}.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
@@ -3732,6 +3781,13 @@ function getAutoModeSparseInstructions(): UserMessage[] {
 
 export function normalizeAttachmentForAPI(
   attachment: Attachment,
+): UserMessage[] {
+  return normalizeAttachmentForRequest(attachment)
+}
+
+function normalizeAttachmentForRequest(
+  attachment: Attachment,
+  planModeCapabilities?: PlanModeCapabilities,
 ): UserMessage[] {
   const resumeView = getWorkspaceResumeAttachmentView(attachment)
   if (resumeView === null) return []
@@ -4122,9 +4178,12 @@ Read the team config to discover your teammates' names. Check the task list peri
       ])
     }
     case 'plan_mode': {
-      return getPlanModeInstructions(attachment)
+      return getPlanModeInstructions(attachment, planModeCapabilities)
     }
     case 'plan_mode_reentry': {
+      const approval = planModeCapabilities?.toolNames.has(ExitPlanModeV2Tool.name)
+        ? `before calling ${ExitPlanModeV2Tool.name}`
+        : 'before requesting approval'
       const content = `## Re-entering Plan Mode
 
 You are returning to plan mode after having previously exited it. A plan file exists at ${attachment.planFilePath} from your previous planning session.
@@ -4135,7 +4194,7 @@ You are returning to plan mode after having previously exited it. A plan file ex
 3. Decide how to proceed:
    - **Different task**: If the user's request is for a different task—even if it's similar or related—start fresh by overwriting the existing plan
    - **Same task, continuing**: If this is explicitly a continuation or refinement of the exact same task, modify the existing plan while cleaning up outdated or irrelevant sections
-4. Continue on with the plan process and most importantly you should always edit the plan file one way or the other before calling ${ExitPlanModeV2Tool.name}
+4. Continue on with the plan process and most importantly you should always edit the plan file one way or the other ${approval}
 
 Treat this as a fresh planning session. Do not assume the existing plan is relevant without evaluating it first.`
 

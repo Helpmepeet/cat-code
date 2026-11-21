@@ -42,7 +42,10 @@ import {
   type Tools,
   toolMatchesName,
 } from '../../Tool.js'
+import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { getVisibleAgentDefinitions } from '../../tools/AgentTool/agentDefinitionVisibility.js'
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js'
+import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../../tools/ExitPlanModeTool/constants.js'
 import {
   type ConnectorTextBlock,
   type ConnectorTextDelta,
@@ -62,6 +65,7 @@ import {
   splitSysPromptPrefix,
   toolToAPISchema,
 } from '../../utils/api.js'
+import { getAnnouncedAgentTypes } from '../../utils/attachments.js'
 import { getOauthAccountInfo } from '../../utils/auth.js'
 import {
   getBedrockExtraBodyParamsBetas,
@@ -87,6 +91,7 @@ import {
   ensureToolResultPairing,
   normalizeContentFromAPI,
   normalizeMessagesForAPI,
+  type PlanModeCapabilities,
   stripAdvisorBlocks,
   stripCallerFieldFromAssistantMessage,
   stripToolReferenceBlocksFromUserMessage,
@@ -98,6 +103,7 @@ import {
   getSmallFastModelForProvider,
   isNonCustomOpusModel,
 } from '../../utils/model/model.js'
+import { getDenyRuleForTool } from '../../utils/permissions/permissions.js'
 import { recordRunFacts } from '../../utils/sessionStorage.js'
 import { sleep } from '../../utils/sleep.js'
 import {
@@ -1553,10 +1559,43 @@ async function* queryModel(
     requestProvider === 'openai' && openAIInstructionAssembly
       ? openAIInstructionAssembly.inputMessages
       : messages
+  let planModeCapabilities: PlanModeCapabilities | undefined
+  if (providerMessages.some(message => {
+    if (message.type !== 'attachment') return false
+    const { attachment } = message
+    return typeof attachment === 'object' && attachment !== null && 'type' in attachment && (
+      attachment.type === 'plan_mode_reentry' ||
+      (attachment.type === 'plan_mode' && !('isSubAgent' in attachment && attachment.isSubAgent))
+    )
+  })) {
+    const permissionContext = await options.getToolPermissionContext()
+    const callableTools = filteredTools.filter(tool => !getDenyRuleForTool(permissionContext, tool))
+    const toolNames = new Set(callableTools.map(tool => tool.name))
+    const canDiscoverPlanApproval = toolNames.has(TOOL_SEARCH_TOOL_NAME) &&
+      deferredToolNames.has(EXIT_PLAN_MODE_V2_TOOL_NAME) &&
+      tools.some(tool => tool.name === EXIT_PLAN_MODE_V2_TOOL_NAME && !getDenyRuleForTool(permissionContext, tool))
+    planModeCapabilities = { toolNames, canDiscoverPlanApproval }
+    if (callableTools.some(tool => toolMatchesName(tool, AGENT_TOOL_NAME))) {
+      const agents = getVisibleAgentDefinitions(
+        options.agents,
+        tools,
+        permissionContext,
+        options.allowedAgentTypes,
+      )
+      const agentSchema = toolSchemas.find(schema => 'name' in schema && schema.name === AGENT_TOOL_NAME)
+      const description = agentSchema && 'description' in agentSchema ? agentSchema.description : undefined
+      const announcedTypes = getAnnouncedAgentTypes(providerMessages)
+      // The inline Agent description can be cached across roster changes.
+      planModeCapabilities.agentTypes = new Set(agents.map(agent => agent.agentType).filter(type =>
+        announcedTypes.has(type) || description?.includes(`\n- ${type}: `),
+      ))
+    }
+  }
   let messagesForAPI = normalizeMessagesForAPI(
     providerMessages,
     filteredTools,
     requestProvider,
+    planModeCapabilities,
   )
   queryCheckpoint('query_message_normalization_end')
 

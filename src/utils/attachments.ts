@@ -126,14 +126,12 @@ import {
   isFileWithinReadSizeLimit,
 } from './file.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
-import { filterAgentsByMcpRequirements } from '../tools/AgentTool/loadAgentsDir.js'
+import { getVisibleAgentDefinitions } from '../tools/AgentTool/agentDefinitionVisibility.js'
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import {
   formatAgentLine,
   shouldInjectAgentListInMessages,
 } from '../tools/AgentTool/prompt.js'
-import { filterDeniedAgents } from './permissions/permissions.js'
-import { mcpInfoFromString } from '../services/mcp/mcpStringUtils.js'
 import {
   matchingRuleForInput,
   pathInAllowedWorkingPath,
@@ -1602,6 +1600,18 @@ export function getDeferredToolsDeltaAttachment(
   return [{ type: 'deferred_tools_delta', ...delta }]
 }
 
+export function getAnnouncedAgentTypes(messages: readonly Message[]): Set<string> {
+  const announced = new Set<string>()
+  for (const message of messages) {
+    if (message.type !== 'attachment') continue
+    const attachment = message.attachment as Attachment | undefined
+    if (attachment?.type !== 'agent_listing_delta') continue
+    for (const type of attachment.addedTypes) announced.add(type)
+    for (const type of attachment.removedTypes) announced.delete(type)
+  }
+  return announced
+}
+
 /**
  * Diff the current filtered agent pool against what's already been announced
  * in this conversation (reconstructed from prior agent_listing_delta
@@ -1631,31 +1641,13 @@ export function getAgentListingDeltaAttachment(
   const { activeAgents, allowedAgentTypes } =
     toolUseContext.options.agentDefinitions
 
-  // Mirror AgentTool.prompt()'s filtering: MCP requirements → deny rules →
-  // allowedAgentTypes restriction. Keep this in sync with AgentTool.tsx.
-  const mcpServers = new Set<string>()
-  for (const tool of toolUseContext.options.tools) {
-    const info = mcpInfoFromString(tool.name)
-    if (info) mcpServers.add(info.serverName)
-  }
-  const permissionContext = toolUseContext.getAppState().toolPermissionContext
-  let filtered = filterDeniedAgents(
-    filterAgentsByMcpRequirements(activeAgents, [...mcpServers]),
-    permissionContext,
-    AGENT_TOOL_NAME,
+  const filtered = getVisibleAgentDefinitions(
+    activeAgents,
+    toolUseContext.options.tools,
+    toolUseContext.getAppState().toolPermissionContext,
+    allowedAgentTypes,
   )
-  if (allowedAgentTypes) {
-    filtered = filtered.filter(a => allowedAgentTypes.includes(a.agentType))
-  }
-
-  // Reconstruct announced set from prior deltas in the transcript.
-  const announced = new Set<string>()
-  for (const msg of messages ?? []) {
-    if (msg.type !== 'attachment') continue
-    if (msg.attachment.type !== 'agent_listing_delta') continue
-    for (const t of msg.attachment.addedTypes) announced.add(t)
-    for (const t of msg.attachment.removedTypes) announced.delete(t)
-  }
+  const announced = getAnnouncedAgentTypes(messages ?? [])
 
   const currentTypes = new Set(filtered.map(a => a.agentType))
   const added = filtered.filter(a => !announced.has(a.agentType))
