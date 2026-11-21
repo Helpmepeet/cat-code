@@ -118,9 +118,9 @@ export class InterruptedToolRun {
     while (true) {
     while (!next.done) {
       const message = next.value.message
-      if (message) {
-        // Backpressure keeps a failed/unavailable receipt writer from accumulating
-        // an unbounded queue of progress. A replacement owner adopts the same receipt.
+      // Progress belongs to the foreground UI and has no transcript UUID on disk.
+      // Waiting for it to become durable would strand the tool result behind it.
+      if (message && message.type !== 'progress') {
         while (true) {
           const sink = this.sink
           const generation = this.generation

@@ -294,6 +294,54 @@ for (const mode of ['late', 'writer-failure', 'replacement', 'cancel', 'batch-ca
 }
 
 
+test('Stop during an MCP call admits the next chat message after the real error is saved', async () => {
+  const started = deferred(), finish = deferred()
+  const callId = 'interrupted-mcp-call'
+  let calls = 0, requests = 0
+  const tool = buildTool({
+    name: 'mcp__fixture__inspect', isMcp: true, inputSchema: z.object({}),
+    description: async () => 'fixture', prompt: async () => 'fixture',
+    maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+    async call(_input, context, _canUse, _parent, onProgress) {
+      calls++
+      started.resolve()
+      await finish.promise
+      expect(context.abortController.signal.aborted).toBe(true)
+      onProgress?.({ toolUseID: callId, data: {
+        type: 'mcp_progress', status: 'failed', serverName: 'fixture', toolName: 'inspect',
+      } })
+      throw new Error('fixture MCP operation was aborted')
+    },
+    mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: '' }),
+  })
+  const provider = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* (params) {
+    if (++requests === 1) yield assistant([{ type: 'tool_use', id: callId, name: tool.name, input: {} }])
+    else {
+      expect(JSON.stringify(params.messages)).toContain('fixture MCP operation was aborted')
+      yield assistant([{ type: 'text', text: 'next input accepted' }])
+    }
+  })
+  const controller = createRuntimeBackedAppSession({ queryEngineConfig: engineConfig([tool]) })
+  try {
+    const turn = controller.submit('run the tool')
+    await within(started.promise)
+    controller.abort('Stop')
+    await within(turn)
+    expect(controller.canStartQueuedTurn()).toBe(false)
+    finish.resolve()
+    await within(getInterruptedToolRun(bootstrap.getSessionId()).whenSettled())
+    const saved = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()))
+    const results = [...saved.messages.values()].flatMap(row =>
+      row.type === 'user' && Array.isArray(row.message.content)
+        ? row.message.content.filter(block => block.type === 'tool_result' && block.tool_use_id === callId) : [])
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ is_error: true })
+    await within(controller.submit('next message'))
+    expect(requests).toBe(2)
+    expect(calls).toBe(1)
+  } finally { finish.resolve(); controller.dispose(); provider.mockRestore() }
+})
+
 for (const delivery of ['default', 'delayed', 'failure'] as const) test(`ask retains headless late receipts across inputs: ${delivery}`, async () => {
   const started = deferred(), complete = deferred(), publishing = deferred(), release = deferred()
   const abortController = new AbortController()
