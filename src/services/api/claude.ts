@@ -1581,7 +1581,7 @@ async function* queryModel(
     const { attachment } = message
     return typeof attachment === 'object' && attachment !== null && 'type' in attachment && (
       attachment.type === 'plan_mode_reentry' ||
-      (attachment.type === 'plan_mode' && !('isSubAgent' in attachment && attachment.isSubAgent))
+      attachment.type === 'plan_mode'
     )
   })) {
     const permissionContext = await options.getToolPermissionContext()

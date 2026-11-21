@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-type Scenario = 'script' | 'script-specialists' | 'reentry' | 'specialists' | 'restricted' | 'deferred' | 'cached'
-type Message = { content?: string | { text?: string }[] }
+type Scenario = 'script' | 'script-specialists' | 'reentry' | 'specialists' | 'restricted' | 'deferred' | 'cached' | 'plan-worker'
+type Message = { output?: string; content?: string | { text?: string }[] }
 
 async function capture(scenario: Scenario): Promise<{
   request: {
@@ -13,6 +13,7 @@ async function capture(scenario: Scenario): Promise<{
     input?: Message[]
   }
   planPath: string
+  parentReceipt?: string
 }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'plan-mode-reminder-')))
   try {
@@ -22,7 +23,7 @@ async function capture(scenario: Scenario): Promise<{
     const child = Bun.spawn([
       process.execPath,
       '--feature=CODE_MODE',
-      ...(claude || scenario === 'script-specialists' ? ['--feature=BUILTIN_EXPLORE_PLAN_AGENTS'] : []),
+      ...(claude || scenario === 'script-specialists' || scenario === 'plan-worker' ? ['--feature=BUILTIN_EXPLORE_PLAN_AGENTS'] : []),
       new URL('./planModeReminder.fixture.ts', import.meta.url).pathname,
     ], {
       cwd: join(root, 'workspace'), stdout: 'pipe', stderr: 'pipe',
@@ -109,3 +110,14 @@ for (const scenario of ['script', 'script-specialists', 'reentry', 'specialists'
     }
   }, 20_000)
 }
+
+test('a Script-delegated read-only planner returns findings to the parent', async () => {
+  const { request, parentReceipt } = await capture('plan-worker')
+  expect(parentReceipt).toContain('[Code Mode] completed')
+  expect(parentReceipt).toContain('Planner returned the example findings.')
+  const receipt = request.input?.find(item => item.output?.includes('Plan worker read marker.'))?.output
+  expect(receipt).toContain('Plan mode is active.')
+  expect(receipt).toContain('Return your findings to your caller')
+  expect(receipt).not.toContain('using the Write tool')
+  expect(request.tools.map(tool => tool.name)).not.toContain('Write')
+}, 20_000)

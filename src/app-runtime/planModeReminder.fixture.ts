@@ -9,12 +9,14 @@ if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspac
 Object.assign(globalThis, { MACRO: { VERSION: 'plan-mode-reminder-test' } })
 
 const scenario = process.env.PLAN_MODE_TEST_SCENARIO
-const scriptFirst = scenario === 'script' || scenario === 'script-specialists'
+const planWorker = scenario === 'plan-worker'
+const scriptFirst = scenario === 'script' || scenario === 'script-specialists' || planWorker
 const claude = scenario === 'specialists' || scenario === 'restricted' || scenario === 'cached'
 const model = claude ? 'claude-opus-5-5' : 'gpt-6.2-sol'
 const accessToken = 'fixture-access-token'
 const planText = '# Isolated fixture plan\n'
-const requests: unknown[] = []
+type Request = { input?: Array<{ type: string; output?: string }> }
+const requests: Request[] = []
 const unexpectedFetches: string[] = []
 
 globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -43,19 +45,31 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
     emit('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } })
     emit('message_stop', {})
   } else {
-    if (scenario === 'script' && requests.length === 1) {
-      const call = { id: 'item_plan', type: 'function_call', call_id: 'call_plan', name: 'REPL' }
+    let toolCall: { name: string; input: object } | undefined
+    if (requests.length === 1 && planWorker) {
+      toolCall = { name: 'REPL', input: {
+        description: 'Ask the planner to read the example',
+        code: `const result = await tools.call({name: 'Agent', input: {description: 'Plan an update', subagent_type: 'Plan', prompt: 'Read sample.txt and return your findings.'}}); output(result.content)`,
+      } }
+    } else if (requests.length === 2 && planWorker) {
+      toolCall = { name: 'Read', input: { file_path: join(process.cwd(), 'sample.txt') } }
+    } else if (requests.length === 1 && scenario === 'script') {
       const input = { file_path: planPath, content: planText }
-      const args = JSON.stringify({
+      toolCall = { name: 'REPL', input: {
         description: 'Write the isolated plan',
         code: `await tools.call({ name: 'Write', input: ${JSON.stringify(input)} })`,
-      })
+      } }
+    }
+    if (toolCall) {
+      const call = { id: `item_plan_${requests.length}`, type: 'function_call', call_id: `call_plan_${requests.length}`, name: toolCall.name }
+      const args = JSON.stringify(toolCall.input)
       emit('response.output_item.added', { output_index: 0, item: { ...call, arguments: '' } })
       emit('response.function_call_arguments.delta', { item_id: call.id, delta: args })
       emit('response.function_call_arguments.done', { item_id: call.id, arguments: args })
       emit('response.output_item.done', { item: { ...call, arguments: args } })
     } else {
-      emit('response.output_text.delta', { delta: 'Fixture complete.' })
+      const reply = planWorker && requests.length === 3 ? 'Planner returned the example findings.' : 'Fixture complete.'
+      emit('response.output_text.delta', { delta: reply })
     }
     emit('response.completed', { response: { usage: { input_tokens: 1, output_tokens: 1 } } })
   }
@@ -64,7 +78,7 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
 
 const { _setWebSocketFactoryForTest } = await import('../services/api/codex-websocket-transport.js')
 _setWebSocketFactoryForTest(() => {
-  unexpectedFetches.push('WebSocket')
+  if (!planWorker) unexpectedFetches.push('WebSocket')
   throw new Error('Fixture uses HTTP transport only')
 })
 const { _getConversationIdForRequestForTest, _markStickyHttpFallbackForTest } = await import('../services/api/codex-fetch-adapter.js')
@@ -89,6 +103,7 @@ if (!claude) {
 setSessionPersistenceDisabled(true)
 switchSession(getSessionId(), null, { fresh: scriptFirst })
 const planPath = getPlanFilePath()
+if (planWorker) await writeFile('sample.txt', 'Plan worker read marker.')
 if (scenario === 'reentry') {
   await writeFile(planPath, '# Existing synthetic plan\n')
   setHasExitedPlanMode(true)
@@ -120,12 +135,13 @@ if (scenario === 'cached') {
   state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, alwaysDenyRules: { session: ['AskUserQuestion'] } } }
   for await (const frame of session.submitMessage('Continue planning the same update.')) result = frame
 }
-if (unexpectedFetches.length || requests.length !== (scenario === 'script' || scenario === 'cached' ? 2 : 1) ||
+if (unexpectedFetches.length || requests.length !== (planWorker ? 4 : scenario === 'script' || scenario === 'cached' ? 2 : 1) ||
     result?.type !== 'result' || result.subtype !== 'success') {
   throw new Error(JSON.stringify({ unexpectedFetches, requestCount: requests.length, result }))
 }
 if (scenario === 'script' && await readFile(planPath, 'utf8') !== planText) {
   throw new Error('Script could not write the designated plan file')
 }
-process.stdout.write(JSON.stringify({ request: scenario === 'cached' ? requests[1] : requests[0], planPath }))
+const parentReceipt = planWorker ? requests[3]?.input?.find(item => item.type === 'function_call_output')?.output : undefined
+process.stdout.write(JSON.stringify({ parentReceipt, request: planWorker ? requests[2] : scenario === 'cached' ? requests[1] : requests[0], planPath }))
 session.dispose?.()

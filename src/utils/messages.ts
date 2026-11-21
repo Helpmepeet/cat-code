@@ -3409,12 +3409,19 @@ function getPlanModeInstructions(attachment: {
   planExists: boolean
 }, capabilities?: PlanModeCapabilities): UserMessage[] {
   if (attachment.isSubAgent) {
-    return getPlanModeV2SubAgentInstructions(attachment)
+    return getPlanModeV2SubAgentInstructions(attachment, capabilities)
   }
   if (attachment.reminderType === 'sparse') {
     return getPlanModeV2SparseInstructions(attachment, capabilities)
   }
   return getPlanModeV2Instructions(attachment, capabilities)
+}
+
+function getDirectPlanWriter(planExists: boolean, capabilities?: PlanModeCapabilities): string | undefined {
+  const candidateTools = planExists
+    ? [FileEditTool.name, FILE_PATCH_TOOL_NAME, FileWriteTool.name]
+    : [FileWriteTool.name, FILE_PATCH_TOOL_NAME]
+  return candidateTools.find(name => capabilities?.toolNames.has(name))
 }
 
 function getPlanFileInfo(
@@ -3425,10 +3432,7 @@ function getPlanFileInfo(
   const fileState = planExists
     ? `A plan file already exists at ${planFilePath}. You can read it and make incremental edits`
     : `No plan file exists yet. You should create your plan at ${planFilePath}`
-  const candidateTools = planExists
-    ? [FileEditTool.name, FILE_PATCH_TOOL_NAME, FileWriteTool.name]
-    : [FileWriteTool.name, FILE_PATCH_TOOL_NAME]
-  const directTool = candidateTools.find(name => capabilities?.toolNames.has(name))
+  const directTool = getDirectPlanWriter(planExists, capabilities)
   if (directTool) return `${fileState} using the ${directTool} tool.`
   const route = capabilities?.toolNames.has(REPL_TOOL_NAME)
     ? `using the file tools available through ${REPL_TOOL_NAME}`
@@ -3716,16 +3720,14 @@ function getPlanModeV2SparseInstructions(attachment: {
 function getPlanModeV2SubAgentInstructions(attachment: {
   planFilePath: string
   planExists: boolean
-}): UserMessage[] {
-  const planFileInfo = attachment.planExists
-    ? `A plan file already exists at ${attachment.planFilePath}. You can read it and make incremental edits using the ${FileEditTool.name} tool if you need to.`
-    : `No plan file exists yet. You should create your plan at ${attachment.planFilePath} using the ${FileWriteTool.name} tool if you need to.`
+}, capabilities?: PlanModeCapabilities): UserMessage[] {
+  const writer = getDirectPlanWriter(attachment.planExists, capabilities)
+  const planGuidance = writer
+    ? `${getPlanFileInfo(attachment, capabilities)} This is the only file you may change. Keep all other actions read-only.`
+    : 'Keep your work read-only. Return your findings to your caller so they can update the plan.'
 
-  const content = `Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received (for example, to make edits). Instead, you should:
-
-## Plan File Info:
-${planFileInfo}
-You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
+  const content = `Plan mode is active. Do not implement changes, change configuration, or make commits.
+${planGuidance}
 Answer the user's query comprehensively. If you need clarification, report the unresolved question to your caller. Stop work that depends on the answer and resume that work only when your caller supplies the answer.`
 
   return wrapMessagesInSystemReminder([
