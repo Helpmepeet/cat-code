@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { z } from 'zod/v4'
 import type { Tool, ToolPermissionContext, ToolUseContext } from '../../Tool.js'
+import { WebSearchTool } from '../../tools/WebSearchTool/WebSearchTool.js'
 import { asAgentId } from '../../types/ids.js'
 import type { PermissionDecision } from './PermissionResult.js'
 import {
@@ -67,6 +68,7 @@ async function observe(
   testedTool: Tool,
   context: ToolUseContext,
   forceDecision?: PermissionDecision,
+  input: Record<string, unknown> = {},
 ): Promise<ObservationRun> {
   const events: unknown[] = []
   const observation = createAutoModePermissionObservationContext({
@@ -84,7 +86,7 @@ async function observe(
       getPermissionResult: () =>
         hasPermissionsToUseTool(
           testedTool,
-          {},
+          input,
           context,
           { message: { id: 'message-1' } } as never,
           'tool-1',
@@ -176,6 +178,43 @@ describe('auto-mode permission observation core routes', () => {
       raw_result: 'allow',
     })
     expect(classifyYoloAction).not.toHaveBeenCalled()
+  })
+
+  test('allows built-in WebSearch in Auto Mode without a classifier call', async () => {
+    const input = { query: 'Bun test documentation', include_domains: ['bun.sh'] }
+    const run = await observe(WebSearchTool, toolUseContext(permissionContext()), undefined, input)
+    expect(run.decision).toMatchObject({ behavior: 'allow', updatedInput: input })
+    expect(end(run)).toMatchObject({ route: 'base', raw_result: 'allow' })
+    expect(classifyYoloAction).not.toHaveBeenCalled()
+  })
+
+  test('WebSearch still respects explicit ask and deny rules in Auto Mode', async () => {
+    for (const behavior of ['ask', 'deny'] as const) {
+      const rule = { session: ['WebSearch'] }
+      const context = toolUseContext(permissionContext(
+        behavior === 'ask' ? { alwaysAskRules: rule } : { alwaysDenyRules: rule },
+      ))
+      const run = await observe(WebSearchTool, context, undefined, { query: 'public docs' })
+      expect(run.decision).toMatchObject({ behavior, decisionReason: { type: 'rule' } })
+    }
+    expect(classifyYoloAction).not.toHaveBeenCalled()
+  })
+
+  test('blocks recognized credentials in Auto Mode search input without model review', async () => {
+    const token = `ghp_${'A'.repeat(36)}`
+    for (const input of [{ query: token }, { query: 'docs', include_domains: [token] }]) {
+      const run = await observe(WebSearchTool, toolUseContext(permissionContext()), undefined, input)
+      expect(run.decision).toMatchObject({ behavior: 'deny', message: 'Remove credentials from the web search and try again.' })
+    }
+    expect(classifyYoloAction).not.toHaveBeenCalled()
+  })
+
+  test('does not exempt an MCP tool named WebSearch from Auto review', async () => {
+    classifyYoloAction.mockResolvedValueOnce({ shouldBlock: true, reason: 'fixture' })
+    const mcpSearch = tool({ name: 'WebSearch', isMcp: true })
+    const run = await observe(mcpSearch, toolUseContext(permissionContext()))
+    expect(run.decision?.behavior).toBe('deny')
+    expect(classifyYoloAction).toHaveBeenCalledTimes(1)
   })
 
   test('enables prior assistant context only for the main permission loop', async () => {

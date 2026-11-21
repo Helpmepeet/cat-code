@@ -20,6 +20,7 @@ import { shouldUseSandbox } from '../../tools/BashTool/shouldUseSandbox.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { POWERSHELL_TOOL_NAME } from '../../tools/PowerShellTool/toolName.js'
 import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
+import { WEB_SEARCH_TOOL_NAME } from '../../tools/WebSearchTool/prompt.js'
 import type { AssistantMessage } from '../../types/message.js'
 import { extractOutputRedirections } from '../bash/commands.js'
 import { getCwd } from '../cwd.js'
@@ -804,10 +805,10 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         return result
       }
 
-      // Preserve explicit asks for Script children. Mandatory safety prompts
-      // were handled above; classifier-approvable checks use ordinary Auto review.
+      // An explicit ask still holds a Script child or built-in WebSearch for approval.
       if (
-        context.getCodeModeDispatchFence &&
+        (context.getCodeModeDispatchFence ||
+          (tool.name === WEB_SEARCH_TOOL_NAME && !tool.isMcp && !tool.mcpInfo)) &&
         result.decisionReason?.type === 'rule'
       ) {
         if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {

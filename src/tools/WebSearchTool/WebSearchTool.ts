@@ -1,6 +1,7 @@
 import type { PermissionResult } from 'src/utils/permissions/PermissionResult.js'
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef } from '../../Tool.js'
+import { scanForSecrets } from '../../services/teamMemorySync/secretScanner.js'
 import type { WebSearchProgress } from '../../types/tools.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { isEssentialTrafficOnly } from '../../utils/privacyLevel.js'
@@ -116,7 +117,19 @@ export const WebSearchTool = buildTool({
     const message = getSearchInputError(input, context)
     return message ? { result: false, message, errorCode: 1 } : { result: true }
   },
-  async checkPermissions(_input): Promise<PermissionResult> {
+  async checkPermissions(input, context): Promise<PermissionResult> {
+    const { getEffectiveAutoMode } = await import('../../utils/permissions/permissions.js')
+    if (getEffectiveAutoMode(context.getAppState().toolPermissionContext) !== null) {
+      // The search provider receives these strings, even though the tool does not mutate files.
+      const fields = [input.query, ...(input.include_domains ?? []), ...(input.exclude_domains ?? [])]
+      if (fields.some(field => scanForSecrets(field).length > 0)) {
+        return {
+          behavior: 'deny',
+          message: 'Remove credentials from the web search and try again.',
+        }
+      }
+      return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
+    }
     return {
       behavior: 'passthrough',
       message: 'WebSearchTool requires permission.',

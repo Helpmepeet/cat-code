@@ -27,6 +27,7 @@ async function run(scenario: string) {
         ...(trial
           ? { CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna', CATCODE_SIDECAR_SESSION_ID: 'desktop-session',
               ...(scenario === 'trial-legacy' && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'legacy' }),
+              ...(scenario === 'native-web-search-legacy' && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'legacy' }),
               ...(scenario.endsWith('-shadow') && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'shadow' }) }
           : {}),
         CONTEXTUAL_AUTO_TEST_ROOT: root, CONTEXTUAL_AUTO_TEST_SCENARIO: scenario,
@@ -71,6 +72,18 @@ for (const scenario of ['native-edit', 'native-edit-script', 'native-patch']) {
     expect(proof.requests).toHaveLength(0)
     expect(proof.prompts).toHaveLength(0)
     expect(proof.files.a).toBe(scenario === 'native-patch' ? 'new\n' : 'new')
+  }, 30_000)
+}
+
+for (const mode of ['experimental', 'shadow', 'legacy']) {
+  test(`native WebSearch runs without Auto review in ${mode} mode`, async () => {
+    const proof = await run(`native-web-search-${mode}`)
+    expect(proof.requests).toHaveLength(0)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.reviewEvents).toHaveLength(0)
+    expect(proof.transcript).toContainEqual(expect.objectContaining({
+      toolUseResult: expect.objectContaining({ query: 'Bun test documentation', summary: 'Fixture search completed.' }),
+    }))
   }, 30_000)
 }
 

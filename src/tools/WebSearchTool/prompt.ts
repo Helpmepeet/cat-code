@@ -15,6 +15,7 @@ export function getWebSearchPrompt(provider?: APIProvider): string {
 - Search the web and use retrieved sources to inform responses.
 - ${providerGuidance}
 - Searches stay with the invoking provider. Native account, availability, and request failures are returned as errors; no automatic backend substitution occurs.
+- Keep credentials and private data out of search queries and domain filters.
 - Use this for current documentation, package/API references, GitHub or repository docs, changelogs, issue/error lookup, and general web research.
 - Results include source titles and URLs, with available excerpts or a generated summary. A summary is not a directly read page. Use an appropriate source-reading tool to inspect pages and discussions.
 - Start with the default cap of 10 results. max_results limits returned links up to 100; the provider may return fewer. For deeper research, refine queries and inspect relevant sources.

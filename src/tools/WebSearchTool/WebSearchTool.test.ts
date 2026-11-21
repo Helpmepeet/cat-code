@@ -43,10 +43,9 @@ describe('native WebSearch public contract', () => {
       process.env.EXA_API_KEY = key;
     expect(WebSearchTool.isEnabled()).toBe(true);
   });
-  test('keeps the receiving permission boundary', async () => {
-    const { isAutoModeAllowlistedTool } = await import('../../utils/permissions/classifierDecision.js');
-    expect(isAutoModeAllowlistedTool('WebSearch')).toBe(false);
-    await expect(WebSearchTool.checkPermissions({ query: 'docs' }, {} as never)).resolves.toMatchObject({ behavior: 'passthrough', suggestions: [{ type: 'addRules', rules: [{ toolName: 'WebSearch' }], behavior: 'allow', destination: 'localSettings' }] });
+  test('keeps the permission prompt and allow-rule suggestion outside Auto Mode', async () => {
+    const context = { getAppState: () => ({ toolPermissionContext: { mode: 'default' } }) } as never;
+    await expect(WebSearchTool.checkPermissions({ query: 'docs' }, context)).resolves.toMatchObject({ behavior: 'passthrough', suggestions: [{ type: 'addRules', rules: [{ toolName: 'WebSearch' }], behavior: 'allow', destination: 'localSettings' }] });
   });
   test('accepts native fields and rejects retired options and invalid bounds', () => {
     expect(WebSearchTool.inputSchema.parse({ query: '  docs  ', include_domains: ['example.com'], max_results: 100, freshness: 'month' })).toMatchObject({ query: 'docs', max_results: 100 });

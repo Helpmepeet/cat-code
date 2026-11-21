@@ -33,6 +33,8 @@ const staleParent = scenario.includes('-stale-')
 const mainEdit = scenario === 'native-edit' || scenario === 'native-edit-script'
 const mainEditScript = scenario === 'native-edit-script'
 const directPatch = scenario === 'native-patch'
+const webSearch = scenario.startsWith('native-web-search')
+const searchQuery = 'Bun test documentation'
 const loadSkill = scenario === 'native-skill'
 const outsideRead = scenario.startsWith('native-outside-read-')
 const sensitiveWrite = {
@@ -67,6 +69,7 @@ const nativeAction = browserAction
   ? browserRead ? { name: browserReadTool, input: {} } : browserNavigate
     ? { name: 'BrowserNavigate', input: { action: 'navigate', target: 'http://localhost:3000/settings' } }
     : { name: 'BrowserAct', input: browserScroll ? { action: 'scroll', ref: 'g1-e12', deltaY: 120 } : { action: 'click', ref: 'g1-e12' } }
+  : webSearch ? { name: 'WebSearch', input: { query: searchQuery } }
   : directPatch
     ? { name: 'apply_patch', input: { input: '*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch' } }
     : undefined
@@ -238,6 +241,13 @@ writeFileSync('effects.txt', 'checked');`)
 const requests: { tool: string; content: any; system?: unknown; startedAt: number; elapsedMs: number; model: string; provider: string; contextual: boolean }[] = []
 let modelCalls = 0
 let workerModelCalls = 0
+if (webSearch) {
+  mock.module('../tools/WebSearchTool/claude.js', () => ({
+    searchClaude: async (input: { query: string }) => ({
+      query: input.query, durationSeconds: 0, results: [], summary: 'Fixture search completed.',
+    }),
+  }))
+}
 const backgroundReview = Promise.withResolvers<void>()
 const backgroundVerdict = Promise.withResolvers<void>()
 let resolveBackground!: () => void
@@ -412,6 +422,10 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
 let browserCalls = 0
+if (webSearch) {
+  const { WebSearchTool } = await import('../tools/WebSearchTool/WebSearchTool.js')
+  config.tools = [...config.tools, WebSearchTool]
+}
 if (workerRouting) {
   const { AgentTool } = await import('../tools/AgentTool/AgentTool.js')
   const { GENERAL_PURPOSE_AGENT } = await import('../tools/AgentTool/built-in/generalPurposeAgent.js')
