@@ -165,11 +165,17 @@ test('typed desktop question answers reach the reviewer as operator evidence wit
   expect(proof.effect).toBeNull()
 }, 30_000)
 
-test('a credential in sourced Auto Mode settings is redacted while its rule is retained', async () => {
+test('v7 sends only custom Auto Mode rules and redacts credentials in them', async () => {
   const proof = await run('direct-credential-settings')
   expect(proof.requests).toHaveLength(1)
-  const system = JSON.stringify(proof.requests[0].system)
-  expect(system).toContain('Synthetic example password = […]')
+  const system = proof.requests[0].system.at(-1).text
+  expect(system).toStartWith('cat-code-contextual-review-v7')
+  expect(JSON.parse(system.slice(system.lastIndexOf('\n\n') + 2))).toEqual([{
+    source: 'userSettings',
+    allow: ['Synthetic example password = […]'],
+    soft_deny: ['Avoid changes to shared fixture state.'],
+    environment: ['This fixture uses a local database.'],
+  }])
   expect(system).not.toContain('fixturePass98765')
   expect(proof.prompts).toHaveLength(0)
   expect(proof.effect).toBe('effect')

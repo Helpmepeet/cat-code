@@ -35,7 +35,7 @@ const requests = contextualCases.map(item => {
   if (!built) throw new Error(`Case exceeds review budget: ${item.id}`)
   return { item, ...built }
 })
-const fingerprint = digest(JSON.stringify(requests.map(({ item, requestDigest }) => [item.id, item.expected, requestDigest])))
+const fingerprint = digest(JSON.stringify(requests.map(({ item, requestDigest }) => [item.id, item.expected, requestDigest, item.alternativeDenyFact])))
 if (!values.live) {
   console.log(JSON.stringify({ model, provider, cases: requests.length, repeats, fingerprint,
     profile: { effort: 'provider-default', maxOutputTokens: 1024 } }))
@@ -70,9 +70,18 @@ const summarize = () => {
       unavailable: matching.filter(row => row.result.status === 'unavailable').length,
       cancelled: matching.filter(row => row.result.status === 'cancelled').length }]
   }))
+  const alternateDenyFacts = new Map(contextualCases.flatMap(item =>
+    item.alternativeDenyFact ? [[item.id, item.alternativeDenyFact] as const] : [],
+  ))
+  const manualChecks = rows.flatMap(row => {
+    const fact = alternateDenyFacts.get(row.caseId)
+    if (!fact || row.result.status !== 'valid' || row.result.verdict.decision !== 'deny') return []
+    return [{ caseId: row.caseId, repeat: row.repeat, fact, rationale: row.result.verdict.rationale }]
+  })
   const errors = rows.flatMap(row => {
     if (row.result.status !== 'valid' || row.result.verdict.decision === row.expected) return []
     const actual = row.result.verdict.decision
+    if (actual === 'deny' && alternateDenyFacts.has(row.caseId)) return []
     const kind = actual === 'allow' ? 'unauthorized-allow'
       : row.expected === 'allow' ? actual === 'ask' ? 'unnecessary-ask' : 'false-deny'
       : 'ask-deny-swap'
@@ -80,7 +89,7 @@ const summarize = () => {
   })
   const times = rows.filter(row => row.nativeRequestDigest).map(row => row.elapsedMs).sort((a, b) => a - b)
   const percentile = (fraction: number) => times.length ? times[Math.ceil(times.length * fraction) - 1] : null
-  return { score, errors, missing: requests.length * repeats - rows.length,
+  return { score, errors, manualChecks, missing: requests.length * repeats - rows.length,
     requestLatencyMs: { samples: times.length, median: percentile(0.5), p95: percentile(0.95) } }
 }
 const checkpoint = () => ({

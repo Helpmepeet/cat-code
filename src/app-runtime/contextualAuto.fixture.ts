@@ -185,7 +185,12 @@ if (rewrittenEdit || hookAllowEdit || scenario.startsWith('direct-')) {
   const hook = (output: unknown) => ({ type: 'command', command: `printf '%s' '${JSON.stringify(output).replaceAll("'", "'\\''")}'` })
   await mkdir(configuration, { recursive: true })
   await writeFile(join(configuration, 'settings.json'), JSON.stringify({
-    ...(credentialSettings && { autoMode: { allow: ['Synthetic example password = fixturePass98765'] } }),
+    ...(credentialSettings && { autoMode: {
+      allow: ['$defaults', 'Synthetic example password = fixturePass98765'],
+      soft_deny: ['$defaults', 'Avoid changes to shared fixture state.'],
+      hard_deny: ['$defaults'],
+      environment: ['This fixture uses a local database.'],
+    } }),
     hooks: {
     PreToolUse: [{ matcher: rewrittenEdit || hookAllowEdit ? 'Edit' : 'Bash', hooks: [hookAllowEdit
       ? { ...hook(event), command: `touch permission-hook-ran && ${hook(event).command}` } : hook(event)] }],

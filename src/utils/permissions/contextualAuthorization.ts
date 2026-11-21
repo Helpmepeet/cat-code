@@ -23,7 +23,7 @@ import { getPreparedFileMutationSet } from '../fileAuthorization.js'
 import { expandPath } from '../path.js'
 import { getSourcedAutoModeInstructions } from '../settings/settings.js'
 import { buildContextualReview, contextualReviewerProfile, sendContextualReview } from './contextualReviewer.js'
-import { CONTEXTUAL_REVIEW_VERSION } from './contextualReviewPrompt.js'
+import { CONTEXTUAL_REVIEW_VERSION, CONTEXTUAL_SHADOW_REVIEW_VERSION } from './contextualReviewPrompt.js'
 import { readContextualAuthority, recentShellRuns, resolveContextualPeerParent } from './contextualAuthority.js'
 import { createDenialTrackingState, DENIAL_LIMITS, persistDenialState, recordDenial, recordSuccess } from './denialTracking.js'
 import type { ContextualEvidence } from './contextualReviewPrompt.js'
@@ -157,6 +157,16 @@ function readMode(): ReviewMode | undefined {
   return 'experimental'
 }
 
+function withoutDefaultRules(instructions: ReturnType<typeof getSourcedAutoModeInstructions>) {
+  return instructions.flatMap(({ source, ...sections }) => {
+    const custom = Object.fromEntries(Object.entries(sections).flatMap(([section, entries]) => {
+      const rules = entries?.filter(rule => rule.trim() !== '$defaults')
+      return rules?.length ? [[section, rules]] : []
+    }))
+    return Object.keys(custom).length ? [{ source, ...custom }] : []
+  })
+}
+
 export type ContextualAutoAttempt = NonNullable<Awaited<ReturnType<typeof createContextualAttempt>>>
 
 export async function createContextualAttempt(
@@ -168,6 +178,7 @@ export async function createContextualAttempt(
 ) {
   const mode = readMode()
   if (!mode) return undefined
+  const version = mode === 'shadow' ? CONTEXTUAL_SHADOW_REVIEW_VERSION : CONTEXTUAL_REVIEW_VERSION
   const mcp = isMcpTool(tool)
   // The engine's typed question receipt authorizes its display and answer.
   // Any action proposed in response still goes through its own permission check.
@@ -224,7 +235,7 @@ export async function createContextualAttempt(
   let humanAllowed = false
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
-  let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
+  let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version }
   let boundProjection: { value: unknown } | undefined
 
   function currentProjection(): unknown {
@@ -342,7 +353,7 @@ export async function createContextualAttempt(
       emit('inconclusive', 'New instructions require a fresh review of this action.')
       attemptId = randomUUID()
       startedAt = Date.now()
-      reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
+      reviewer = { kind: 'contextual', version }
       lastOutcome = undefined
     }
     actionAllowed = false
@@ -402,8 +413,8 @@ export async function createContextualAttempt(
     }
     const experimental = mode === 'experimental'
     const evidence = experimental ? redactReviewFields(rawEvidence) : rawEvidence
-    const reviewerInstructions = experimental ? redactReviewFields(instructions) : instructions
-    const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
+    const reviewerInstructions = experimental ? redactReviewFields(withoutDefaultRules(instructions)) : instructions
+    const profile = contextualReviewerProfile(getConfiguredAutoModeModel(), version)
     const built = buildContextualReview(evidence, profile, reviewerInstructions, experimental)
     if (!built) {
       if (!experimental) return ask('The complete action and applicable instructions exceed the Auto Mode review limit.')
@@ -418,7 +429,7 @@ export async function createContextualAttempt(
         ? denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
         : ask('The action or its context may contain credentials.')
     }
-    reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION, profile: { provider: profile.provider, model: profile.model,
+    reviewer = { kind: 'contextual', version, profile: { provider: profile.provider, model: profile.model,
       effort: profile.effort, promptDigest: built.promptDigest } }
     emit('reviewing')
     const result = await sendContextualReview({ ...built.options, agentId: context.agentId }, context.abortController.signal)
