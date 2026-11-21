@@ -3,7 +3,13 @@ import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-type RequestEvidence = { tools: string[]; scriptGuidance?: string }
+type RequestEvidence = {
+  tools: string[]
+  scriptGuidance?: string
+  prompt: string
+  resumePrompt?: string
+  directAgentResult?: unknown[]
+}
 
 for (const provider of ['claude', 'gpt'] as const) {
   test(`${provider} request describes the actual Script tool surface in fresh and reopened sessions`, async () => {
@@ -26,6 +32,7 @@ for (const provider of ['claude', 'gpt'] as const) {
             ANTHROPIC_API_KEY: 'synthetic-fixture-key', ANTHROPIC_BASE_URL: 'https://script-guidance.invalid',
             CLAUDE_CODE_USE_OPENAI: provider === 'gpt' ? '1' : '0',
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1',
+            ENABLE_TOOL_SEARCH: 'false',
           },
         })
         const timer = setTimeout(() => child.kill(), 12_000)
@@ -43,12 +50,23 @@ for (const provider of ['claude', 'gpt'] as const) {
         expect(evidence[phase]!.tools.filter(name => directTools.includes(name)).sort())
           .toEqual(phase === 'legacy' ? legacyTools : [])
       }
+      expect(evidence.legacy!.tools).toContain('Agent')
+      expect(evidence.legacy!.prompt).toContain("the Agent tool's available-agent list")
+      expect(evidence.legacy!.resumePrompt).toContain('Use Agent to start a fresh subagent')
       expect(evidence.legacy!.scriptGuidance).toContain('direct coding tools remain available')
       const scriptPhases = ['fresh', 'reopened'] as const
       expect(scriptPhases.filter(phase => evidence[phase]!.scriptGuidance?.includes('direct coding tools remain available')))
         .toEqual([])
       for (const phase of scriptPhases) {
+        expect(evidence[phase]!.tools).not.toContain('Agent')
+        expect(evidence[phase]!.prompt).toContain('Discover Agent through REPL')
+        expect(evidence[phase]!.prompt).not.toContain("the Agent tool's available-agent list")
+        expect(evidence[phase]!.resumePrompt).toContain('Use Agent through REPL to start a fresh subagent')
         expect(evidence[phase]!.scriptGuidance).toContain('Use REPL for file and shell operations.')
+      }
+      if (provider === 'claude') {
+        const serializedResult = JSON.stringify(evidence.fresh!.directAgentResult)
+        expect(serializedResult).toContain('Use Agent through REPL in this session.')
       }
     } finally {
       await rm(root, { recursive: true, force: true })

@@ -124,7 +124,7 @@ export const ResumeAgentTool = buildTool({
       return {
         data: {
           success: false,
-          message: `No subagent found for "${input.agentId}". Check the agentId or call Agent to spawn a new one.`,
+          message: `No subagent found for "${input.agentId}". Check the agentId or launch a new subagent.`,
         },
       }
     }
@@ -164,7 +164,7 @@ export const ResumeAgentTool = buildTool({
         return {
           data: {
             success: false,
-            message: `Agent "${resolved.displayName}" has no transcript to resume; it may have been cleaned up. Spawn a new agent with Agent.`,
+            message: `Agent "${resolved.displayName}" has no transcript to resume; it may have been cleaned up. Launch a new subagent.`,
           },
         }
       }

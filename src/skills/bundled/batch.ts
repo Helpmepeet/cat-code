@@ -1,4 +1,3 @@
-import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
 import { ASK_USER_QUESTION_TOOL_NAME, QUESTION_ANSWER_BOUNDARY } from '../../tools/AskUserQuestionTool/prompt.js'
 import { ENTER_PLAN_MODE_TOOL_NAME } from '../../tools/EnterPlanModeTool/constants.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/ExitPlanModeTool/constants.js'
@@ -60,7 +59,7 @@ Call the \`${ENTER_PLAN_MODE_TOOL_NAME}\` tool now to enter plan mode, then:
 
 ## Phase 2: Spawn Workers (After Plan Approval)
 
-Once the plan is approved, spawn one background agent per work unit using the \`${AGENT_TOOL_NAME}\` tool. **All agents must use \`isolation: "worktree"\` and \`run_in_background: true\`.** Launch them all in a single message block so they run in parallel.
+Once the plan is approved, spawn one background agent per work unit using the session's delegation route. **All agents must use \`isolation: "worktree"\` and \`run_in_background: true\`.** Launch them together so they run in parallel.
 
 For each agent, the prompt must be fully self-contained. Include:
 - The overall goal (the user's instruction)

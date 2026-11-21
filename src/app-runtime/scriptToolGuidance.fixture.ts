@@ -12,6 +12,7 @@ if (!root || process.cwd() !== join(root, 'workspace') ||
 
 const phase = process.argv[2]
 const gpt = process.env.CLAUDE_CODE_USE_OPENAI === '1'
+const probeDirectAgent = !gpt && phase === 'fresh'
 const model = gpt ? 'gpt-6.2-astra' : 'claude-sonnet-4-5'
 const accessToken = 'fixture-access-token'
 const accountId = 'fixture-account'
@@ -19,31 +20,39 @@ const endpoint = gpt
   ? 'https://chatgpt.com/backend-api/codex/responses'
   : 'https://script-guidance.invalid/v1/messages'
 const requests: Array<{
-  tools: Array<{ name: string; defer_loading?: boolean }>
+  tools: Array<{ name: string; description?: string; defer_loading?: boolean }>
   system?: Array<{ text: string }>
   instructions?: string
+  messages?: unknown[]
 }> = []
 const unexpectedFetches: string[] = []
 
 globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input))
-  if (`${url.origin}${url.pathname}` !== endpoint || requests.length > 0) {
+  if (`${url.origin}${url.pathname}` !== endpoint || requests.length >= (probeDirectAgent ? 2 : 1)) {
     unexpectedFetches.push(`${url.origin}${url.pathname}`)
     throw new Error('Unexpected Script guidance fixture request')
   }
   requests.push(JSON.parse(input instanceof Request ? await input.text() : String(init?.body)))
+  const invokeHiddenAgent = probeDirectAgent && requests.length === 1
   const events = gpt ? [
     { type: 'response.output_text.delta', delta: 'Fixture finished.' },
     { type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 1 } } },
   ] : [
     { type: 'message_start', message: {
-      id: 'fixture-message', type: 'message', role: 'assistant', model, content: [],
+      id: `fixture-message-${requests.length}`, type: 'message', role: 'assistant', model, content: [],
       stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 },
     } },
-    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Fixture finished.' } },
+    { type: 'content_block_start', index: 0, content_block: invokeHiddenAgent
+      ? { type: 'tool_use', id: 'direct-agent', name: 'Agent', input: {} }
+      : { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: invokeHiddenAgent
+      ? { type: 'input_json_delta', partial_json: JSON.stringify({
+        description: 'Try a standalone launch', subagent_type: 'general-purpose', prompt: 'Return fixture text.',
+      }) }
+      : { type: 'text_delta', text: 'Fixture finished.' } },
     { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: 'message_delta', delta: { stop_reason: invokeHiddenAgent ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
     { type: 'message_stop' },
   ]
   return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''), {
@@ -54,10 +63,12 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
 Object.assign(globalThis, { MACRO: { VERSION: 'script-guidance-fixture' } })
 const { getSessionId, switchSession } = await import('../bootstrap/state.js')
 const { getDefaultAppState } = await import('../state/AppStateStore.js')
+const { AgentTool } = await import('../tools/AgentTool/AgentTool.js')
 const { BashTool } = await import('../tools/BashTool/BashTool.js')
 const { FilePatchTool } = await import('../tools/FilePatchTool/FilePatchTool.js')
 const { FileReadTool } = await import('../tools/FileReadTool/FileReadTool.js')
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
+const { ResumeAgentTool } = await import('../tools/ResumeAgentTool/ResumeAgentTool.js')
 const { enableConfigs, saveGlobalConfig } = await import('../utils/config.js')
 const { createFileStateCacheWithSizeLimit } = await import('../utils/fileStateCache.js')
 const { createQueryEngineAppSession } = await import('./createQueryEngineAppSession.js')
@@ -90,14 +101,15 @@ const mode = { codeModeFirstSessionId: phase === 'legacy' ? undefined : sessionI
 let state: AppState = { ...getDefaultAppState(), ...mode }
 const session = createQueryEngineAppSession({
   cwd: process.cwd(), initialMessages: history?.messages, userSpecifiedModel: model,
-  tools: [REPLTool, FileReadTool, BashTool, FilePatchTool], commands: [], mcpClients: [], agents: [],
+  tools: [REPLTool, FileReadTool, BashTool, FilePatchTool, AgentTool, ResumeAgentTool], commands: [], mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => { state = update(state) },
   readFileCache: createFileStateCacheWithSizeLimit(10), recordTranscript: async () => null,
 })
 try {
   const frames = await Array.fromAsync(session.submitMessage('Look at the isolated workspace.'))
   const result = frames.at(-1)
-  if (unexpectedFetches.length || requests.length !== 1 || result?.type !== 'result' || result.subtype !== 'success') {
+  if (unexpectedFetches.length || requests.length !== (probeDirectAgent ? 2 : 1) ||
+      result?.type !== 'result' || result.subtype !== 'success') {
     throw new Error(JSON.stringify({ unexpectedFetches, requests: requests.length, result }))
   }
   if (phase === 'fresh') {
@@ -108,6 +120,9 @@ try {
   console.log(JSON.stringify({
     tools: body.tools.filter(tool => !tool.defer_loading).map(tool => tool.name),
     scriptGuidance: prompt.split('\n').find(line => line.includes('REPL runs JavaScript')),
+    prompt,
+    resumePrompt: body.tools.find(tool => tool.name === 'ResumeAgent')?.description,
+    ...(probeDirectAgent && { directAgentResult: requests[1]?.messages }),
   }))
 } finally {
   session.dispose?.()

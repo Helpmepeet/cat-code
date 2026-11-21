@@ -9,6 +9,7 @@ if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspac
 Object.assign(globalThis, { MACRO: { VERSION: 'plan-mode-reminder-test' } })
 
 const scenario = process.env.PLAN_MODE_TEST_SCENARIO
+const scriptFirst = scenario === 'script' || scenario === 'script-specialists'
 const claude = scenario === 'specialists' || scenario === 'restricted' || scenario === 'cached'
 const model = claude ? 'claude-opus-5-5' : 'gpt-6.2-sol'
 const accessToken = 'fixture-access-token'
@@ -86,7 +87,7 @@ if (!claude) {
   _markStickyHttpFallbackForTest(_getConversationIdForRequestForTest(accountId, model), 'fixture')
 }
 setSessionPersistenceDisabled(true)
-switchSession(getSessionId(), null, { fresh: scenario === 'script' })
+switchSession(getSessionId(), null, { fresh: scriptFirst })
 const planPath = getPlanFilePath()
 if (scenario === 'reentry') {
   await writeFile(planPath, '# Existing synthetic plan\n')
@@ -96,7 +97,7 @@ if (scenario === 'reentry') {
 const initialState = getDefaultAppState()
 let state: typeof initialState = {
   ...initialState,
-  ...(scenario === 'script' ? { codeModeFirstSessionId: getSessionId() } : {}),
+  ...(scriptFirst ? { codeModeFirstSessionId: getSessionId() } : {}),
   toolPermissionContext: {
     ...initialState.toolPermissionContext,
     mode: 'plan',

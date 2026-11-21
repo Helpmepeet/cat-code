@@ -43,9 +43,14 @@ import {
   toolMatchesName,
 } from '../../Tool.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { routeAgentGuidanceThroughScript } from '../../constants/promptStyles/scriptToolGuidance.js'
 import { getVisibleAgentDefinitions } from '../../tools/AgentTool/agentDefinitionVisibility.js'
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../../tools/ExitPlanModeTool/constants.js'
+import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
+import { RESUME_AGENT_TOOL_NAME } from '../../tools/ResumeAgentTool/constants.js'
+import { SEND_MESSAGE_TOOL_NAME } from '../../tools/SendMessageTool/constants.js'
+import { TEAM_CREATE_TOOL_NAME } from '../../tools/TeamCreateTool/constants.js'
 import {
   type ConnectorTextBlock,
   type ConnectorTextDelta,
@@ -879,6 +884,7 @@ export type Options = {
   querySource: QuerySource
   agents: AgentDefinition[]
   allowedAgentTypes?: string[]
+  scriptAgentTools?: Tools
   hasAppendSystemPrompt: boolean
   fetchOverride?: ClientOptions['fetch']
   enablePromptCaching?: boolean
@@ -1521,9 +1527,13 @@ async function* queryModel(
   // Note: We pass the full `tools` list (not filteredTools) to toolToAPISchema so that
   // ToolSearchTool's prompt can list ALL available MCP tools. The filtering only affects
   // which tools are actually sent to the API, not what the model sees in tool descriptions.
+  const scriptAgentTools = options.scriptAgentTools
+  const agentViaScript = !!scriptAgentTools && filteredTools.some(tool =>
+    tool.name === REPL_TOOL_NAME && !tool.isMcp && !tool.mcpInfo,
+  )
   const toolSchemas = await Promise.all(
-    filteredTools.map(tool =>
-      toolToAPISchema(tool, {
+    filteredTools.map(async tool => {
+      const schema = await toolToAPISchema(tool, {
         getToolPermissionContext: options.getToolPermissionContext,
         tools,
         agents: options.agents,
@@ -1531,8 +1541,14 @@ async function* queryModel(
         model: options.model,
         provider: requestProvider,
         deferLoading: willDefer(tool),
-      }),
-    ),
+      })
+      if (agentViaScript && !tool.isMcp && !tool.mcpInfo &&
+          [RESUME_AGENT_TOOL_NAME, SEND_MESSAGE_TOOL_NAME, TEAM_CREATE_TOOL_NAME].includes(tool.name) &&
+          'description' in schema && typeof schema.description === 'string') {
+        return { ...schema, description: routeAgentGuidanceThroughScript(schema.description) }
+      }
+      return schema
+    }),
   )
 
   if (useToolSearch) {
@@ -1574,11 +1590,14 @@ async function* queryModel(
     const canDiscoverPlanApproval = toolNames.has(TOOL_SEARCH_TOOL_NAME) &&
       deferredToolNames.has(EXIT_PLAN_MODE_V2_TOOL_NAME) &&
       tools.some(tool => tool.name === EXIT_PLAN_MODE_V2_TOOL_NAME && !getDenyRuleForTool(permissionContext, tool))
-    planModeCapabilities = { toolNames, canDiscoverPlanApproval }
-    if (callableTools.some(tool => toolMatchesName(tool, AGENT_TOOL_NAME))) {
+    const callableThroughScript = agentViaScript && toolNames.has(REPL_TOOL_NAME) &&
+      scriptAgentTools.some(tool => tool.name === AGENT_TOOL_NAME && !tool.isMcp && !tool.mcpInfo &&
+        !getDenyRuleForTool(permissionContext, tool))
+    planModeCapabilities = { toolNames, canDiscoverPlanApproval, agentViaScript: callableThroughScript }
+    if (callableThroughScript || callableTools.some(tool => toolMatchesName(tool, AGENT_TOOL_NAME))) {
       const agents = getVisibleAgentDefinitions(
         options.agents,
-        tools,
+        callableThroughScript ? scriptAgentTools : tools,
         permissionContext,
         options.allowedAgentTypes,
       )
@@ -1587,7 +1606,7 @@ async function* queryModel(
       const announcedTypes = getAnnouncedAgentTypes(providerMessages)
       // The inline Agent description can be cached across roster changes.
       planModeCapabilities.agentTypes = new Set(agents.map(agent => agent.agentType).filter(type =>
-        announcedTypes.has(type) || description?.includes(`\n- ${type}: `),
+        callableThroughScript || announcedTypes.has(type) || description?.includes(`\n- ${type}: `),
       ))
     }
   }
@@ -1596,6 +1615,7 @@ async function* queryModel(
     filteredTools,
     requestProvider,
     planModeCapabilities,
+    agentViaScript,
   )
   queryCheckpoint('query_message_normalization_end')
 

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-type Scenario = 'script' | 'reentry' | 'specialists' | 'restricted' | 'deferred' | 'cached'
+type Scenario = 'script' | 'script-specialists' | 'reentry' | 'specialists' | 'restricted' | 'deferred' | 'cached'
 type Message = { content?: string | { text?: string }[] }
 
 async function capture(scenario: Scenario): Promise<{
@@ -22,7 +22,7 @@ async function capture(scenario: Scenario): Promise<{
     const child = Bun.spawn([
       process.execPath,
       '--feature=CODE_MODE',
-      ...(claude ? ['--feature=BUILTIN_EXPLORE_PLAN_AGENTS'] : []),
+      ...(claude || scenario === 'script-specialists' ? ['--feature=BUILTIN_EXPLORE_PLAN_AGENTS'] : []),
       new URL('./planModeReminder.fixture.ts', import.meta.url).pathname,
     ], {
       cwd: join(root, 'workspace'), stdout: 'pipe', stderr: 'pipe',
@@ -53,7 +53,7 @@ async function capture(scenario: Scenario): Promise<{
   }
 }
 
-for (const scenario of ['script', 'reentry', 'specialists', 'restricted', 'deferred', 'cached'] as const) {
+for (const scenario of ['script', 'script-specialists', 'reentry', 'specialists', 'restricted', 'deferred', 'cached'] as const) {
   test(`Plan mode only refers to callable tools and specialists (${scenario})`, async () => {
     const { request, planPath } = await capture(scenario)
     const text = (request.messages ?? request.input ?? [])
@@ -62,11 +62,14 @@ for (const scenario of ['script', 'reentry', 'specialists', 'restricted', 'defer
     const reminder = text.match(/Plan mode is active\.[\s\S]+?<\/system-reminder>/)?.[0] ?? ''
     const agent = request.tools.find(tool => tool.name === 'Agent')
     const names = request.tools.map(tool => tool.name)
-    expect(agent).toBeDefined()
-    expect(agent?.description.includes('- Explore:')).toBe(scenario === 'specialists')
-    expect(agent?.description.includes('- Plan:')).toBe(
-      scenario === 'specialists' || scenario === 'restricted' || scenario === 'cached',
-    )
+    const scriptFirst = scenario === 'script' || scenario === 'script-specialists'
+    expect(names.includes('Agent')).toBe(!scriptFirst)
+    if (!scriptFirst) {
+      expect(agent?.description.includes('- Explore:')).toBe(scenario === 'specialists')
+      expect(agent?.description.includes('- Plan:')).toBe(
+        scenario === 'specialists' || scenario === 'restricted' || scenario === 'cached',
+      )
+    }
     expect(reminder).toContain(planPath)
     expect(reminder).toContain('only file you are allowed to edit')
     if (scenario === 'deferred') {
@@ -85,6 +88,9 @@ for (const scenario of ['script', 'reentry', 'specialists', 'restricted', 'defer
       expect(reminder).not.toMatch(/\b(?:Explore|Plan) (?:subagent|agent)/)
       expect(reminder).not.toContain('using the Write tool')
       expect(reminder).toContain('REPL')
+    } else if (scenario === 'script-specialists') {
+      expect(reminder).toContain('Explore agents through REPL')
+      expect(reminder).toContain('Launch Plan agent(s) through REPL')
     } else if (scenario === 'reentry') {
       expect(text).toContain('Re-entering Plan Mode')
       expect(names).toContain('apply_patch')
@@ -94,6 +100,7 @@ for (const scenario of ['script', 'reentry', 'specialists', 'restricted', 'defer
     } else if (scenario === 'specialists') {
       expect(reminder).toContain('Explore subagent type')
       expect(reminder).toContain('Launch Plan agent')
+      expect(reminder).not.toContain('through REPL')
     } else {
       expect(names).not.toContain('AskUserQuestion')
       expect(reminder).not.toContain('AskUserQuestion')

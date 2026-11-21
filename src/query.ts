@@ -4,6 +4,7 @@ import type {
   ToolResultBlockParam,
   ToolUseBlock,
 } from '@anthropic-ai/sdk/resources/index.mjs'
+import type { UUID } from 'node:crypto'
 import type { CanUseToolFn } from './hooks/useCanUseTool.js'
 import { getUserContext, getUserContextRevision } from './context.js'
 import { poolManagesCredentials } from './services/api/codexAccountPool.js'
@@ -36,7 +37,7 @@ import {
 } from 'src/services/analytics/index.js'
 import { ImageSizeError } from './utils/imageValidation.js'
 import { ImageResizeError } from './utils/imageResizer.js'
-import { findToolByName, type ToolUseContext } from './Tool.js'
+import { findToolByName, toolMatchesName, type ToolUseContext } from './Tool.js'
 import { getAcceptedHandoff, isHandoffExecutionFenced } from './app-runtime/handoff.js'
 import type { SystemPrompt } from './utils/systemPromptType.js'
 import { asSystemPrompt } from './utils/systemPromptType.js'
@@ -52,8 +53,10 @@ import type {
   TombstoneMessage,
 } from './types/message.js'
 import { logError } from './utils/log.js'
+import { AGENT_TOOL_NAME } from './tools/AgentTool/constants.js'
 import { retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
 import { codeModeModelTools, usesScriptForCodingTools } from './tools/REPLTool/codeModeModelTools.js'
+import { REPL_TOOL_NAME } from './tools/REPLTool/constants.js'
 import {
   PROMPT_TOO_LONG_ERROR_MESSAGE,
   isPromptTooLongMessage,
@@ -79,7 +82,7 @@ import {
 } from './services/api/errorUtils.js'
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { buildProviderInstructionAssembly } from './services/api/instructionAssembly.js'
-import { withScriptFirstToolGuidance } from './constants/promptStyles/scriptToolGuidance.js'
+import { withScriptAgentGuidance, withScriptFirstToolGuidance } from './constants/promptStyles/scriptToolGuidance.js'
 import { withTemporaryHarnessFeedback } from './constants/temporaryHarnessFeedback.js'
 import {
   createAgentPendingMessageAttachment,
@@ -839,6 +842,9 @@ async function* queryLoop(
       toolUseContext.options.tools,
       !!codeModeHost && !toolUseContext.agentId && appState.codeModeFirstSessionId === getSessionId(),
     )
+    const executableTools = toolUseContext.options.tools
+    const agentTool = executableTools.find(tool => tool.name === AGENT_TOOL_NAME && !tool.isMcp && !tool.mcpInfo)
+    const scriptAgent = agentTool && !modelTools.includes(agentTool) ? agentTool : undefined
     let attemptOutputEscaped = false
     const toolResults: (UserMessage | AttachmentMessage | import('./types/message.js').SystemLocalCommandMessage)[] = []
     // @see https://docs.claude.com/en/docs/build-with-claude/tool-use
@@ -907,10 +913,11 @@ async function* queryLoop(
     // it predates the experiment and is already the control-arm baseline.
     const mediaRecoveryEnabled =
       reactiveCompact?.isReactiveCompactEnabled() ?? false
+    const codingPrompt = usesScriptForCodingTools(modelTools)
+      ? withScriptFirstToolGuidance(systemPrompt)
+      : systemPrompt
     const requestSystemPrompt = withTemporaryHarnessFeedback(
-      usesScriptForCodingTools(modelTools)
-        ? withScriptFirstToolGuidance(systemPrompt)
-        : systemPrompt,
+      scriptAgent ? withScriptAgentGuidance(codingPrompt) : codingPrompt,
     )
     if (
       !compactionResult &&
@@ -1071,6 +1078,7 @@ async function* queryLoop(
               },
               querySource,
               agents: toolUseContext.options.agentDefinitions.activeAgents,
+              ...(scriptAgent && { scriptAgentTools: executableTools }),
               allowedAgentTypes:
                 toolUseContext.options.agentDefinitions.allowedAgentTypes,
               hasAppendSystemPrompt:
@@ -1241,17 +1249,23 @@ async function* queryLoop(
               const msgToolUseBlocks = message.message.content.filter(
                 content => content.type === 'tool_use',
               ) as ToolUseBlock[]
-              if (msgToolUseBlocks.length > 0) {
-                toolUseBlocks.push(...msgToolUseBlocks)
+              for (const toolBlock of msgToolUseBlocks) {
                 needsFollowUp = true
-              }
-
-              if (
-                streamingToolExecutor &&
-                !toolUseContext.abortController.signal.aborted
-              ) {
-                for (const toolBlock of msgToolUseBlocks) {
-                  streamingToolExecutor.addTool(toolBlock, message)
+                if (scriptAgent && toolMatchesName(scriptAgent, toolBlock.name)) {
+                  const result = createUserMessage({
+                    content: [{
+                      type: 'tool_result', tool_use_id: toolBlock.id, is_error: true,
+                      content: `Use ${AGENT_TOOL_NAME} through ${REPL_TOOL_NAME} in this session.`,
+                    }],
+                    sourceToolAssistantUUID: message.uuid as UUID,
+                  })
+                  yield result
+                  retainToolOutput(toolResults, result)
+                  continue
+                }
+                toolUseBlocks.push(toolBlock)
+                if (!toolUseContext.abortController.signal.aborted) {
+                  streamingToolExecutor?.addTool(toolBlock, message)
                 }
               }
             }
