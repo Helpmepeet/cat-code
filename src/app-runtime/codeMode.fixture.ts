@@ -8,6 +8,7 @@ if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspac
 globalThis.fetch = (() => { throw new Error('Network forbidden') }) as unknown as typeof fetch
 ;(globalThis as any).MACRO = { VERSION: 'code-mode-test' }
 const scenario = process.env.CODE_MODE_TEST_SCENARIO ?? 'coding'
+const isCodeFirstReopen = scenario === 'code-first-reopen'
 const isInstructions = scenario === 'instructions' || scenario === 'instructions-home'
 const isParallelGlob = scenario.startsWith('parallel-glob')
 const expectedGlobOverlap = Number(process.env.CODE_MODE_TEST_EXPECTED_GLOB_OVERLAP)
@@ -107,7 +108,7 @@ mock.module('../services/api/client.js', () => ({
   getAnthropicClient: async () => ({ beta: { messages: { create: (body: any) => {
     modelBodies.push(JSON.parse(JSON.stringify(body)))
     const index = requests++
-    const script = scenario === 'code-first'
+    const script = isCodeFirstReopen ? undefined : scenario === 'code-first'
       ? index === 0 ? scripts[0] : undefined
       : ['skill-same-turn', 'skill-queued'].includes(scenario)
       ? index < 2 ? scripts[index] : undefined
@@ -212,7 +213,15 @@ if (isBackgroundCompaction) {
   })
 }
 enableConfigs()
-const commands = isSkillCase || scenario === 'code-first'
+if (isCodeFirstReopen) {
+  const { setSessionPersistenceDisabled, switchSession } = await import('../bootstrap/state.js')
+  const { asSessionId } = await import('../types/ids.js')
+  switchSession(asSessionId(process.env.CODE_MODE_TEST_CHAT_ID!), null, {
+    fresh: process.env.CODE_MODE_TEST_FRESH === '1',
+  })
+  setSessionPersistenceDisabled(process.env.CODE_MODE_TEST_EPHEMERAL === '1')
+}
+const commands = isSkillCase
   ? await (await import('../commands.js')).getCommands(process.cwd()) : []
 let state = getDefaultAppState()
 if (isBackgroundQuota) {
@@ -374,15 +383,10 @@ let sawFence = false
 let fenceEntered!: () => void
 const fenced = new Promise<void>(resolve => { fenceEntered = resolve })
 const unsubscribe = effectsOwner.subscribe(() => { if (effectsOwner.blocked) { sawFence = true; fenceEntered() } })
-if (scenario === 'code-first') await controller.submit('/code-mode on')
 try { await controller.submit('Run the coding fixture.') }
 catch (error) {
   if (scenario !== 'background-delivery-failure' || !(error instanceof Error) || !error.message.includes('Isolated receipt storage failure')) throw error
   storageTurnFailure = error.message
-}
-if (scenario === 'code-first') {
-  await controller.submit('/code-mode off')
-  await controller.submit('Check the ordinary tool surface again.')
 }
 const firstTurnFenced = session.hasUnresolvedToolEffects()
 firstTurnEnded = true
@@ -468,7 +472,7 @@ if (scenario === 'rewind') {
   await next
 } else if (isBackgroundQuota) {
   if (Object.keys(state.tasks).length > 32) await backgroundDelivery
-} else if (!['auto-limit', 'code-first', 'skill-same-turn', 'skill-queued'].includes(scenario) && !storageTurnFailure) {
+} else if (!isCodeFirstReopen && !['auto-limit', 'code-first', 'skill-same-turn', 'skill-queued'].includes(scenario) && !storageTurnFailure) {
   try { await controller.submit('Inspect retained variables.') }
   catch (error) {
     if (scenario !== 'background-delivery-failure' || !(error instanceof Error) || !error.message.includes('Isolated receipt storage failure')) throw error

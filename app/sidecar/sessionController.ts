@@ -33,6 +33,8 @@ import {
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
 import { getTools } from '../../src/tools.js'
+import { hasScriptTool } from '../../src/tools/REPLTool/codeModeModelTools.js'
+import { isReplModeEnabled } from '../../src/tools/REPLTool/constants.js'
 import { getMainLoopModel } from '../../src/utils/model/model.js'
 import {
   createRealContextBreakdownExecutor,
@@ -854,6 +856,9 @@ export async function createSidecarSessionController({
     ? readTranscriptRunFacts(getTranscriptPath(), () => null).facts
     : null
   const runControls = createSidecarRunControlsDomain(appStateStore, {
+    // QueryEngine owns the host and preserves the built-in Script entry in
+    // this base roster when it assembles the live MCP tool pool.
+    codeModeAvailable: isReplModeEnabled() && hasScriptTool(queryEngineConfig.tools),
     providerSwitchLocked: providerBoundHistory,
     initialMessages,
     initialCacheObservation: cacheFacts?.model && cacheFacts.cacheExpiresAt != null

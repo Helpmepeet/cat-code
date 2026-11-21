@@ -8,6 +8,7 @@ import {
   getIsInteractive,
   getMainLoopModelOverride,
   getSdkBetas,
+  getSessionId,
   getSessionProvider,
   isProviderSwitchLocked,
   setIsInteractive,
@@ -29,6 +30,30 @@ import {
 function makeStore(over: Partial<AppState> = {}): Store<AppState> {
   return createStore<AppState>({ ...getDefaultAppState(), ...over })
 }
+
+test('Code Mode snapshot reports only effective changes for this engine session', () => {
+  const store = makeStore()
+  const domain = createSidecarRunControlsDomain(store, { codeModeAvailable: true })
+  const unavailable = createSidecarRunControlsDomain(store, { codeModeAvailable: false })
+  const observed: Array<ReturnType<typeof domain.getSnapshot>['codeMode']> = []
+  const unsubscribe = domain.subscribe(() => observed.push(domain.getSnapshot().codeMode))
+  const setPreference = (sessionId: string, enabled: boolean, saveFailed = false) =>
+    store.setState(state => ({ ...state, codeModePreference: { sessionId, enabled, saveFailed } }))
+  try {
+    expect(domain.getSnapshot().codeMode).toBe('unknown')
+    setPreference('other-session', true)
+    expect(observed).toEqual([])
+    const sessionId = getSessionId()
+    setPreference(sessionId, true)
+    setPreference(sessionId, true)
+    expect(unavailable.getSnapshot().codeMode).toBe('unavailable')
+    setPreference(sessionId, false)
+    setPreference(sessionId, false, true)
+    expect(observed).toEqual(['on', 'off', 'save-failed'])
+  } finally {
+    unsubscribe()
+  }
+})
 
 /** A fake executor that only mutates the store — proves the domain's set → store →
  * snapshot → change-detected-subscribe wiring without touching real process globals. */

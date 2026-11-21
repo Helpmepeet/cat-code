@@ -7,6 +7,10 @@ const scriptFirstTools = new Set([
   'apply_patch', 'NotebookEdit', AGENT_TOOL_NAME,
 ])
 
+export function hasScriptTool(tools: Tools): boolean {
+  return tools.some(tool => tool.name === REPL_TOOL_NAME && !tool.isMcp && !tool.mcpInfo)
+}
+
 /** Project declarations, not permissions or the pool used inside Script. */
 export function codeModeModelTools(tools: Tools, enabled: boolean): Tools {
   if (!enabled || !tools.some(tool => tool.name === REPL_TOOL_NAME && !tool.isMcp && !tool.mcpInfo)) {

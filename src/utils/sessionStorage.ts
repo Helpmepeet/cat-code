@@ -33,6 +33,7 @@ import {
   getSessionId,
   getSessionProjectDir,
   isSessionPersistenceDisabled,
+  isFreshSession,
   switchSession,
 } from '../bootstrap/state.js'
 import { builtInCommandNames } from '../commands.js'
@@ -358,6 +359,7 @@ export function pinSessionProjectDir(): void {
   switchSession(
     getSessionId(),
     getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
+    { fresh: isFreshSession() },
   )
 }
 

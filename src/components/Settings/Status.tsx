@@ -7,6 +7,8 @@ import type { LocalJSXCommandContext } from '../../commands.js';
 import { useIsInsideModal } from '../../context/modalContext.js';
 import { Box, Text, useTheme } from '../../ink.js';
 import { type AppState, useAppState } from '../../state/AppState.js';
+import { hasScriptTool } from '../../tools/REPLTool/codeModeModelTools.js';
+import { isReplModeEnabled } from '../../tools/REPLTool/constants.js';
 import { getCwd } from '../../utils/cwd.js';
 import { getCurrentSessionTitle } from '../../utils/sessionStorage.js';
 import { buildAccountProperties, buildAPIProviderProperties, buildIDEProperties, buildInstallationDiagnostics, buildInstallationHealthDiagnostics, buildMcpProperties, buildMemoryDiagnostics, buildSandboxProperties, buildSettingSourcesProperties, type Diagnostic, getModelDisplayLabel, type Property } from '../../utils/status.js';
@@ -99,6 +101,16 @@ function PropertyValue(t0) {
   }
   return value;
 }
+function CodeModeStatus({ context }: Pick<Props, 'context'>) {
+  const preference = useAppState(state => state.codeModePreference);
+  const current = preference?.sessionId === getSessionId() ? preference : undefined;
+  const value = !isReplModeEnabled() || !context.codeModeHost || !hasScriptTool(context.options.tools)
+    ? 'Unavailable'
+    : current?.saveFailed ? 'Off (could not save the mode)'
+    : current ? current.enabled ? 'On' : 'Off'
+    : 'Determined on the first request';
+  return <Text>Code Mode: {value}</Text>;
+}
 export function Status(t0) {
   const $ = _c(20);
   const {
@@ -159,7 +171,7 @@ export function Status(t0) {
   }
   let t6;
   if ($[12] !== grow || $[13] !== t4 || $[14] !== t5) {
-    t6 = <Box flexDirection="column" gap={1} flexGrow={grow}>{t4}{t5}</Box>;
+    t6 = <Box flexDirection="column" gap={1} flexGrow={grow}>{t4}<CodeModeStatus context={context} />{t5}</Box>;
     $[12] = grow;
     $[13] = t4;
     $[14] = t5;

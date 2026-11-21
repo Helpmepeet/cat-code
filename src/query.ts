@@ -55,8 +55,9 @@ import type {
 import { logError } from './utils/log.js'
 import { AGENT_TOOL_NAME } from './tools/AgentTool/constants.js'
 import { retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
-import { codeModeModelTools, usesScriptForCodingTools } from './tools/REPLTool/codeModeModelTools.js'
-import { REPL_TOOL_NAME } from './tools/REPLTool/constants.js'
+import { codeModeModelTools, hasScriptTool, usesScriptForCodingTools } from './tools/REPLTool/codeModeModelTools.js'
+import { initializeCodeModePreference } from './tools/REPLTool/codeModePreference.js'
+import { isReplModeEnabled, REPL_TOOL_NAME } from './tools/REPLTool/constants.js'
 import {
   PROMPT_TOO_LONG_ERROR_MESSAGE,
   isPromptTooLongMessage,
@@ -431,6 +432,10 @@ async function* queryLoop(
     const error = new Error(UNRESOLVED_TOOL_MESSAGE)
     yield createAssistantAPIErrorMessage({ content: error.message })
     return { reason: 'model_error', error }
+  }
+  if (params.toolUseContext.codeModeHost && !params.toolUseContext.agentId &&
+      isReplModeEnabled() && hasScriptTool(params.toolUseContext.options.tools)) {
+    await initializeCodeModePreference(params.toolUseContext)
   }
 
   // Cache-sharing children inherit transcript rows, but the starting roster is
@@ -840,7 +845,8 @@ async function* queryLoop(
     const assistantMessages: AssistantMessage[] = []
     const modelTools = codeModeModelTools(
       toolUseContext.options.tools,
-      !!codeModeHost && !toolUseContext.agentId && appState.codeModeFirstSessionId === getSessionId(),
+      !!codeModeHost && !toolUseContext.agentId &&
+        appState.codeModePreference?.sessionId === getSessionId() && appState.codeModePreference.enabled,
     )
     const executableTools = toolUseContext.options.tools
     const agentTool = executableTools.find(tool => tool.name === AGENT_TOOL_NAME && !tool.isMcp && !tool.mcpInfo)

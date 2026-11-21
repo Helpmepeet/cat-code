@@ -82,7 +82,7 @@ export async function setup(
 
   // Set custom session ID if provided
   if (customSessionId) {
-    switchSession(asSessionId(customSessionId))
+    switchSession(asSessionId(customSessionId), null, { fresh: true })
   }
 
   // Phase 1 (codex cache): pin the prompt_cache_key to the Cat Code session UUID

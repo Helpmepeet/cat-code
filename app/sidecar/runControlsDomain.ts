@@ -30,6 +30,7 @@ export { effortOptionsForSelection } from './effortOptions.js'
 import {
   getMainLoopModelOverride,
   getSdkBetas,
+  getSessionId,
   getTotalInputTokens,
   isProviderSwitchLocked,
   setMainLoopModelOverride,
@@ -237,6 +238,7 @@ export function createSidecarRunControlsDomain(
   options: {
     executor?: RunControlExecutor
     buildSnapshot?: (state: AppState) => RunControlsSnapshot
+    codeModeAvailable?: boolean
     providerSwitchLocked?: boolean
     initialMessages?: readonly Message[]
     initialCacheObservation?: { model: string; expiresAt: number } | null
@@ -367,13 +369,25 @@ export function createSidecarRunControlsDomain(
     for (const listener of listeners) listener()
   }
 
+  function codeModeStatus(state: AppState): RunControlsSnapshot['codeMode'] {
+    if (options.codeModeAvailable === undefined) return undefined
+    if (!options.codeModeAvailable) return 'unavailable'
+    const preference = state.codeModePreference
+    if (preference?.sessionId !== getSessionId()) return 'unknown'
+    if (preference.saveFailed) return 'save-failed'
+    return preference.enabled ? 'on' : 'off'
+  }
+
   function snapshot(): RunControlsSnapshot {
-    const built = buildSnapshot(store.getState())
+    const state = store.getState()
+    const built = buildSnapshot(state)
+    const codeMode = codeModeStatus(state)
     const cacheExpiresAt = cacheObservation && supportedCacheRoute(built.model.current) &&
       requestModel(built.model.current) === cacheObservation.model
       ? cacheObservation.expiresAt : null
     return {
       ...built,
+      ...(codeMode !== undefined ? { codeMode } : {}),
       cacheExpiresAt,
       cacheExpired: cacheExpiresAt === null ? null : now() >= cacheExpiresAt,
       model: {
@@ -567,12 +581,19 @@ export function createSidecarRunControlsDomain(
       listeners.add(listener)
       if (!unsubscribeStore) {
         let prev = runControlSignature(store.getState())
+        let prevCodeMode = codeModeStatus(store.getState())
         unsubscribeStore = store.subscribe(() => {
-          const next = runControlSignature(store.getState())
-          if (next !== prev) {
+          const state = store.getState()
+          const next = runControlSignature(state)
+          const nextCodeMode = codeModeStatus(state)
+          const runControlsChanged = next !== prev
+          if (runControlsChanged) {
             prev = next
             cacheObservation = null
             if (streamObservation) streamObservation.invalidated = true
+          }
+          if (runControlsChanged || nextCodeMode !== prevCodeMode) {
+            prevCodeMode = nextCodeMode
             for (const subscribed of listeners) subscribed()
           }
         })

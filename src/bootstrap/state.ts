@@ -110,6 +110,7 @@ type State = {
    */
   apiSessionId: SessionId
   sessionId: SessionId
+  sessionCreatedHere: boolean
   // Parent session ID for tracking session lineage (e.g., plan mode -> implementation)
   parentSessionId: SessionId | undefined
   // Logger state
@@ -343,6 +344,7 @@ function getInitialState(): State {
     statsStore: null,
     apiSessionId: sessionId,
     sessionId,
+    sessionCreatedHere: true,
     parentSessionId: undefined,
     // Logger state
     loggerProvider: null,
@@ -468,6 +470,7 @@ export function regenerateSessionId(
   const sessionId = randomUUID() as SessionId
   STATE.apiSessionId = sessionId
   STATE.sessionId = sessionId
+  STATE.sessionCreatedHere = true
   STATE.sessionProjectDir = null
   // Same signal switchSession emits: the active sessionId changed, and every
   // subscriber that tracks it has to follow. /clear reaches here rather than
@@ -494,10 +497,12 @@ export function getParentSessionId(): SessionId | undefined {
  *   session lives in a different project directory (git worktrees,
  *   cross-project resume). Every call resets the project dir; it never
  *   carries over from the previous session.
+ * @param options.fresh — the caller is assigning the ID of a newly created chat, not reopening one.
  */
 export function switchSession(
   sessionId: SessionId,
   projectDir: string | null = null,
+  options: { fresh?: boolean } = {},
 ): void {
   // Drop the outgoing session's plan-slug entry so the Map stays bounded
   // across repeated /resume. Only the current session's slug is ever read
@@ -505,8 +510,13 @@ export function switchSession(
   STATE.planSlugCache.delete(STATE.sessionId)
   STATE.apiSessionId = sessionId
   STATE.sessionId = sessionId
+  STATE.sessionCreatedHere = options.fresh === true
   STATE.sessionProjectDir = projectDir
   sessionSwitched.emit(sessionId)
+}
+
+export function isFreshSession(): boolean {
+  return STATE.sessionCreatedHere
 }
 
 const sessionSwitched = createSignal<[id: SessionId]>()

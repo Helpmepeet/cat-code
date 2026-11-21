@@ -15,7 +15,6 @@ import feedback from './commands/feedback/index.js'
 import goal from './commands/goal/index.js'
 import continueAfterLimit from './commands/continue-after-limit/index.js'
 import clear from './commands/clear/index.js'
-import codeMode from './commands/code-mode/index.js'
 import color from './commands/color/index.js'
 import commit from './commands/commit.js'
 import copy from './commands/copy/index.js'
@@ -275,7 +274,6 @@ const COMMANDS = memoize((): Command[] => [
   cacheStats,
   chrome,
   clear,
-  codeMode,
   color,
   compact,
   config,

@@ -2319,6 +2319,8 @@ export type RunControlModelOption = {
 }
 
 export type RunControlsSnapshot = {
+  /** Effective session mode, not an enrollment or a writable preference. */
+  codeMode?: 'unknown' | 'unavailable' | 'on' | 'off' | 'save-failed'
   /**
    * Estimated expiry at snapshot time. null/absent means no usable observation.
    * The renderer uses cacheExpiresAt to keep the display current while idle.

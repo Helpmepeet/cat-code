@@ -3,6 +3,8 @@ import { isEnvDefinedFalsy } from '../../utils/envUtils.js'
 
 export const REPL_TOOL_NAME = 'REPL'
 
+export const CODE_MODE_DEFAULT_FOR_NEW_SESSIONS = true
+
 const MAX_SCRIPT_TOOL_CONCURRENCY = 10
 
 export function getScriptToolConcurrency(): number {

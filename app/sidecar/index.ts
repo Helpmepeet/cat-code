@@ -402,7 +402,7 @@ async function main(): Promise<void> {
     if (existsSync(path) && (await loadTranscriptFile(path, { keepCompactedHistory: true })).messages.size > 0) {
       throw new Error('Fresh conversation identity already has messages')
     }
-    switchSession(asSessionId(args.freshEngineSessionId))
+    switchSession(asSessionId(args.freshEngineSessionId), null, { fresh: true })
   }
 
   // Resume BEFORE reading the engine session id: processResumedConversation

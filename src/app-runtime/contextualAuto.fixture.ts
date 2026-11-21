@@ -360,7 +360,7 @@ const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
-if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
+if ((routed && scenario.endsWith('-direct')) || workerRouting || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }

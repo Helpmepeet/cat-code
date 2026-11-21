@@ -1,27 +1,30 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+async function runCodingFixture(root: string, scenario: string, env: Record<string, string> = {}) {
+  const child = Bun.spawn([process.execPath, '--feature=CODE_MODE', new URL('./codeMode.fixture.ts', import.meta.url).pathname], {
+    cwd: join(root, 'workspace'), stdout: 'pipe', stderr: 'pipe',
+    env: { PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin', HOME: root, TMPDIR: root,
+      CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
+      ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: '0',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', CODE_MODE_TEST_ROOT: root,
+      CODE_MODE_TEST_SCENARIO: scenario, ...env },
+  })
+  const timer = setTimeout(() => child.kill(), 30_000)
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+  clearTimeout(timer)
+  if (code !== 0) throw new Error(`Code Mode fixture failed (${code}): ${stderr}\n${stdout}`)
+  return JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8'))
+}
 
 async function withCodingEvidence(scenario: string, check: (evidence: any, workspace: string) => Promise<void>, env: Record<string, string> = {}): Promise<void> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-host-')))
   try {
     await mkdir(join(root, 'config'))
-    const workspace = join(root, 'workspace')
-    await mkdir(workspace)
-    const child = Bun.spawn([process.execPath, '--feature=CODE_MODE', new URL('./codeMode.fixture.ts', import.meta.url).pathname], {
-      cwd: workspace, stdout: 'pipe', stderr: 'pipe',
-      env: { PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin', HOME: root, TMPDIR: root,
-        CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
-        ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: '0',
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', CODE_MODE_TEST_ROOT: root,
-        CODE_MODE_TEST_SCENARIO: scenario, ...env },
-    })
-    const timer = setTimeout(() => child.kill(), 30_000)
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
-    clearTimeout(timer)
-    if (code !== 0) throw new Error(`Code Mode fixture failed (${code}): ${stderr}\n${stdout}`)
-    await check(JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8')), workspace)
+    await mkdir(join(root, 'workspace'))
+    await check(await runCodingFixture(root, scenario, env), join(root, 'workspace'))
   } finally { await rm(root, { recursive: true, force: true }) }
 }
 
@@ -118,18 +121,59 @@ test('partial Code Mode receipt lists the real notebook edit and excludes the fa
   })
 }, 35_000)
 
-test('/code-mode changes model declarations but Script retains the real coding tools', async () => {
+test('a new chat starts in Code Mode and Script retains the real coding tools', async () => {
   await withCodingEvidence('code-first', async (evidence, workspace) => {
     const names = evidence.modelBodies.map((body: { tools: { name: string }[] }) =>
       body.tools.map(tool => tool.name))
-    expect(names).toHaveLength(3)
-    for (const request of names.slice(0, 2)) {
+    expect(names).toHaveLength(2)
+    for (const request of names) {
       expect(request).toContain('REPL')
       expect(request).toContain('TaskStop')
       for (const name of ['Bash', 'Read', 'Write', 'Edit']) expect(request).not.toContain(name)
     }
-    for (const name of ['Bash', 'Read', 'Write', 'Edit', 'REPL']) expect(names[2]).toContain(name)
     expect(await readFile(join(workspace, 'sample.txt'), 'utf8')).toBe('after\n')
     expect(await readFile(join(workspace, 'survived.txt'), 'utf8')).toBe('survived')
   })
+}, 35_000)
+
+test('new Code Mode chats reopen in Code Mode without enabling it on older chats', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-restore-')))
+  try {
+    await mkdir(join(root, 'config'))
+    await mkdir(join(root, 'workspace'))
+    const chat = crypto.randomUUID()
+    const run = (id: string, fresh = false, ephemeral = false) => runCodingFixture(root, 'code-first-reopen', {
+      CODE_MODE_TEST_CHAT_ID: id,
+      CODE_MODE_TEST_FRESH: fresh ? '1' : '0',
+      CODE_MODE_TEST_EPHEMERAL: ephemeral ? '1' : '0',
+    })
+    const names = (evidence: { modelBodies: { tools: { name: string }[] }[] }) =>
+      evidence.modelBodies[0]!.tools.map(tool => tool.name)
+    expect(names(await run(chat, true))).not.toContain('Bash')
+    const saved = join(root, 'config', 'code-mode-preferences', `${chat}.mode`)
+    expect((await stat(saved)).mode & 0o077).toBe(0)
+    expect(names(await run(chat))).not.toContain('Bash')
+    const other = crypto.randomUUID()
+    expect(names(await run(other))).toContain('Bash')
+    expect(names(await run(other, true, true))).not.toContain('Bash')
+    expect(names(await run(other))).toContain('Bash')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 35_000)
+
+test('a new persistent chat keeps its direct tools when Code Mode enrollment cannot be saved', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-save-failed-')))
+  try {
+    await mkdir(join(root, 'config'))
+    await mkdir(join(root, 'workspace'))
+    await writeFile(join(root, 'config', 'code-mode-preferences'), 'not a directory')
+    const evidence = await runCodingFixture(root, 'code-first-reopen', {
+      CODE_MODE_TEST_CHAT_ID: crypto.randomUUID(),
+      CODE_MODE_TEST_FRESH: '1',
+    })
+    expect(evidence.modelBodies[0].tools.map((tool: { name: string }) => tool.name)).toContain('Bash')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 }, 35_000)
