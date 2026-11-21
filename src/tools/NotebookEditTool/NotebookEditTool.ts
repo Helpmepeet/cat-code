@@ -16,6 +16,7 @@ import {
   writeTextContentWithVerifiedIdentity,
 } from '../../utils/file.js'
 import { readFileSyncWithMetadata } from '../../utils/fileRead.js'
+import { getCodeModeNotebookReads } from '../../utils/fileStateCache.js'
 import { safeParseJSON } from '../../utils/json.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { parseCellId } from '../../utils/notebook.js'
@@ -105,17 +106,23 @@ const NOTEBOOK_NOT_READ_ERROR =
 function readNotebookForEdit(
   fullPath: string,
   readFileState: ToolUseContext['readFileState'],
+  toolUseId: string | undefined,
 ) {
   const lastRead = readFileState.get(fullPath)
-  if (!lastRead || lastRead.isPartialView) {
+  const notebookReads = getCodeModeNotebookReads(toolUseId)
+  const scriptRead = notebookReads?.get(fullPath)
+  if ((!lastRead || lastRead.isPartialView) && !scriptRead) {
     throw new Error(NOTEBOOK_NOT_READ_ERROR)
   }
 
   const identity = getFileIdentity(fullPath)
-  if (
-    lastRead.fileIdentity === undefined ||
-    !fileIdentitiesEqual(lastRead.fileIdentity, identity)
-  ) {
+  const matchingCache = lastRead?.fileIdentity && !lastRead.isPartialView &&
+    fileIdentitiesEqual(lastRead.fileIdentity, identity)
+    ? readFileState
+    : scriptRead?.fileIdentity && fileIdentitiesEqual(scriptRead.fileIdentity, identity)
+      ? notebookReads
+      : undefined
+  if (!matchingCache) {
     throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
   }
 
@@ -123,7 +130,7 @@ function readNotebookForEdit(
   if (!fileIdentitiesEqual(identity, getFileIdentity(fullPath))) {
     throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
   }
-  return { ...metadata, identity }
+  return { ...metadata, identity, matchingCache }
 }
 
 export const NotebookEditTool = buildTool({
@@ -256,7 +263,7 @@ export const NotebookEditTool = buildTool({
 
     let content: string
     try {
-      content = readNotebookForEdit(fullPath, toolUseContext.readFileState).content
+      content = readNotebookForEdit(fullPath, toolUseContext.readFileState, toolUseContext.toolUseId).content
     } catch (e) {
       if (
         e instanceof Error &&
@@ -329,7 +336,7 @@ export const NotebookEditTool = buildTool({
       cell_type,
       edit_mode: originalEditMode,
     },
-    { readFileState, updateFileHistoryState },
+    { readFileState, updateFileHistoryState, toolUseId },
     _,
     parentMessage,
   ) {
@@ -341,8 +348,8 @@ export const NotebookEditTool = buildTool({
     try {
       // Permissions and the mutation lock can wait while another writer edits
       // the notebook. Recheck the Read identity after those waits.
-      const { content, encoding, lineEndings, identity } =
-        readNotebookForEdit(fullPath, readFileState)
+      const { content, encoding, lineEndings, identity, matchingCache } =
+        readNotebookForEdit(fullPath, readFileState, toolUseId)
 
       if (fileHistoryEnabled()) {
         await fileHistoryTrackEdit(
@@ -478,7 +485,7 @@ export const NotebookEditTool = buildTool({
       // without this, Read→NotebookEdit→Read in the same millisecond would
       // return the file_unchanged stub against stale in-context content.
       const publishedIdentity = getFileIdentity(fullPath)
-      readFileState.set(fullPath, {
+      matchingCache.set(fullPath, {
         content: updatedContent,
         timestamp: Math.floor(publishedIdentity.modifiedAtMs),
         offset: undefined,

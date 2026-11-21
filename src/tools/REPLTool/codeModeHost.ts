@@ -9,6 +9,7 @@ import { codeModeChangedFilePaths } from './codeModeChangedFiles.js'
 import { captureCodeModeToolPrincipals } from './codeModeTools.js'
 import { backgroundCodeModeCell, closeCodeModeOwner, type CodeModeOwner, type CodeModeHostCompletion } from './codeModeBackground.js'
 import { getSessionId, isSessionPersistenceDisabled } from '../../bootstrap/state.js'
+import { createFileStateCacheWithSizeLimit, type FileStateCache } from '../../utils/fileStateCache.js'
 import { createUserMessage, isCompactBoundaryMessage } from '../../utils/messages.js'
 import { logError } from '../../utils/log.js'
 import { ownBackgroundToolLane } from '../../services/tools/codeModeToolScheduling.js'
@@ -70,6 +71,7 @@ export type CodeModeResult = {
 export class CodeModeHost {
   generation = randomUUID()
   private runtime?: PersistentRuntime
+  private notebookReads?: { generation: string; cache: FileStateCache }
   private disposed = false
   private lane: Promise<void> = Promise.resolve()
   private queued = 0
@@ -97,6 +99,7 @@ export class CodeModeHost {
 
   dispose(): void {
     this.disposed = true
+    this.notebookReads = undefined
     for (const owner of this.backgroundOwners.values()) closeCodeModeOwner(owner)
     for (const cancel of this.backgroundCancellations.values()) cancel()
     for (const controller of this.controllers.values()) controller.abort()
@@ -237,6 +240,7 @@ export class CodeModeHost {
     this.runtime?.dispose()
     this.runtime = undefined
     this.generation = randomUUID()
+    this.notebookReads = undefined
     for (const owner of this.backgroundOwners.values()) closeCodeModeOwner(owner)
     this.backgroundOwners.clear()
     this.incarnation = randomUUID()
@@ -484,6 +488,12 @@ export class CodeModeHost {
     let auditBytes = 0
     const changedFiles = new Map<string, { path: string }>()
     const following: Message[] = []
+    if (this.notebookReads?.generation !== this.generation) {
+      this.notebookReads = {
+        generation: this.generation,
+        cache: createFileStateCacheWithSizeLimit(context.readFileState.max, context.readFileState.maxSize),
+      }
+    }
     const cellContext = {
       ...context, abortController: controller, codeModeBackgroundCell: background,
       contextualParentScriptSource: input.code,
@@ -537,7 +547,7 @@ export class CodeModeHost {
         if (!normalized) return
         if (!this.requiredModelMessages.has(normalized.uuid)) this.fenceForInstructions('New tool context requires a fresh model decision', [normalized])
         following.push(normalized)
-      }, principals)
+      }, principals, this.notebookReads.cache)
     const stop = () => {
       dispatch.stop('Code Mode execution cancelled')
       controller.abort()

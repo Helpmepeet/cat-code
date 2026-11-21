@@ -3,15 +3,29 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { normalize } from 'path'
 import type { FileIdentity } from './file.js'
 
-const codeModeReadScope = new AsyncLocalStorage<string>()
+const codeModeReadScope = new AsyncLocalStorage<{
+  toolUseId: string
+  notebookReads?: FileStateCache
+}>()
 
 /** Host-only invocation scope. Guest inputs must never select delivery provenance. */
-export function withCodeModeRead<T>(toolUseId: string, callback: () => T): T {
-  return codeModeReadScope.run(toolUseId, callback)
+export function withCodeModeRead<T>(
+  toolUseId: string,
+  callback: () => T,
+  notebookReads?: FileStateCache,
+): T {
+  return codeModeReadScope.run({ toolUseId, notebookReads }, callback)
 }
 
 export function isCodeModeRead(toolUseId: string | undefined): boolean {
-  return toolUseId !== undefined && codeModeReadScope.getStore() === toolUseId
+  return toolUseId !== undefined && codeModeReadScope.getStore()?.toolUseId === toolUseId
+}
+
+export function getCodeModeNotebookReads(
+  toolUseId: string | undefined,
+): FileStateCache | undefined {
+  const scope = codeModeReadScope.getStore()
+  return scope && scope.toolUseId === toolUseId ? scope.notebookReads : undefined
 }
 
 export type FileState = {

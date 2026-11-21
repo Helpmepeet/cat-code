@@ -20,10 +20,15 @@ if (scenario === 'parallel-glob-fence') {
 }
 const notebookPath = join(root, 'workspace', 'analysis.ipynb')
 const unreadNotebookPath = join(root, 'workspace', 'unread.ipynb')
-if (scenario === 'notebook') {
+const scriptNotebook = scenario === 'script-notebook'
+const imagePath = join(root, 'workspace', 'pixel.png')
+if (scenario === 'script-image') {
+  await writeFile(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP9sAAAAASUVORK5CYII=', 'base64'))
+}
+if (scenario === 'notebook' || scriptNotebook) {
   const notebook = JSON.stringify({
     nbformat: 4, nbformat_minor: 5, metadata: {},
-    cells: [{ cell_type: 'markdown', id: 'intro', source: 'Before', metadata: {} }],
+    cells: [{ cell_type: 'markdown', id: 'intro', source: scriptNotebook ? 'private-notebook-cell' : 'Before', metadata: {} }],
   })
   await writeFile(notebookPath, notebook)
   await writeFile(unreadNotebookPath, notebook)
@@ -96,6 +101,14 @@ const scripts = scenario === 'auto-limit' ? [
 ] : scenario === 'search-exact' ? [
   `const first = async query => (await tools.discover({op:"search",query,max:1})).matches[0]?.name;
   output({name: await first("Bash"), alias: await first("Brief"), partial: await first("bas")});`,
+] : scenario === 'script-image' ? [
+  `output(await tools.call({name:"Read",input:{file_path:${JSON.stringify(imagePath)}}}));`,
+] : scriptNotebook ? [
+  `const result = await tools.call({name:"Read",input:{file_path:${JSON.stringify(notebookPath)}}});
+  output(JSON.stringify(result.content).includes("private-" + "notebook-cell") ? "Read the cell in Script" : "Read did not contain the cell");`,
+  `const edit = await tools.call({name:"NotebookEdit",input:{notebook_path:${JSON.stringify(notebookPath)},cell_id:"intro",new_source:"After"},nothrow:true});
+  const unread = await tools.call({name:"NotebookEdit",input:{notebook_path:${JSON.stringify(unreadNotebookPath)},cell_id:"intro",new_source:"Never applied"},nothrow:true});
+  output({editFailed: edit.isError, editResult: edit.content, unreadResult: unread.content});`,
 ] : [
   `var file = ${JSON.stringify(join(root, 'workspace', 'sample.txt'))}; await tools.call({name:"Write",input:{file_path:file,content:"before\\n"}}); var read = await tools.call({name:"Read",input:{file_path:file}}); await tools.call({name:"Edit",input:{file_path:file,old_string:"before",new_string:"after"}}); var caught = false; try { await tools.call({name:"Bash",input:{command:"bash -c 'exit 7'",work_lifetime:"finite",run_in_background:false}}); } catch (e) { caught = true; } var failure = await tools.call({name:"Bash",input:{command:"printf diagnostic-from-failed-test >&2; bash -c 'exit 7'",work_lifetime:"finite",run_in_background:false},nothrow:true}); var failedDiagnostic = failure.content; var receipt = await tools.call({name:"Bash",input:{command:"printf survived > survived.txt",work_lifetime:"finite",run_in_background:false}}); output({caught,failedDiagnostic,failed:failure.isError});`,
   `output({retained:caught, discovery:await tools.discover({op:"describe",name:"Bash"})});`,
@@ -110,7 +123,7 @@ mock.module('../services/api/client.js', () => ({
     const index = requests++
     const script = isCodeFirstReopen ? undefined : scenario === 'code-first'
       ? index === 0 ? scripts[0] : undefined
-      : ['skill-same-turn', 'skill-queued'].includes(scenario)
+      : scriptNotebook || ['skill-same-turn', 'skill-queued'].includes(scenario)
       ? index < 2 ? scripts[index] : undefined
       : index % 2 === 0 && !((isBackgroundCompaction || ['background-cancel', 'background-direct'].includes(scenario)) && index === 2) ? scripts[index / 2] : undefined
     const notebookInvocation = index === 0 ? { name: 'Read', input: { file_path: notebookPath } }
@@ -181,7 +194,7 @@ if (isParallelGlob) {
   })
 }
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
-const notebookTools = scenario === 'notebook'
+const notebookTools = scenario === 'notebook' || scriptNotebook
   ? [(await import('../tools/NotebookEditTool/NotebookEditTool.js')).NotebookEditTool]
   : []
 const discoveryTools = scenario === 'search-exact' ? [
@@ -213,6 +226,10 @@ if (isBackgroundCompaction) {
   })
 }
 enableConfigs()
+if (scenario === 'notebook') {
+  const { getSessionId, switchSession } = await import('../bootstrap/state.js')
+  switchSession(getSessionId())
+}
 if (isCodeFirstReopen) {
   const { setSessionPersistenceDisabled, switchSession } = await import('../bootstrap/state.js')
   const { asSessionId } = await import('../types/ids.js')

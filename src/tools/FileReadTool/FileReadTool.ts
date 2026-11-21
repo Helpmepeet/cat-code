@@ -37,7 +37,7 @@ import {
   fileIdentitiesEqual,
 } from '../../utils/file.js'
 import { formatMissingPathResult, suggestMissingPath } from '../../utils/missingPathSuggestions.js'
-import { createFileStateCacheWithSizeLimit, isCodeModeRead } from '../../utils/fileStateCache.js'
+import { createFileStateCacheWithSizeLimit, getCodeModeNotebookReads, isCodeModeRead } from '../../utils/fileStateCache.js'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
 import { formatFileSize } from '../../utils/format.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
@@ -1614,7 +1614,9 @@ async function callInner(
       throw new Error('File changed while it was being read. Read it again.')
     }
     const fileIdentity = identityAfterRead
-    readFileState.set(fullFilePath, {
+    // NotebookEdit in Script can use this identity without publishing a model Read.
+    const notebookReads = getCodeModeNotebookReads(context.toolUseId) ?? readFileState
+    notebookReads.set(fullFilePath, {
       content: cellsJson,
       timestamp: Math.floor(stats.mtimeMs),
       offset,

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,6 +27,16 @@ async function withCodingEvidence(scenario: string, check: (evidence: any, works
     await mkdir(join(root, 'workspace'))
     await check(await runCodingFixture(root, scenario, env), join(root, 'workspace'))
   } finally { await rm(root, { recursive: true, force: true }) }
+}
+
+function scriptResultInRequest(messages: BetaMessageParam[], toolUseId: string): string {
+  const result = messages
+    .flatMap(message => typeof message.content === 'string' ? [] : message.content)
+    .find(block => block.type === 'tool_result' && block.tool_use_id === toolUseId)
+  if (result?.type !== 'tool_result' || typeof result.content !== 'string') {
+    throw new Error(`Missing Script text result for ${toolUseId}`)
+  }
+  return result.content
 }
 
 test('Script discovery ranks exact names and aliases above text matches', async () => {
@@ -118,6 +129,41 @@ test('partial Code Mode receipt lists the real notebook edit and excludes the fa
       calls: [{ name: 'NotebookEdit', status: 'completed' }, { name: 'NotebookEdit', status: 'failed' }],
       changedFiles: [{ path: notebookPath }],
     })
+  })
+}, 35_000)
+
+test('Script Read sends a native PNG without exposing its bytes to Script', async () => {
+  await withCodingEvidence('script-image', async (evidence, workspace) => {
+    expect(evidence.modelBodies[0].tools.map((tool: { name: string }) => tool.name)).not.toContain('Read')
+    const request: BetaMessageParam[] = evidence.modelBodies[1].messages
+    const blocks = request.flatMap(message => typeof message.content === 'string' ? [] : message.content)
+    const images = blocks.flatMap(block => {
+      if (block.type === 'image') return [block]
+      return block.type === 'tool_result' && Array.isArray(block.content)
+        ? block.content.filter(nested => nested.type === 'image')
+        : []
+    })
+    expect(blocks.filter(block => block.type === 'tool_use').map(block => block.name)).toEqual(['REPL'])
+    expect(blocks.filter(block => block.type === 'tool_result').map(block => block.tool_use_id)).toEqual(['cell-0'])
+    expect(scriptResultInRequest(request, 'cell-0')).toContain('"originalType":"image"')
+    const png = (await readFile(join(workspace, 'pixel.png'))).toString('base64')
+    expect(images.map(image => image.source)).toEqual([
+      { type: 'base64', media_type: 'image/png', data: png },
+    ])
+    expect(JSON.stringify(request).split(png)).toHaveLength(2)
+  })
+}, 35_000)
+
+test('Script Read lets NotebookEdit change only the notebook that Script read', async () => {
+  await withCodingEvidence('script-notebook', async (evidence, workspace) => {
+    expect(evidence.modelBodies[0].tools.map((tool: { name: string }) => tool.name)).not.toContain('NotebookEdit')
+    expect(scriptResultInRequest(evidence.modelBodies[1].messages, 'cell-0')).toContain('Read the cell in Script')
+    expect(JSON.stringify(evidence.modelBodies[1].messages)).not.toContain('private-notebook-cell')
+    const afterEdit = scriptResultInRequest(evidence.modelBodies[2].messages, 'cell-1')
+    expect(afterEdit).toContain('File has not been read yet')
+    expect(afterEdit).toContain('"editFailed":false')
+    expect(JSON.parse(await readFile(join(workspace, 'analysis.ipynb'), 'utf8')).cells[0].source).toBe('After')
+    expect(JSON.parse(await readFile(join(workspace, 'unread.ipynb'), 'utf8')).cells[0].source).toBe('private-notebook-cell')
   })
 }, 35_000)
 

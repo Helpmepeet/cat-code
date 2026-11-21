@@ -5,9 +5,10 @@ import { findToolByName, type ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
 import { runToolUse } from '../../services/tools/toolExecution.js'
+import { FileReadTool } from '../FileReadTool/FileReadTool.js'
 import { resolveCodeModeTool, codeModeToolPrincipal, captureCodeModeToolPrincipals, describeCodeModeTool, searchCodeModeTools, MAX_CODE_MODE_TOOL_NAME_CHARS } from './codeModeTools.js'
 import { encode } from './runtime/protocol.js'
-import { withCodeModeRead } from '../../utils/fileStateCache.js'
+import { withCodeModeRead, type FileStateCache } from '../../utils/fileStateCache.js'
 import { preflightCodeModeInstructions } from './codeModeInstructions.js'
 import type { Attachment } from '../../utils/attachments.js'
 import { hasScriptReadHooks } from '../../utils/hooks.js'
@@ -68,6 +69,7 @@ export class CodeModeDispatch {
     private readonly deliver: (message: Message) => Promise<void>,
     private readonly following: (message: Message) => Promise<void>,
     principals: ReadonlyMap<string, string> = captureCodeModeToolPrincipals(context.options.tools, context),
+    private readonly notebookReads?: FileStateCache,
   ) { this.principals = new Map(principals) }
 
   private syncHumanWait(): void {
@@ -319,13 +321,18 @@ export class CodeModeDispatch {
           if (paired?.type === 'tool_result') {
             received = true
             failed = Boolean(paired.is_error)
+            const modelImages = tool === FileReadTool && !failed && Array.isArray(paired.content)
+              ? paired.content.filter(block => block.type === 'image')
+              : []
             // Effective content is produced after applicable PostToolUse replacement.
             // Never expose pre-hook data, MCP metadata, or host objects to the guest.
             const content = typeof paired.content === 'string' ? paired.content :
               (paired.content ?? []).map(block => block.type === 'text' ? { type: 'text', text: block.text } : ({
                 type: 'direct-only-content',
                 originalType: block.type,
-                reason: 'This content requires direct tool delivery; media bytes are not exposed to the interpreter',
+                reason: block.type === 'image' && modelImages.length
+                  ? 'This image is sent separately to the model'
+                  : 'This content requires direct tool delivery; media bytes are not exposed to the interpreter',
               }))
             const contentComplete = Buffer.byteLength(JSON.stringify(content)) <= 96 * 1024
             result = {
@@ -335,7 +342,7 @@ export class CodeModeDispatch {
             }
             const mediaData = message.toolUseResult && typeof message.toolUseResult === 'object' &&
               'type' in message.toolUseResult && ['image', 'pdf', 'parts', 'notebook'].includes(String(message.toolUseResult.type))
-            if (mediaData) result = { ...(result as Record<string, unknown>), dataComplete: false, dataUnavailable: 'Structured media requires direct tool delivery' }
+            if (mediaData) result = { ...(result as Record<string, unknown>), dataComplete: false, dataUnavailable: modelImages.length ? 'Image bytes are available only to the model' : 'Structured media requires direct tool delivery' }
             if (!tool.isMcp && !mediaData && (typeof paired.content === 'string' || !(paired.content ?? []).some(block => block.type !== 'text')) && message.toolUseResult !== undefined) {
               const data = projectGuestData(message.toolUseResult, 96 * 1024)
               result = {
@@ -381,6 +388,10 @@ export class CodeModeDispatch {
               }
             }
             await this.deliver(auditMessage)
+            if (modelImages.length) {
+              this.stop('Read yielded to deliver an image to the model')
+              await this.following(createUserMessage({ content: modelImages, isMeta: true }))
+            }
             continue
           }
           if (Array.isArray(blocks) && blocks.some(block => block.type !== 'text')) {
@@ -418,6 +429,6 @@ export class CodeModeDispatch {
       call.error = error instanceof Error ? error.message : String(error)
       throw error
     }
-    })
+    }, this.notebookReads)
   }
 }
