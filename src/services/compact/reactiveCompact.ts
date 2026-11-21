@@ -33,6 +33,7 @@ import { resolveRequestProvider } from '../../utils/model/providers.js'
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
 import {
   cleanMessagesForLogging,
+  getAgentTranscriptPath,
   getTranscriptPath,
   reAppendSessionMetadata,
 } from '../../utils/sessionStorage.js'
@@ -536,7 +537,9 @@ export async function reactiveCompactOnPromptTooLong(
       content: getCompactUserSummaryMessage(
         summary,
         options.trigger === 'auto',
-        getTranscriptPath(),
+        context.agentId
+          ? getAgentTranscriptPath(context.agentId)
+          : getTranscriptPath(),
         messagesToKeep.length > 0,
         provider,
       ),

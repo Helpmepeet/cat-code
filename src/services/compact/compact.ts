@@ -75,6 +75,7 @@ import {
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
 import {
   cleanMessagesForLogging,
+  getAgentTranscriptPath,
   getTranscriptPath,
   reAppendSessionMetadata,
 } from '../../utils/sessionStorage.js'
@@ -730,7 +731,9 @@ export async function compactConversation(
       ].sort()
     }
 
-    const transcriptPath = getTranscriptPath()
+    const transcriptPath = context.agentId
+      ? getAgentTranscriptPath(context.agentId)
+      : getTranscriptPath()
     const summaryMessages: UserMessage[] = [
       createUserMessage({
         content: getCompactUserSummaryMessage(
