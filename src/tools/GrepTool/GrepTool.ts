@@ -1,7 +1,7 @@
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { getCwd } from '../../utils/cwd.js'
-import { isENOENT } from '../../utils/errors.js'
+import { AbortError, isENOENT } from '../../utils/errors.js'
 import { formatMissingPathResult, suggestMissingPath } from '../../utils/missingPathSuggestions.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -15,7 +15,7 @@ import type { PermissionDecision } from '../../utils/permissions/PermissionResul
 import { getAskRuleForTool, getDenyRuleForTool } from '../../utils/permissions/permissions.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { getGlobExclusionsForPluginCache } from '../../utils/plugins/orphanedPluginFilter.js'
-import { ripGrep } from '../../utils/ripgrep.js'
+import { ripGrep, type RipgrepIncompleteReason } from '../../utils/ripgrep.js'
 import { semanticBoolean } from '../../utils/semanticBoolean.js'
 import { semanticNumber } from '../../utils/semanticNumber.js'
 import { plural } from '../../utils/stringUtils.js'
@@ -148,6 +148,7 @@ const outputSchema = lazySchema(() =>
     numMatches: z.number().optional(), // For count mode
     appliedLimit: z.number().optional(), // The limit that was applied (if any)
     appliedOffset: z.number().optional(), // The offset that was applied
+    incompleteReason: z.enum(['output_limit', 'interrupted']).optional(),
     missingPath: z.string().optional(),
     suggestions: z.array(z.string()).optional(),
   }),
@@ -228,6 +229,7 @@ export const GrepTool = buildTool({
       numMatches,
       appliedLimit,
       appliedOffset,
+      incompleteReason,
       missingPath,
       suggestions,
     },
@@ -240,39 +242,47 @@ export const GrepTool = buildTool({
         content: formatMissingPathResult(missingPath, suggestions ?? [], 'search'),
       }
     }
+    const stoppedReason = incompleteReason === 'output_limit'
+      ? 'Ripgrep reached its output limit.'
+      : 'Ripgrep stopped before finishing.'
+    const warning = incompleteReason
+      ? `[Search incomplete. ${stoppedReason} Narrow the path or pattern and search again.]\n\n`
+      : ''
+    const emptyPage = incompleteReason
+      ? 'No results were captured for this page.'
+      : 'No matches found'
+    const limitInfo = formatLimitInfo(appliedLimit, appliedOffset)
     if (mode === 'content') {
-      const limitInfo = formatLimitInfo(appliedLimit, appliedOffset)
-      const resultContent = content || 'No matches found'
+      const resultContent = content || emptyPage
       const finalContent = limitInfo
         ? `${resultContent}\n\n[Showing results with pagination = ${limitInfo}]`
         : resultContent
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: finalContent,
+        content: warning + finalContent,
       }
     }
 
     if (mode === 'count') {
-      const limitInfo = formatLimitInfo(appliedLimit, appliedOffset)
-      const rawContent = content || 'No matches found'
+      const rawContent = content || emptyPage
       const matches = numMatches ?? 0
       const files = numFiles ?? 0
-      const summary = `\n\nFound ${matches} total ${matches === 1 ? 'occurrence' : 'occurrences'} across ${files} ${files === 1 ? 'file' : 'files'}.${limitInfo ? ` with pagination = ${limitInfo}` : ''}`
+      const count = incompleteReason ? `Captured ${matches}` : `Found ${matches} total`
+      const summary = `\n\n${count} ${matches === 1 ? 'occurrence' : 'occurrences'} across ${files} ${files === 1 ? 'file' : 'files'}.${limitInfo ? ` with pagination = ${limitInfo}` : ''}`
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: rawContent + summary,
+        content: warning + rawContent + summary,
       }
     }
 
     // files_with_matches mode
-    const limitInfo = formatLimitInfo(appliedLimit, appliedOffset)
     if (numFiles === 0) {
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: 'No files found',
+        content: incompleteReason ? warning + emptyPage : 'No files found',
       }
     }
     // head_limit has already been applied in call() method, so just show all filenames
@@ -280,7 +290,7 @@ export const GrepTool = buildTool({
     return {
       tool_use_id: toolUseID,
       type: 'tool_result',
-      content: result,
+      content: warning + result,
     }
   },
   async call(
@@ -440,12 +450,17 @@ export const GrepTool = buildTool({
       args.push('--glob', exclusion)
     }
 
-    // WSL has severe performance penalty for file reads (3-5x slower on WSL2)
-    // The timeout is handled by ripgrep itself via execFile timeout option
-    // We don't use AbortController for timeout to avoid interrupting the agent loop
-    // If ripgrep times out, it throws RipgrepTimeoutError which propagates up
-    // so Claude knows the search didn't complete (rather than thinking there were no matches)
-    const results = await ripGrep(args, absolutePath, abortController.signal)
+    // Capture completion before pagination can turn partial results into an empty page.
+    let incompleteReason: RipgrepIncompleteReason | undefined
+    const results = await ripGrep(
+      args,
+      absolutePath,
+      abortController.signal,
+      reason => { incompleteReason = reason },
+    ).finally(() => {
+      if (abortController.signal.aborted) throw new AbortError()
+    })
+    const completion = incompleteReason ? { incompleteReason } : {}
 
     if (output_mode === 'content') {
       // For content mode, results are the actual content lines
@@ -476,6 +491,7 @@ export const GrepTool = buildTool({
         filenames: [],
         content: finalLines.join('\n'),
         numLines: finalLines.length,
+        ...completion,
         ...(appliedLimit !== undefined && { appliedLimit }),
         ...(offset > 0 && { appliedOffset: offset }),
       }
@@ -524,6 +540,7 @@ export const GrepTool = buildTool({
         filenames: [],
         content: finalCountLines.join('\n'),
         numMatches: totalMatches,
+        ...completion,
         ...(appliedLimit !== undefined && { appliedLimit }),
         ...(offset > 0 && { appliedOffset: offset }),
       }
@@ -536,6 +553,7 @@ export const GrepTool = buildTool({
     const stats = await Promise.allSettled(
       results.map(_ => getFsImplementation().stat(_)),
     )
+    if (abortController.signal.aborted) throw new AbortError()
     const sortedMatches = results
       // Sort by modification time
       .map((_, i) => {
@@ -573,6 +591,7 @@ export const GrepTool = buildTool({
       mode: 'files_with_matches' as const,
       filenames: relativeMatches,
       numFiles: relativeMatches.length,
+      ...completion,
       ...(appliedLimit !== undefined && { appliedLimit }),
       ...(offset > 0 && { appliedOffset: offset }),
     }

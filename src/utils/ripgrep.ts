@@ -120,6 +120,7 @@ function ripGrepRaw(
     error: ExecFileException | null,
     stdout: string,
     stderr: string,
+    stdoutTruncated?: boolean,
   ) => void,
   singleThread = false,
 ): ChildProcess {
@@ -198,14 +199,14 @@ function ripGrepRaw(
       clearTimeout(killTimeoutId)
       if (code === 0 || code === 1) {
         // 0 = matches found, 1 = no matches (both are success)
-        callback(null, stdout, stderr)
+        callback(null, stdout, stderr, stdoutTruncated)
       } else {
         const error: ExecFileException = new Error(
           `ripgrep exited with code ${code}`,
         )
         error.code = code ?? undefined
         error.signal = signal ?? undefined
-        callback(error, stdout, stderr)
+        callback(error, stdout, stderr, stdoutTruncated)
       }
     })
 
@@ -215,7 +216,7 @@ function ripGrepRaw(
       clearTimeout(timeoutId)
       clearTimeout(killTimeoutId)
       const error: ExecFileException = err
-      callback(error, stdout, stderr)
+      callback(error, stdout, stderr, stdoutTruncated)
     })
 
     return child
@@ -351,10 +352,30 @@ export async function ripGrepStream(
   })
 }
 
+function parseRipgrepLines(stdout: string): string[] {
+  return stdout
+    .trim()
+    .split('\n')
+    .map(line => line.replace(/\r$/, ''))
+    .filter(Boolean)
+}
+
+function completeRipgrepLines(stdout: string, exceededBuffer = false): string[] {
+  // Bun's execFile can deliver queued chunks after reporting maxBuffer.
+  if (exceededBuffer && Buffer.byteLength(stdout) > MAX_BUFFER_SIZE) {
+    stdout = Buffer.from(stdout).subarray(0, MAX_BUFFER_SIZE).toString()
+  }
+  // A stopped or capped subprocess may have written only part of the last row.
+  return parseRipgrepLines(stdout.slice(0, stdout.lastIndexOf('\n') + 1))
+}
+
+export type RipgrepIncompleteReason = 'output_limit' | 'interrupted'
+
 export async function ripGrep(
   args: string[],
   target: string,
   abortSignal: AbortSignal,
+  onIncomplete?: (reason: RipgrepIncompleteReason) => void,
 ): Promise<string[]> {
   await codesignRipgrepIfNecessary()
   await ensureRipgrepAvailable()
@@ -365,16 +386,15 @@ export async function ripGrep(
       stdout: string,
       stderr: string,
       isRetry: boolean,
+      stdoutTruncated?: boolean,
     ): void => {
-      // Success case
       if (!error) {
-        resolve(
-          stdout
-            .trim()
-            .split('\n')
-            .map(line => line.replace(/\r$/, ''))
-            .filter(Boolean),
-        )
+        if (stdoutTruncated && onIncomplete) {
+          onIncomplete('output_limit')
+          resolve(completeRipgrepLines(stdout))
+        } else {
+          resolve(parseRipgrepLines(stdout))
+        }
         return
       }
 
@@ -405,8 +425,8 @@ export async function ripGrep(
           args,
           target,
           abortSignal,
-          (retryError, retryStdout, retryStderr) => {
-            handleResult(retryError, retryStdout, retryStderr, true)
+          (retryError, retryStdout, retryStderr, retryTruncated) => {
+            handleResult(retryError, retryStdout, retryStderr, true, retryTruncated)
           },
           true, // Force single-threaded mode for this retry only
         )
@@ -426,7 +446,6 @@ export async function ripGrep(
       }
 
       // For all other errors, try to return partial results if available
-      const hasOutput = stdout && stdout.trim().length > 0
       const isTimeout =
         error.signal === 'SIGTERM' ||
         error.signal === 'SIGKILL' ||
@@ -434,17 +453,11 @@ export async function ripGrep(
       const isBufferOverflow =
         error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
 
-      let lines: string[] = []
-      if (hasOutput) {
-        lines = stdout
-          .trim()
-          .split('\n')
-          .map(line => line.replace(/\r$/, ''))
-          .filter(Boolean)
-        // Drop last line for timeouts and buffer overflow - it may be incomplete
-        if (lines.length > 0 && (isTimeout || isBufferOverflow)) {
-          lines = lines.slice(0, -1)
-        }
+      const lines = onIncomplete
+        ? completeRipgrepLines(stdout, isBufferOverflow)
+        : parseRipgrepLines(stdout)
+      if (!onIncomplete && (isTimeout || isBufferOverflow)) {
+        lines.pop()
       }
 
       logForDebugging(
@@ -458,8 +471,7 @@ export async function ripGrep(
         logError(error)
       }
 
-      // If we timed out with no results, throw an error so Claude knows the search
-      // didn't complete rather than thinking there were no matches
+      // With no captured results, keep the error that explains the search stopped.
       if (isTimeout && lines.length === 0) {
         reject(
           new RipgrepTimeoutError(
@@ -470,11 +482,14 @@ export async function ripGrep(
         return
       }
 
+      onIncomplete?.(
+        stdoutTruncated || isBufferOverflow ? 'output_limit' : 'interrupted',
+      )
       resolve(lines)
     }
 
-    ripGrepRaw(args, target, abortSignal, (error, stdout, stderr) => {
-      handleResult(error, stdout, stderr, false)
+    ripGrepRaw(args, target, abortSignal, (error, stdout, stderr, stdoutTruncated) => {
+      handleResult(error, stdout, stderr, false, stdoutTruncated)
     })
   })
 }
