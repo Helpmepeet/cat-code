@@ -53,6 +53,7 @@ import { interpretCommandResult, SEMANTIC_COMMAND_NAMES } from './commandSemanti
 import { checkKillOwnership } from './killOwnership.js';
 import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from './prompt.js';
 import { checkReadOnlyConstraints } from './readOnlyValidation.js';
+import { readTestFailurePreview } from './testFailurePreview.js';
 import { applySedSubstitution, parseSedEditCommand } from './sedEditParser.js';
 import {
   consumeTrustedSedEditForExecution,
@@ -896,13 +897,18 @@ export const BashTool = buildTool({
       // Publish the same retained-output reference as successful commands before
       // handing the failure to the tool runner's error formatter.
       if (persistedOutputPath) {
-        const preview = generatePreview(commandError.stderr, PREVIEW_SIZE_BYTES);
+        // Preserve sandbox annotations from stderr in the normal preview.
+        const failurePreview = !result.interrupted && commandError.stderr === result.stdout
+          ? await readTestFailurePreview(input.command, persistedOutputPath, PREVIEW_SIZE_BYTES)
+          : undefined;
+        const preview = failurePreview === undefined
+          ? generatePreview(commandError.stderr, PREVIEW_SIZE_BYTES)
+          : { preview: failurePreview, hasMore: true, previewKind: 'test-failures' as const };
         throw new ShellError('', buildLargeToolResultMessage({
           filepath: persistedOutputPath,
           originalSize: persistedOutputSize ?? 0,
           isJson: false,
-          preview: preview.preview,
-          hasMore: preview.hasMore
+          ...preview
         }), result.code, result.interrupted);
       }
       throw commandError;
