@@ -1,3 +1,4 @@
+import { isLoggableMessage } from './isLoggableMessage.js'
 import { assertSessionNotMoving, readSessionRelocation } from './sessionRelocationState.js'
 import { parsePriorAssistantContext } from './permissions/priorAssistantContext.js'
 import { feature } from 'bun:bundle'
@@ -6492,43 +6493,7 @@ export async function loadAllSubagentTranscriptsFromDisk(): Promise<{
 
 // Exported so useLogMessages can sync-compute the last loggable uuid
 // without awaiting recordTranscript's return value (race-free hint tracking).
-export function isLoggableMessage(m: Message): boolean {
-  if (m.type === 'progress') return false
-  // Attachments ARE persisted. The old non-ant drop existed to keep attachment
-  // content out of public training data; this fork has one user and ships
-  // USER_TYPE='external' (scripts/build.ts), so the drop was total and cost
-  // real fidelity: mid-turn typing becomes a queued_command attachment that IS
-  // sent to the model (attachments.ts getQueuedCommandAttachments, drained in
-  // query.ts), so a transcript without attachments does not record what the
-  // model was told, and a resumed prefix cannot match what was cached.
-  // isTranscriptMessage already admits 'attachment' into the parentUuid chain
-  // on the read side. Upstream reached the same place: its equivalent denylist
-  // has been `new Set([])` since at least 2.1.214.
-  //
-  // A hook_success with no content and no output is the one exception, also
-  // upstream's: hooks.ts deliberately writes content:'' for the ordinary
-  // silent success, so persisting it would add a row per hook per turn that
-  // says nothing.
-  if (m.type === 'attachment') {
-    // AttachmentMessage.attachment is typed `unknown` (types/message.ts), so
-    // the shape has to be named here to read it.
-    const attachment = m.attachment as {
-      type?: string
-      content?: string
-      stdout?: string
-      stderr?: string
-    } | null
-    if (
-      attachment?.type === 'hook_success' &&
-      !attachment.content &&
-      !attachment.stdout?.trim() &&
-      !attachment.stderr?.trim()
-    ) {
-      return false
-    }
-  }
-  return true
-}
+export { isLoggableMessage }
 
 function collectReplIds(messages: readonly Message[]): Set<string> {
   const ids = new Set<string>()

@@ -297,6 +297,14 @@ for (const mode of ['late', 'writer-failure', 'replacement', 'cancel', 'batch-ca
 test('Stop during an MCP call admits the next chat message after the real error is saved', async () => {
   const started = deferred(), finish = deferred()
   const callId = 'interrupted-mcp-call'
+  const { createAttachmentMessage } = await import('./utils/attachments.js')
+  const hook = { type: 'hook_success', hookName: 'fixture', hookEvent: 'PostToolUseFailure', toolUseID: callId, content: '' } as const
+  const silent = createAttachmentMessage({ ...hook, stdout: ' \n' })
+  const meaningful = createAttachmentMessage({ ...hook, stderr: 'fixture hook diagnostic' })
+  spies.push(spyOn(hooks, 'executePostToolUseFailureHooks').mockImplementation(async function* () {
+    yield { message: silent }
+    yield { message: meaningful }
+  }))
   let calls = 0, requests = 0
   const tool = buildTool({
     name: 'mcp__fixture__inspect', isMcp: true, inputSchema: z.object({}),
@@ -331,6 +339,8 @@ test('Stop during an MCP call admits the next chat message after the real error 
     finish.resolve()
     await within(getInterruptedToolRun(bootstrap.getSessionId()).whenSettled())
     const saved = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()))
+    expect(saved.messages.has(silent.uuid)).toBe(false)
+    expect(saved.messages.get(meaningful.uuid)).toMatchObject({ attachment: meaningful.attachment })
     const results = [...saved.messages.values()].flatMap(row =>
       row.type === 'user' && Array.isArray(row.message.content)
         ? row.message.content.filter(block => block.type === 'tool_result' && block.tool_use_id === callId) : [])

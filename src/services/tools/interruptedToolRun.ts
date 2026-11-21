@@ -1,4 +1,5 @@
 import type { Message } from '../../types/message.js'
+import { isLoggableMessage } from '../../utils/isLoggableMessage.js'
 import { logError } from '../../utils/log.js'
 
 type Update = { message?: Message }
@@ -118,9 +119,8 @@ export class InterruptedToolRun {
     while (true) {
     while (!next.done) {
       const message = next.value.message
-      // Progress belongs to the foreground UI and has no transcript UUID on disk.
-      // Waiting for it to become durable would strand the tool result behind it.
-      if (message && message.type !== 'progress') {
+      // A message omitted from the transcript can never earn a durable receipt.
+      if (message && isLoggableMessage(message)) {
         while (true) {
           const sink = this.sink
           const generation = this.generation
