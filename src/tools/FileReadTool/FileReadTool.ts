@@ -1387,10 +1387,8 @@ async function resolveMissingFunctionRead(
  * conclude it had seen all of it. Whether the read was cut short is decided
  * in callInner (see truncatedReads), not re-derived from the line totals.
  */
-function partialReadNotice(data: {
-  file: { startLine: number; numLines: number; totalLines: number }
-}): string {
-  if (!truncatedReads.has(data)) return ''
+function partialReadNotice(data: Extract<Output, { type: 'text' }>): string {
+  if (!isTruncatedFileRead(data)) return ''
   return renderPartialReadNotice(data.file, tokenTruncatedReads.has(data))
 }
 
@@ -1417,6 +1415,10 @@ const memoryFileMtimes = new WeakMap<object, number>()
 
 /** Same side-channel, for "this read stopped short of the end of the file". */
 const truncatedReads = new WeakSet<object>()
+
+export function isTruncatedFileRead(data: Extract<Output, { type: 'text' }>): boolean {
+  return truncatedReads.has(data)
+}
 
 /** Partial reads created to keep a token-overflow result usable. */
 const tokenTruncatedReads = new WeakSet<object>()

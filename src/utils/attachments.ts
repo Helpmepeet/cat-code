@@ -13,6 +13,7 @@ import {
 import {
   FileReadTool,
   callFileReadToolWithPreparedCapability,
+  isTruncatedFileRead,
   MaxFileReadTokenExceededError,
   type Output as FileReadToolOutput,
   readImageWithTokenBudget,
@@ -2212,12 +2213,26 @@ export async function getChangedFiles(
       const fileState = toolUseContext.readFileState.get(filePath)
       if (!fileState) return null
 
-      // TODO: Implement offset/limit support for changed files
-      if (fileState.offset !== undefined || fileState.limit !== undefined) {
+      // Read records the starting line even for a whole file. Instruction
+      // attachments can flag a partial delivery but cache raw text with no offset.
+      if (
+        fileState.limit !== undefined ||
+        fileState.isTruncatedView ||
+        (fileState.offset !== undefined &&
+          (fileState.offset > 1 || fileState.isPartialView))
+      ) {
         return null
       }
 
       const normalizedPath = expandPath(filePath)
+      // Notebook diffs are unsupported. Refreshing a prior notebook Read here
+      // would give NotebookEdit the new identity without showing the change.
+      if (
+        fileState.offset !== undefined &&
+        parse(normalizedPath).ext.toLowerCase() === '.ipynb'
+      ) {
+        return null
+      }
 
       // Check if file has a deny rule configured
       if (isFileReadDenied(normalizedPath, appState.toolPermissionContext)) {
@@ -2247,6 +2262,7 @@ export async function getChangedFiles(
         )
         // Extract only the changed section
         if (result.data.type === 'text') {
+          if (isTruncatedFileRead(result.data)) return null
           const snippet = getSnippetForTwoFileDiff(
             fileState.content,
             result.data.file.content,
