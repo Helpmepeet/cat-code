@@ -117,17 +117,17 @@ export function getFileModificationTime(filePath: string): number {
   return Math.floor(fs.statSync(filePath).mtimeMs)
 }
 
-/**
- * Async variant of getFileModificationTime. Same floor semantics.
- * Use this in async paths (getChangedFiles runs every turn on every readFileState
- * entry — sync statSync there triggers the slow-operation indicator on network/
- * slow disks).
- */
-export async function getFileModificationTimeAsync(
+/** One async stat per watched path. Older cache entries only record mtime. */
+export async function hasFileChangedSinceRead(
   filePath: string,
-): Promise<number> {
-  const s = await getFsImplementation().stat(filePath)
-  return Math.floor(s.mtimeMs)
+  timestamp: number,
+  identity?: FileIdentity,
+): Promise<boolean> {
+  const stats = await getFsImplementation().stat(filePath)
+  if (!identity) return Math.floor(stats.mtimeMs) > timestamp
+  return stats.dev !== identity.device || stats.ino !== identity.inode ||
+    stats.size !== identity.size || stats.mtimeMs !== identity.modifiedAtMs ||
+    stats.ctimeMs !== identity.changedAtMs
 }
 
 export function writeTextContent(

@@ -16,6 +16,7 @@ const files = [
   { name: 'offset.txt', original: 'hidden-line\noriginal-offset-line\n', range: { offset: 2 } },
   { name: 'truncated.txt', original: `original-truncated-line\n${'x\n'.repeat(2100)}` },
   { name: 'grown.txt', original: 'original-grown-line\n' },
+  { name: 'preserved.txt', original: 'before-preserved-line\n' },
 ]
 for (const { name, original } of files) {
   await writeFile(name, original)
@@ -86,9 +87,9 @@ try {
   const editor = Bun.spawnSync([process.execPath, '-e', String.raw`
     import { readFileSync, utimesSync, writeFileSync } from 'node:fs';
     for (const name of process.argv.slice(1)) {
-      const edited = readFileSync(name, 'utf8').replace('original-', 'edited-');
+      const edited = readFileSync(name, 'utf8').replace('original-', 'edited-').replace('before-', 'edited-');
       writeFileSync(name, name === 'grown.txt' ? edited + 'x\n'.repeat(2100) : edited);
-      utimesSync(name, 5, 5);
+      utimesSync(name, 5, name === 'preserved.txt' ? 1 : 5);
     }
   `, ...files.map(file => file.name)])
   if (editor.exitCode !== 0) throw new Error(`Outside edit failed: ${editor.stderr.toString()}`)

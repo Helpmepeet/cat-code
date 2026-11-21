@@ -122,7 +122,7 @@ import {
 } from './abortController.js'
 import { isAbortError } from './errors.js'
 import {
-  getFileModificationTimeAsync,
+  hasFileChangedSinceRead,
   isFileWithinReadSizeLimit,
 } from './file.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
@@ -2232,8 +2232,7 @@ export async function getChangedFiles(
       }
 
       try {
-        const mtime = await getFileModificationTimeAsync(normalizedPath)
-        if (mtime <= fileState.timestamp) {
+        if (!await hasFileChangedSinceRead(normalizedPath, fileState.timestamp, fileState.fileIdentity)) {
           return null
         }
 

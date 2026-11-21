@@ -47,6 +47,7 @@ test('the next turn reports outside edits to a fully read file', async () => {
 
     expect(evidence.nextTurn).toContain(`Note: ${join(workspace, 'full.txt')} was modified`)
     expect(evidence.nextTurn).toContain('edited-full-line')
+    expect(evidence.nextTurn).toContain('edited-preserved-line')
     for (const partial of ['limited', 'offset', 'truncated', 'grown']) {
       expect(evidence.nextTurn).not.toContain(`Note: ${join(workspace, `${partial}.txt`)} was modified`)
       expect(evidence.nextTurn).not.toContain(`edited-${partial}-line`)
