@@ -1066,12 +1066,12 @@ async function* runAgentInCleanupScope({
     verbose: toolUseContext.options.verbose,
     mainLoopModel: resolvedAgentModel,
     mainLoopProvider: resolvedAgentProvider,
-    // For fork children (useExactTools), inherit thinking config to match the
-    // parent's API request prefix for prompt cache hits. For regular
-    // sub-agents, disable thinking to control output token costs.
+    // Forks keep the parent's request prefix for prompt cache hits.
+    // Codex treats disabled thinking as a minimum-effort override, so
+    // ordinary Codex workers need thinking enabled to use their resolved effort.
     thinkingConfig: useExactTools
       ? toolUseContext.options.thinkingConfig
-      : { type: 'disabled' as const },
+      : { type: resolvedAgentProvider === 'openai' ? 'adaptive' : 'disabled' },
     mcpClients: mergedMcpClients,
     mcpResources: parentMcpResources,
     getMcpRuntimeSnapshot: toolUseContext.options.getMcpRuntimeSnapshot,
