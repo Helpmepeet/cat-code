@@ -65,6 +65,7 @@ let parentRequestedAgent = false
 let compactingRequests = 0
 let responseCount = 0
 let recoveryPath: string | undefined
+let includedParentMemory = false
 let preservedRead = false
 let receiptUsage: Record<string, number> = {}
 globalThis.fetch = (async (input, init) => {
@@ -84,7 +85,8 @@ globalThis.fetch = (async (input, init) => {
   if (userText.includes('CRITICAL: Respond with TEXT ONLY.')) {
     return messageResponse(id, '<summary>Isolated compaction summary.</summary>')
   }
-  if (userText.includes(sessionMemory ? sessionMemorySummary : 'Isolated compaction summary')) {
+  if (userText.includes(sessionMemorySummary) || userText.includes('Isolated compaction summary')) {
+    includedParentMemory = userText.includes(sessionMemorySummary)
     recoveryPath = /read the full transcript at: ([^\n]+)/.exec(userText)?.[1]
     preservedRead = body.messages.some(({ role, content }) =>
       role === 'assistant' && Array.isArray(content) &&
@@ -212,6 +214,7 @@ try {
     transcript,
     recoveryPath,
     preservedRead,
+    includedParentMemory,
     receiptUsage,
     liveUsage: liveNotification && parseTaskNotificationDetails(liveNotification)?.usage,
     savedUsage: savedNotification && parseTaskNotificationDetails(savedNotification)?.usage,

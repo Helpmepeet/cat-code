@@ -16,7 +16,7 @@ import { getMainLoopModel } from '../../utils/model/model.js'
 import { getAPIProvider, resolveRequestProvider } from '../../utils/model/providers.js'
 import { getSessionMemoryPath } from '../../utils/permissions/filesystem.js'
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
-import { getAgentTranscriptPath, getTranscriptPath } from '../../utils/sessionStorage.js'
+import { getTranscriptPath } from '../../utils/sessionStorage.js'
 import { tokenCountFromLastAPIResponse } from '../../utils/tokens.js'
 import { extractDiscoveredToolNames } from '../../utils/toolSearch.js'
 import {
@@ -448,8 +448,6 @@ function createCompactionResultFromSessionMemory(
   sessionMemory: string,
   messagesToKeep: Message[],
   hookResults: HookResultMessage[],
-  transcriptPath: string,
-  agentId?: AgentId,
 ): CompactionResult {
   const preCompactTokenCount = tokenCountFromLastAPIResponse(messages)
 
@@ -473,7 +471,7 @@ function createCompactionResultFromSessionMemory(
   let summaryContent = getCompactUserSummaryMessage(
     truncatedContent,
     true,
-    transcriptPath,
+    getTranscriptPath(),
     true,
     resolveRequestProvider(getMainLoopModel(), getAPIProvider()),
   )
@@ -492,7 +490,7 @@ function createCompactionResultFromSessionMemory(
     }),
   ]
 
-  const planAttachment = createPlanAttachmentIfNeeded(agentId)
+  const planAttachment = createPlanAttachmentIfNeeded()
   const attachments = planAttachment ? [planAttachment] : []
 
   return {
@@ -530,7 +528,8 @@ export async function trySessionMemoryCompaction(
   _unused?: null,
   runtimeAttachmentTokenBudget: number = 0,
 ): Promise<CompactionResult | null> {
-  if (!shouldUseSessionMemoryCompaction()) {
+  // Only the main conversation writes session memory. Workers compact their own history.
+  if (agentId || !shouldUseSessionMemoryCompaction()) {
     return null
   }
 
@@ -599,18 +598,11 @@ export async function trySessionMemoryCompaction(
       model: getMainLoopModel(),
     })
 
-    // Get transcript path for the summary message
-    const transcriptPath = agentId
-      ? getAgentTranscriptPath(agentId)
-      : getTranscriptPath()
-
     const compactionResult = createCompactionResultFromSessionMemory(
       messages,
       sessionMemory,
       messagesToKeep,
       hookResults,
-      transcriptPath,
-      agentId,
     )
 
     const postCompactMessages = buildPostCompactMessages(compactionResult)

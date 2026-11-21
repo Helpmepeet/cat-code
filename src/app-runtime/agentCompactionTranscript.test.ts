@@ -51,6 +51,7 @@ for (const scope of ['worker', 'main', 'background'] as const) {
           const evidence = JSON.parse(stdout) as {
             recoveryPath?: string
             preservedRead: boolean
+            includedParentMemory: boolean
             transcript: string
             olderReadInArchive: boolean
             receiptUsage: Record<string, number>
@@ -58,7 +59,9 @@ for (const scope of ['worker', 'main', 'background'] as const) {
             savedUsage?: { totalTokens: number }
           }
           expect(evidence.olderReadInArchive).toBe(true)
-          expect(evidence.preservedRead).toBe(strategy !== 'full')
+          const usesSessionMemory = scope === 'main' && strategy === 'session-memory'
+          expect(evidence.includedParentMemory).toBe(usesSessionMemory)
+          expect(evidence.preservedRead).toBe(strategy === 'prefix' || usesSessionMemory)
           expect(evidence.recoveryPath).toBe(evidence.transcript)
           if (scope === 'worker' && strategy !== 'session-memory') {
             // Read request(s), compaction summary request, and final response.
