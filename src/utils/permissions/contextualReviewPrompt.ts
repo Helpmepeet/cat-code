@@ -1,4 +1,5 @@
 import { z } from 'zod/v4'
+import { AUTO_MODE_NO_EXPLANATION } from '../../app-runtime/autoModeReviewContract.js'
 
 export const CONTEXTUAL_REVIEW_VERSION = 'cat-code-contextual-review-v7'
 export const CONTEXTUAL_REVIEW_MAX_OUTPUT = 1024
@@ -98,7 +99,7 @@ const verdictSchema = z.strictObject({
   decision: z.enum(['allow', 'ask', 'deny']),
   risk: z.enum(['low', 'medium', 'high', 'unknown']),
   rationale: z.string().optional().transform(text =>
-    text?.trim().replace(/\s+/gu, ' ').slice(0, 600) || 'The reviewer returned no explanation.'),
+    text?.trim().replace(/\s+/gu, ' ').slice(0, 600) || AUTO_MODE_NO_EXPLANATION),
   user_authorization: z.enum(['unknown', 'low', 'medium', 'high']).optional(),
 })
 

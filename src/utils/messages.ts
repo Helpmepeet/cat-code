@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { AUTO_MODE_REJECTION_PREFIX } from '../app-runtime/autoModeReviewContract.js'
 import { wrapCommandText } from './messageOrigin.js'
 export { wrapCommandText } from './messageOrigin.js'
 import { parsePriorAssistantContext } from './permissions/priorAssistantContext.js'
@@ -277,10 +278,6 @@ export const NO_RESPONSE_REQUESTED = 'No response requested.'
 // but the content is fake, which poisons training data if submitted.
 export const SYNTHETIC_TOOL_RESULT_PLACEHOLDER =
   '[Tool result missing due to internal error]'
-
-// Prefix used by UI to detect classifier denials and render them concisely
-const AUTO_MODE_REJECTION_PREFIX =
-  'Permission for this action has been denied. Reason: '
 
 /**
  * Check if a tool result message is a classifier denial.

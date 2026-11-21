@@ -1,3 +1,6 @@
+export const AUTO_MODE_NO_EXPLANATION = 'The reviewer returned no explanation.'
+export const AUTO_MODE_REJECTION_PREFIX = 'Permission for this action has been denied. Reason: '
+
 export type AutoModeReview = {
   type: 'tool.review'
   toolUseId: string

@@ -3712,6 +3712,10 @@ export class SidecarServer {
       }
     }
 
+    if (this.controller.retryPendingToolReceipts()) {
+      refuseSubmit('turn_already_running', 'Your message was not sent. Wait for the interrupted tool result to be saved, then send it again.', true)
+      return
+    }
     // A previous fallback adapter may have left a completion queued without a
     // durable ack. A human turn is a new, explicitly accepted safe boundary.
     this.taskNotificationAwaitingDurableAcceptance = false
@@ -3893,6 +3897,7 @@ export class SidecarServer {
    */
   private isParkGateOpen(): boolean {
     if (this.activeTurn || this.controller.isTurnActive() || this.inlineCommandActive) return false
+    if (this.controller.hasUnresolvedToolEffects()) return false
     const handoff = this.controller.getHandoffReservation()
     if (handoff) {
       try { if (readWorkspaceJump(this.sessionId)?.operationId !== handoff) return false }
@@ -6472,7 +6477,7 @@ export class SidecarServer {
    */
   private currentPresence(): ActivityPresence {
     if (this.controller.getPendingPermissionRequests().length > 0) return 'needs_user'
-    if (this.activeTurn || this.controller.isTurnActive() || this.inlineCommandActive) return 'running'
+    if (this.activeTurn || this.controller.isTurnActive() || this.inlineCommandActive || this.controller.hasUnresolvedToolEffects()) return 'running'
     return 'idle'
   }
 

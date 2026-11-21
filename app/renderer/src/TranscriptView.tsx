@@ -40,14 +40,14 @@ import { extractInlineCommandFences, type InlineCommandRun, type InlineCommandSo
 import { InlineCommandContext } from './inlineCommandState.js'
 import { ComputerPaneContext } from './computerPaneContext.js'
 import './computerPane.css'
-import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
+import { AutoModeReviewFooter, AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { EmailToolResult } from './EmailToolResult.js'
 import { CodeModeCard } from './CodeModeCard.js'
 import { codeModeChildIsReviewing } from './codeModeLiveView.js'
 import { EmailToolDiscovery } from './EmailToolChrome.js'
 import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
 import { getEmailToolIdentity } from './emailToolPresentation.js'
-import { AutoModeReviewContext, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
+import { AutoModeReviewContext, isDuplicateAutoModeDenial, summarizeAutoModeReviews, visibleAutoModeReason, type ReviewSummary } from './autoModeReview.js'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, CatCodeBridge, SessionId } from '../../shared/protocol.js'
@@ -2404,7 +2404,9 @@ function ToolCardShell({
           >
             <AutoModeReviewReason review={review} />
             {children}
+            {style === 'lines' ? <AutoModeReviewFooter review={review} /> : null}
           </div>
+          {style === 'cards' ? <AutoModeReviewFooter review={review} fullWidth /> : null}
         </div>
       ) : null}
     </div>
@@ -2828,7 +2830,13 @@ function CodeModeMember({ row }: { row: ToolUseNestedRow }) {
       <AutoModeReviewMark review={row.autoModeReview} />
       {row.status !== 'success' ? <span className={`code-mode-member-status ${status.color}`}>{!approvals?.[row.toolUseId] && codeModeChildIsReviewing(row) ? 'Reviewing' : status.word}</span> : null}
     </button>
-    {open ? <div className="code-mode-member-body"><AutoModeReviewReason review={row.autoModeReview} /><ToolCardBody row={row} content={row.result?.content ?? ''} ack={toolAckForResult(row.result)} /></div> : null}
+    {open ? (
+      <div className="code-mode-member-body">
+        <AutoModeReviewReason review={row.autoModeReview} />
+        <ToolCardBody row={row} content={row.result?.content ?? ''} ack={toolAckForResult(row.result)} omitDuplicateDenial />
+        <AutoModeReviewFooter review={row.autoModeReview} />
+      </div>
+    ) : null}
   </div>
 }
 
@@ -2991,7 +2999,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
           ) : null
         }
       >
-        <ToolCardBody row={row} content={content} ack={ack} />
+        <ToolCardBody row={row} content={content} ack={ack} omitDuplicateDenial />
       </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 border-l border-accent/20 pl-3">
@@ -3752,7 +3760,9 @@ const ToolRunRow = memo(function ToolRunRow({
             row={row}
             content={content}
             ack={toolAckForResult(row.result)}
+            omitDuplicateDenial
           />
+          <AutoModeReviewFooter review={row.autoModeReview} />
         </div>
       ) : null}
     </div>
@@ -4218,7 +4228,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   // body — two sibling expressions would make it an array and give every
   // childless agent card an affordance that expands to nothing.
   const body =
-    childCount === 0 && completion === null && !row.autoModeReview?.reason ? null : (
+    childCount === 0 && completion === null && !visibleAutoModeReason(row.autoModeReview) ? null : (
       <div className="flex flex-col gap-2">
         <AutoModeReviewReason review={row.autoModeReview} />
         {childCount > 0 ? (
@@ -4232,6 +4242,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         {completion !== null ? (
           <AgentCompletionBody completion={completion} />
         ) : null}
+        {cardStyle === 'lines' ? <AutoModeReviewFooter review={row.autoModeReview} /> : null}
       </div>
     )
   // A resumed run opens when its completion supplies the answer, and an errored
@@ -4355,10 +4366,9 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         </div>
       ) : null}
       {(expanded || openPanel !== null) && body !== null ? (
-        <div
-          className={`${TOOL_CARD_BODY_CLASS[cardStyle]} ${TOOL_CARD_BODY_INNER_CLASS[cardStyle]}`}
-        >
-          {body}
+        <div className={TOOL_CARD_BODY_CLASS[cardStyle]}>
+          <div className={TOOL_CARD_BODY_INNER_CLASS[cardStyle]}>{body}</div>
+          {cardStyle === 'cards' ? <AutoModeReviewFooter review={row.autoModeReview} fullWidth /> : null}
         </div>
       ) : null}
     </div>
@@ -4563,10 +4573,12 @@ function ToolCardBody({
   row,
   content,
   ack,
+  omitDuplicateDenial = false,
 }: {
   row: ToolUseNestedRow
   content: string
   ack: ToolAck | null
+  omitDuplicateDenial?: boolean
 }) {
   // Read before any early return so the hook order is stable across families.
   // The reveal band's escape hatch, over this same real projected row; null
@@ -4585,6 +4597,8 @@ function ToolCardBody({
     )
   }
   if (row.result?.diff) return <DiffView diff={row.result.diff} onOpenFull={openFull} />
+
+  if (omitDuplicateDenial && row.result && !row.result.images?.length && isDuplicateAutoModeDenial(row.autoModeReview, content)) return null
 
   const errorTone = row.result?.isError === true
   // Only an EXACT ack replaces the body: a richer object's other fields would

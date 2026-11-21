@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
-import { summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
+import { AUTO_MODE_DECISION_LABELS, summarizeAutoModeReviews, visibleAutoModeReason, type ReviewSummary } from './autoModeReview.js'
 import './autoModeReview.css'
 
 function useReviewTooltip<T extends HTMLElement>(visible: boolean, text: string | undefined, hide: () => void) {
@@ -25,9 +25,9 @@ function useReviewTooltip<T extends HTMLElement>(visible: boolean, text: string 
   return { anchor, tooltip, id }
 }
 
-function ReviewShield({ outcome }: { outcome?: ReviewSummary['outcome'] }) {
+function ReviewShield({ outcome, size = 13 }: { outcome?: ReviewSummary['outcome']; size?: number }) {
   return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M12 3l7 3v5c0 4.5-3 7.8-7 10-4-2.2-7-5.5-7-10V6z" />
       {outcome === 'allowed' ? <path d="m9 12 2 2 4-4" /> : outcome === 'blocked' ? <path d="m10 10 4 4m0-4-4 4" /> : null}
     </svg>
@@ -104,7 +104,41 @@ export function PermissionReasonMark({ heading, reason }: { heading: string; rea
   </>
 }
 
+function ReviewVerdict({ outcome }: { outcome: keyof typeof AUTO_MODE_DECISION_LABELS }) {
+  return <span className="auto-mode-review-verdict">
+    <ReviewShield outcome={outcome} size={12} />
+    <span className="auto-mode-review-label">{AUTO_MODE_DECISION_LABELS[outcome]}</span>
+  </span>
+}
+
 export function AutoModeReviewReason({ review }: { review?: AutoModeReview }) {
-  if (!review?.reason) return null
-  return <div className="auto-mode-review-field"><div className="auto-mode-review-label">Auto mode</div><div className="auto-mode-review-value">{review.reason}</div></div>
+  if (!review || review.outcome === 'allowed' || review.outcome === 'reviewing' || !review.reason) return null
+  return <div className="auto-mode-review-field" data-outcome={review.outcome}>
+    <ReviewVerdict outcome={review.outcome} />
+    <div className="auto-mode-review-value">{review.reason}</div>
+  </div>
+}
+
+function AllowedReviewFooter({ reason, fullWidth }: { reason: string; fullWidth: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const value = useRef<HTMLSpanElement>(null)
+  return <button
+    type="button"
+    className={`auto-mode-review-footer${fullWidth ? ' auto-mode-review-footer-full' : ''}`}
+    aria-expanded={expanded}
+    onClick={() => {
+      if (expanded) setExpanded(false)
+      else if (value.current && value.current.scrollWidth > value.current.clientWidth) setExpanded(true)
+    }}
+  >
+    <ReviewVerdict outcome="allowed" />
+    <span className="auto-mode-review-value" ref={value}>{reason}</span>
+  </button>
+}
+
+export function AutoModeReviewFooter({ review, fullWidth = false }: { review?: AutoModeReview; fullWidth?: boolean }) {
+  const reason = visibleAutoModeReason(review)
+  return review?.outcome === 'allowed' && reason
+    ? <AllowedReviewFooter key={review.attemptId} reason={reason} fullWidth={fullWidth} />
+    : null
 }

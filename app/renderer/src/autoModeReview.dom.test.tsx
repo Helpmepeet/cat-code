@@ -7,7 +7,7 @@ import { TranscriptModeContext } from './transcriptMode.js'
 import { ToolCardStyleContext } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
-import type { AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
+import { AUTO_MODE_NO_EXPLANATION, AUTO_MODE_REJECTION_PREFIX, type AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -20,7 +20,7 @@ const tool = (id: string, evidence?: AutoModeReview, toolName = 'Bash'): Extract
 async function click(element: Element | null) { expect(element).not.toBeNull(); await act(async () => { (element as HTMLElement).click() }) }
 
 for (const mode of ['full', 'focused'] as const) for (const style of ['cards', 'lines'] as const) for (const theme of ['dark', 'light']) {
-  test(`${mode}/${style}/${theme} keeps the mark beside status and the full long reason above unchanged output`, async () => {
+  test(`${mode}/${style}/${theme} keeps the mark beside status and the reason after unchanged output`, async () => {
     document.documentElement.dataset.appearance = theme
     const rows: NestedTranscriptRow[] = [
       { ...source('user'), kind: 'user-text', role: 'user', content: 'Run the command', isReplay: false },
@@ -28,17 +28,23 @@ for (const mode of ['full', 'focused'] as const) for (const style of ['cards', '
     ]
     const tree = await harness.mount(<TranscriptModeContext.Provider value={{ mode, setMode() {} }}><ToolCardStyleContext.Provider value={{ style, setStyle() {} }}><ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}><TranscriptRowsView rows={rows} turnLive /></ToolsExpandedContext.Provider></ToolCardStyleContext.Provider></TranscriptModeContext.Provider>)
     if (mode === 'focused') await click(tree.container.querySelector('.focused-step-head'))
-    const field = tree.container.querySelector('.auto-mode-review-field')!
-    expect(field.querySelector('.auto-mode-review-label')?.textContent).toBe('Auto mode')
+    const field = tree.container.querySelector('.auto-mode-review-footer')!
+    expect(field.tagName).toBe('BUTTON')
+    expect(field.classList.contains('auto-mode-review-footer-full')).toBe(style === 'cards')
+    expect(field.querySelector('.auto-mode-review-label')?.textContent).toBe('Allowed by Auto mode')
+    expect(field.querySelector('svg')?.getAttribute('width')).toBe('12')
     expect(field.querySelector('.auto-mode-review-value')?.textContent).toBe(reason)
     expect(field.querySelector('script')).toBeNull()
-    expect(field.parentElement?.textContent).toContain('Raw output stays intact')
+    const body = field.parentElement!.textContent!
+    expect(body).toContain('Raw output stays intact')
+    expect(body.indexOf('Raw output stays intact')).toBeLessThan(body.indexOf(reason))
+    if (style === 'cards') expect(field.previousElementSibling?.textContent).toContain('Raw output stays intact')
     const mark = [...tree.container.querySelectorAll('.auto-mode-review')].find(node => node.closest('button')?.textContent?.includes('echo a'))!
     expect(mark.getAttribute('aria-label')).toBe('Reviewed for 12s')
     expect(mark.nextElementSibling?.getAttribute('aria-label')).toBe('done')
     expect(mark.querySelector('svg')?.getAttribute('width')).toBe('13')
     expect(mark.hasAttribute('title')).toBe(false)
-    expect(tree.container.querySelectorAll('.auto-mode-review-field')).toHaveLength(1)
+    expect(tree.container.querySelectorAll('.auto-mode-review-footer')).toHaveLength(1)
     await act(async () => { mark.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })) })
     const tooltip = document.body.querySelector('[role="tooltip"]')!
     expect(tooltip.textContent).toBe('Reviewed for 12s')
@@ -85,23 +91,71 @@ test('pending and inconclusive shields are empty, and keyboard focus opens an im
   expect(document.body.querySelector('[role="tooltip"]')).toBeNull()
 })
 
-test('blocked reasons precede the unmodified raw denial output in both views', async () => {
-  const raw = 'Permission for this action has been denied. Reason: Keep this raw denial unchanged.'
-  const blocked = { ...tool('a', { ...review, outcome: 'blocked' }), status: 'error' as const, result: { content: raw, isError: true, diff: null } }
+test('blocked reasons replace only exact duplicate denial output in both views', async () => {
+  const reason = 'This operation was not authorized.'
+  const wrapped = AUTO_MODE_REJECTION_PREFIX + reason
+  const raw = `${wrapped} Additional guidance stays visible.`
+  const blocked = (content: string) => ({ ...tool('a', { ...review, outcome: 'blocked', reason }), status: 'error' as const, result: { content, isError: true, diff: null } })
   for (const mode of ['full', 'focused'] as const) {
-    const tree = await harness.mount(<TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptRowsView rows={[blocked]} turnLive /></TranscriptModeContext.Provider>)
+    const view = (content: string) => <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptRowsView rows={[blocked(content)]} turnLive /></TranscriptModeContext.Provider>
+    const tree = await harness.mount(view(raw))
     if (mode === 'focused') {
       await click(tree.container.querySelector('.focused-step-head'))
       const head = tree.container.querySelector('.focused-step-body button')
       await click(head)
     }
     const field = tree.container.querySelector('.auto-mode-review-field')!
-    expect(field.textContent).toBe(`Auto mode${reason}`)
-    expect(field.parentElement?.textContent).toContain(raw)
-    expect(field.parentElement?.textContent?.indexOf(reason)).toBeLessThan(field.parentElement!.textContent!.indexOf(raw))
-    expect(tree.container.querySelector('[data-outcome=\"blocked\"]')).not.toBeNull()
+    expect(field.textContent).toBe(`Blocked by Auto mode${reason}`)
+    expect(field.querySelectorAll('svg path')).toHaveLength(2)
+    expect(field.nextElementSibling?.textContent).toContain(raw)
+    await tree.render(view(wrapped))
+    const duplicate = tree.container.querySelector('.auto-mode-review-field')!
+    expect(duplicate.textContent).toBe(`Blocked by Auto mode${reason}`)
+    expect(duplicate.nextElementSibling).toBeNull()
     await tree.unmount()
   }
+})
+
+test('allowed fallback and reviewing show no reason and keep the output', async () => {
+  for (const evidence of [
+    { ...review, reason: AUTO_MODE_NO_EXPLANATION },
+    { ...review, outcome: 'reviewing' as const, reason: undefined, completedAt: undefined },
+  ]) {
+    const tree = await harness.mount(<ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}><TranscriptRowsView rows={[tool('a', evidence)]} /></ToolsExpandedContext.Provider>)
+    expect(tree.container.querySelector('.auto-mode-review-field, .auto-mode-review-footer')).toBeNull()
+    expect(tree.container.textContent).toContain('Raw output stays intact')
+    expect(tree.container.querySelector('.auto-mode-review')).not.toBeNull()
+    await tree.unmount()
+  }
+})
+
+for (const [outcome, label] of [
+  ['asking', 'Auto mode requested your decision'],
+  ['inconclusive', 'Auto mode review ended without a decision'],
+] as const) {
+  test(`${outcome} shows a plain shield and decision label above unchanged output`, async () => {
+    const tree = await harness.mount(<ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}><TranscriptRowsView rows={[tool('a', { ...review, outcome })]} /></ToolsExpandedContext.Provider>)
+    const field = tree.container.querySelector('.auto-mode-review-field')!
+    expect(field.getAttribute('data-outcome')).toBe(outcome)
+    expect(field.querySelector('.auto-mode-review-label')?.textContent).toBe(label)
+    expect(field.querySelectorAll('svg path')).toHaveLength(1)
+    expect(field.nextElementSibling?.textContent).toContain('Raw output stays intact')
+  })
+}
+
+test('the footer toggles only when its reason is clipped', async () => {
+  const tree = await harness.mount(<ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}><TranscriptRowsView rows={[tool('a', review)]} /></ToolsExpandedContext.Provider>)
+  const footer = tree.container.querySelector('.auto-mode-review-footer')!
+  const value = footer.querySelector('.auto-mode-review-value')!
+  Object.defineProperties(value, { clientWidth: { value: 100 }, scrollWidth: { value: 100, configurable: true } })
+  expect(footer.getAttribute('aria-expanded')).toBe('false')
+  await click(footer)
+  expect(footer.getAttribute('aria-expanded')).toBe('false')
+  Object.defineProperty(value, 'scrollWidth', { value: 200 })
+  await click(footer)
+  expect(footer.getAttribute('aria-expanded')).toBe('true')
+  await click(footer)
+  expect(footer.getAttribute('aria-expanded')).toBe('false')
 })
 
 for (const family of ['grep', 'edit'] as const) {
