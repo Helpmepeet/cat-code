@@ -53,6 +53,7 @@ import type {
   TombstoneMessage,
 } from './types/message.js'
 import { logError } from './utils/log.js'
+import { workerAnswerPrefixes, workerAnswerText } from './utils/workerAnswer.js'
 import { AGENT_TOOL_NAME } from './tools/AgentTool/constants.js'
 import { retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
 import { codeModeModelTools, hasScriptTool, usesScriptForCodingTools } from './tools/REPLTool/codeModeModelTools.js'
@@ -347,6 +348,7 @@ export type QueryParams = {
 
 // Mutable state carried between loop iterations
 type State = {
+  workerAnswerPrefix?: ReturnType<typeof workerAnswerText>
   messages: Message[]
   toolUseContext: ToolUseContext
   autoCompactTracking: AutoCompactTrackingState | undefined
@@ -843,6 +845,9 @@ async function* queryLoop(
     }
 
     const assistantMessages: AssistantMessage[] = []
+    const continuedWorkerAnswer = () => toolUseContext.agentId
+      ? [...(state.workerAnswerPrefix ?? []), ...assistantMessages.flatMap(workerAnswerText)]
+      : undefined
     const modelTools = codeModeModelTools(
       toolUseContext.options.tools,
       !!codeModeHost && !toolUseContext.agentId &&
@@ -1243,6 +1248,9 @@ async function* queryLoop(
               withheld = true
             }
             if (!withheld) {
+              if (state.workerAnswerPrefix && yieldMessage.type === 'assistant') {
+                workerAnswerPrefixes.set(yieldMessage, state.workerAnswerPrefix)
+              }
               yield yieldMessage
             }
             if (message.type === 'assistant') {
@@ -1688,6 +1696,7 @@ async function* queryLoop(
               pendingToolUseSummary: undefined,
               stopHookActive: undefined,
               turnCount,
+              workerAnswerPrefix: state.workerAnswerPrefix,
               transition: {
                 reason: 'collapse_drain_retry',
                 committed: drained.committed,
@@ -1754,6 +1763,7 @@ async function* queryLoop(
             pendingToolUseSummary: undefined,
             stopHookActive: undefined,
             turnCount,
+            workerAnswerPrefix: state.workerAnswerPrefix,
             transition: { reason: 'reactive_compact_retry' },
           }
           setPersistedAutoCompactConsecutiveFailures(toolUseContext, 0)
@@ -1812,6 +1822,7 @@ async function* queryLoop(
             pendingToolUseSummary: undefined,
             stopHookActive: undefined,
             turnCount,
+            workerAnswerPrefix: state.workerAnswerPrefix,
             transition: { reason: 'max_output_tokens_escalate' },
           }
           state = next
@@ -1841,6 +1852,7 @@ async function* queryLoop(
             pendingToolUseSummary: undefined,
             stopHookActive: undefined,
             turnCount,
+            workerAnswerPrefix: continuedWorkerAnswer(),
             transition: {
               reason: 'max_output_tokens_recovery',
               attempt: maxOutputTokensRecoveryCount + 1,
@@ -1943,6 +1955,7 @@ async function* queryLoop(
             pendingToolUseSummary: undefined,
             stopHookActive: undefined,
             turnCount,
+            workerAnswerPrefix: continuedWorkerAnswer(),
             transition: {
               reason: 'codex_partial_stream_continuation',
               attempt,

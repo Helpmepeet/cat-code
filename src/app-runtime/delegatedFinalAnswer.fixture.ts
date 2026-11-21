@@ -16,6 +16,16 @@ mock.module('../utils/settings/managedPath.js', () => ({
   getManagedSettingsDropInDir: () => join(root, 'config', 'managed', 'managed-settings.d'),
 }))
 
+if (scenario === 'continued') {
+  const flags = await import('../services/analytics/growthbook.js')
+  const readFlag = flags.getFeatureValue_CACHED_MAY_BE_STALE
+  mock.module('../services/analytics/growthbook.js', () => ({
+    ...flags,
+    getFeatureValue_CACHED_MAY_BE_STALE: (key: string, fallback: unknown) =>
+      key === 'tengu_otk_slot_v1' ? true : readFlag(key, fallback),
+  }))
+}
+
 const model = 'claude-sonnet-4-5'
 const background = scenario === 'background'
 const workerPrompt = 'Inspect the isolated lease evidence.'
@@ -36,7 +46,7 @@ function textBlock(text: string, phase?: 'commentary' | 'final_answer'): Scripte
   }
 }
 
-function messageResponse(id: string, output: ToolCall | ScriptedBlock[]): Response {
+function messageResponse(id: string, output: ToolCall | ScriptedBlock[], capped = false): Response {
   const blocks = Array.isArray(output) ? output : [{
     block: { type: 'tool_use', id, name: output.name, input: {} },
     delta: { type: 'input_json_delta', partial_json: JSON.stringify(output.input) },
@@ -54,7 +64,7 @@ function messageResponse(id: string, output: ToolCall | ScriptedBlock[]): Respon
     emit('content_block_delta', { index, delta })
     emit('content_block_stop', { index })
   }
-  const stop_reason = blocks.some(({ block }) => block.type === 'tool_use') ? 'tool_use' : 'end_turn'
+  const stop_reason = capped ? 'max_tokens' : blocks.some(({ block }) => block.type === 'tool_use') ? 'tool_use' : 'end_turn'
   emit('message_delta', { delta: { stop_reason, stop_sequence: null }, usage: { output_tokens: 10 } })
   emit('message_stop')
   return new Response(events.join(''), { headers: { 'Content-Type': 'text/event-stream', 'request-id': id } })
@@ -96,10 +106,25 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
           delta: { type: 'input_json_delta', partial_json: JSON.stringify(read.input) } },
       ])
     }
+    if (scenario === 'continued' && workerRequests === 4) {
+      if (!userBlocks(messages).some(block => block.type === 'text' && block.text.includes('Output token limit hit'))) {
+        throw new Error('Expected the worker to continue its capped answer')
+      }
+      return messageResponse('worker-continued', [textBlock('The expiry comparison is correct.', 'final_answer')])
+    }
+    if (scenario === 'continued' && workerRequests === 3) {
+      return messageResponse('worker-prefix', [
+        textBlock('Storage multiplies an already-millisecond deadline by 1,000.', 'final_answer'),
+      ], true)
+    }
     if (workerRequests !== 2 || !toolResultText(messages, 'worker-read').join('').includes('An expired lease survived reload.')) {
       throw new Error('Worker did not receive the lease evidence')
     }
     if (background) await parentHasLaunchReceipt.promise
+    if (scenario === 'continued') {
+      // The capped default is replayed at a higher limit before continuation.
+      return messageResponse('worker-replayed', [textBlock('Discarded draft.', 'final_answer')], true)
+    }
     const conclusion = textBlock('The expiry comparison is correct.', 'final_answer')
     return messageResponse('worker-final', scenario === 'single' ? [conclusion] : [
       { block: { type: 'thinking', thinking: '', signature: '' },
@@ -167,7 +192,7 @@ try {
   const frames = await Array.fromAsync(session.submitMessage('Launch an isolated worker.'))
   const terminal = frames.at(-1)
   const lastParentRequest = parentRequests.at(-1)
-  if (unexpectedFetches.length || parentRequests.length !== (background ? 3 : 2) || workerRequests !== 2 ||
+  if (unexpectedFetches.length || parentRequests.length !== (background ? 3 : 2) || workerRequests !== (scenario === 'continued' ? 4 : 2) ||
       terminal?.type !== 'result' || terminal.subtype !== 'success' || !lastParentRequest) {
     throw new Error(JSON.stringify({ unexpectedFetches, parentRequests: parentRequests.length, workerRequests, terminal }))
   }

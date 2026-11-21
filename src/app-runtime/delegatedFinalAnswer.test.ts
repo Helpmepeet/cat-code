@@ -10,7 +10,7 @@ const answer = [
 ]
 const fixture = fileURLToPath(new URL('./delegatedFinalAnswer.fixture.ts', import.meta.url))
 
-async function runFixture(scenario: 'single' | 'synchronous' | 'background') {
+async function runFixture(scenario: 'single' | 'synchronous' | 'background' | 'continued') {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'delegated-answer-')))
   const workspace = join(root, 'workspace')
   const config = join(root, 'config')
@@ -62,4 +62,8 @@ test('the background notification and TaskOutput deliver the same complete final
 
 test('a single-block worker answer reaches the parent unchanged', async () => {
   expect((await runFixture('single')).synchronous).toEqual([answer[1]])
+}, 20_000)
+
+test('the parent receives the complete worker answer across an output-limit continuation', async () => {
+  expect((await runFixture('continued')).synchronous).toEqual(answer)
 }, 20_000)

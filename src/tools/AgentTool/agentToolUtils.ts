@@ -67,6 +67,7 @@ import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { formatTaskNotificationText } from '../../utils/taskNotification.js'
 import { appendSubagentTerminal } from '../../utils/sessionStorage.js'
 import { unregisterActiveSubagent } from '../../utils/cleanupRegistry.js'
+import { workerAnswerPrefixes, workerAnswerText } from '../../utils/workerAnswer.js'
 import { getWorkerUsage, startWorkerUsage } from '../../utils/workerUsage.js'
 import {
   getForkWorkerResultJsonSchema,
@@ -726,15 +727,13 @@ export function finalizeAgentTool(
       !answerRecord.message.id || record.message.id !== answerRecord.message.id ||
       record.requestId !== answerRecord.requestId
     )) break
-    if (record.isApiErrorMessage === true) continue
-    const textBlocks = record.message.content.filter((block): block is Extract<typeof block, { type: 'text' }> =>
-      block.type === 'text' && (!('phase' in block) || block.phase !== 'commentary'),
-    )
+    const textBlocks = workerAnswerText(record)
     if (textBlocks.length === 0) continue
     answerRecord ??= record
     textByRecord.push(textBlocks)
   }
-  const content = textByRecord.reverse().flat()
+  const prefix = answerRecord && workerAnswerPrefixes.get(answerRecord)
+  const content = [...(prefix ?? []), ...textByRecord.reverse().flat()]
 
   const runUsage = getWorkerUsage(agentId)
   const totalTokens = runUsage?.totalTokens ?? 0
