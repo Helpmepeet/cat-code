@@ -1028,6 +1028,45 @@ test('IDLE-PARK gate — app.park is DECLINED while a turn is active (no exit, s
   await waitFor(() => received.filter(f => f.kind === 'event').length >= 2)
 })
 
+test('after Stop, pending tool results keep a chat busy without announcing or accepting a new prompt', async () => {
+  let pending = true, retries = 0, runs = 0
+  const controller = new AppSessionController({
+    hasUnresolvedToolEffects: () => pending,
+    retryInterruptedToolReceipts: () => { retries++ },
+    async *runTurn({ options }) {
+      runs++
+      await options?.onInputPersisted?.()
+    },
+  })
+  const { server, parkCount } = makeParkServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const presence = () => received.flatMap(f => f.kind === 'activity' ? [f.presence] : []).at(-1)
+  const submit = (submitId: string) => server.handleData(conn, clientFrame({
+    type: 'app.submit', requestId: submitId, prompt: 'next message', options: { submitId },
+  }))
+
+  expect(presence()).toBe('running')
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'pending-park' }))
+  expect(parkCount()).toBe(0)
+  submit('held')
+  expect(retries).toBe(1)
+  expect(runs).toBe(0)
+  expect(sawUserTurn(received)).toBe(false)
+  expect(submitAnswers(received)).toMatchObject([{ submitId: 'held', accepted: false, code: 'turn_already_running' }])
+
+  pending = false
+  controller.notifyToolReceiptSettlement()
+  expect(presence()).toBe('idle')
+  submit('after-settlement')
+  await waitFor(() => submitAnswers(received).length === 2 && presence() === 'idle')
+  expect(submitAnswers(received)[1]).toMatchObject({ submitId: 'after-settlement', accepted: true, queued: false })
+  expect(runs).toBe(1)
+  expect(sawUserTurn(received)).toBe(true)
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'settled-park' }))
+  expect(parkCount()).toBe(1)
+})
+
 test('IDLE-PARK gate — app.park is DECLINED while a permission is pending (no exit)', async () => {
   const controller = new AppSessionController(
     permissionAdapter({ command: 'ls' }, () => {}),

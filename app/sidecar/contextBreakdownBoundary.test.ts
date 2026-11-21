@@ -96,6 +96,9 @@ class TestSessionController {
   getPendingPermissionRequests() {
     return []
   }
+  hasUnresolvedToolEffects() {
+    return false
+  }
   isTurnActive() {
     return false
   }

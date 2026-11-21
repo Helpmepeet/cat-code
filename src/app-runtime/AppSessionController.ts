@@ -205,6 +205,12 @@ export class AppSessionController {
 
   hasUnresolvedToolEffects(): boolean { return this.adapter.hasUnresolvedToolEffects?.() === true }
 
+  retryPendingToolReceipts(): boolean {
+    if (!this.hasUnresolvedToolEffects()) return false
+    this.adapter.retryInterruptedToolReceipts?.()
+    return true
+  }
+
   isTurnActive(): boolean {
     return this.activeTurn
   }
@@ -541,8 +547,7 @@ export class AppSessionController {
     options?: AppSessionSubmitOptions,
   ): Promise<void> {
     if (this.disposed) throw new Error('Session disposed')
-    if (this.adapter.hasUnresolvedToolEffects?.()) {
-      this.adapter.retryInterruptedToolReceipts?.()
+    if (this.retryPendingToolReceipts()) {
       throw new Error('Some tool actions have not finished. New work is blocked until their results are saved.')
     }
     options = { ...options, priorAssistantContext: options?.priorAssistantContext === undefined
