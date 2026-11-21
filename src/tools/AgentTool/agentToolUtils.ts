@@ -41,7 +41,7 @@ import {
   updateProgressFromMessage,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { asAgentId } from '../../types/ids.js'
-import type { Message as MessageType } from '../../types/message.js'
+import type { AssistantMessage, Message as MessageType } from '../../types/message.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { resolveRequestProvider, type APIProvider } from '../../utils/model/providers.js'
@@ -714,27 +714,27 @@ export function finalizeAgentTool(
   const maxTurnsText = findMaxTurnsReached(agentMessages)
   const terminalError = apiErrorText ?? maxTurnsText
 
-  // Extract text content from the agent's response. If the final assistant
-  // message is a pure tool_use block (loop exited mid-turn), fall back to
-  // the most recent assistant message that has text content. When the
-  // terminal is a synthetic API error, skip it entirely (and skip any
-  // earlier API-error messages too) so partial work from the subagent's
-  // real turns is what's reported, not the error string.
-  let content = isApiErrorTerminal
-    ? []
-    : lastAssistantMessage.message.content.filter(_ => _.type === 'text')
-  if (content.length === 0) {
-    for (let i = agentMessages.length - 1; i >= 0; i--) {
-      const m = agentMessages[i]!
-      if (m.type !== 'assistant') continue
-      if (m.isApiErrorMessage === true) continue
-      const textBlocks = m.message.content.filter(_ => _.type === 'text')
-      if (textBlocks.length > 0) {
-        content = textBlocks
-        break
-      }
-    }
+  // Streaming emits one assistant record per block. Find the last response
+  // with visible answer text, preserving the fallback after a tool-only or
+  // synthetic error terminal, then collect that response's earlier blocks.
+  const textByRecord: AgentToolResult['content'][] = []
+  let answerRecord: AssistantMessage | undefined
+  for (let i = agentMessages.length - 1; i >= 0; i--) {
+    const record = agentMessages[i]!
+    if (record.type !== 'assistant') continue
+    if (answerRecord && (
+      !answerRecord.message.id || record.message.id !== answerRecord.message.id ||
+      record.requestId !== answerRecord.requestId
+    )) break
+    if (record.isApiErrorMessage === true) continue
+    const textBlocks = record.message.content.filter((block): block is Extract<typeof block, { type: 'text' }> =>
+      block.type === 'text' && (!('phase' in block) || block.phase !== 'commentary'),
+    )
+    if (textBlocks.length === 0) continue
+    answerRecord ??= record
+    textByRecord.push(textBlocks)
   }
+  const content = textByRecord.reverse().flat()
 
   const runUsage = getWorkerUsage(agentId)
   const totalTokens = runUsage?.totalTokens ?? 0
