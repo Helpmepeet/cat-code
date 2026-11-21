@@ -10,7 +10,6 @@ import { WEB_SEARCH_TOOL_NAME } from 'src/tools/WebSearchTool/prompt.js'
 import { hasCodexTokens, isUsing3PServices } from 'src/utils/auth.js'
 import { hasEmbeddedSearchTools } from 'src/utils/embeddedTools.js'
 import { getSettings_DEPRECATED } from 'src/utils/settings/settings.js'
-import { jsonStringify } from '../../../utils/slowOperations.js'
 import { resolveRequestProvider, type APIProvider } from '../../../utils/model/providers.js'
 import { getDefaultSonnetModel } from '../../../utils/model/model.js'
 import type {
@@ -197,13 +196,21 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
       contextSections.push(`**Available plugin skills:**\n${pluginList}`)
     }
 
-    // 5. User settings
-    const settings = getSettings_DEPRECATED()
-    if (Object.keys(settings).length > 0) {
-      // eslint-disable-next-line no-restricted-syntax -- human-facing UI, not tool_result
-      const settingsJson = jsonStringify(settings, null, 2)
+    // 5. Share only explicit, non-sensitive feature states with the provider.
+    const { disableAllHooks, alwaysThinkingEnabled, autoMemoryEnabled } = getSettings_DEPRECATED()
+    const featureStates: string[] = []
+    if (disableAllHooks !== undefined) {
+      featureStates.push(`- Hooks: ${disableAllHooks ? 'disabled' : 'enabled'}`)
+    }
+    if (alwaysThinkingEnabled !== undefined) {
+      featureStates.push(`- Always thinking: ${alwaysThinkingEnabled ? 'enabled' : 'disabled'}`)
+    }
+    if (autoMemoryEnabled !== undefined) {
+      featureStates.push(`- Auto memory: ${autoMemoryEnabled ? 'enabled' : 'disabled'}`)
+    }
+    if (featureStates.length > 0) {
       contextSections.push(
-        `**User's settings.json:**\n\`\`\`json\n${settingsJson}\n\`\`\``,
+        `**Configured feature options:**\n${featureStates.join('\n')}`,
       )
     }
 
