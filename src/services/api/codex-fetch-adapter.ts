@@ -449,7 +449,11 @@ export class CodexResponseFailedError extends Error {
 }
 
 export class CodexResponseIncompleteError extends CodexResponseFailedError {
-  constructor(public readonly reason: string) {
+  constructor(
+    public readonly reason: string,
+    public readonly mayHaveToolOutput = false,
+    public readonly usage?: Record<string, unknown>,
+  ) {
     super({
       code: 'response_incomplete',
       message:
@@ -653,8 +657,16 @@ function createCodexResponseIncompleteError(
   const details = isRecord(response?.incomplete_details)
     ? response.incomplete_details
     : undefined
+  const output = response?.output
+  const mayHaveToolOutput = output !== undefined && (
+    !Array.isArray(output) || output.some(item =>
+      !isRecord(item) || (item.type !== 'message' && item.type !== 'reasoning'),
+    )
+  )
   return new CodexResponseIncompleteError(
     readNonEmptyString(details?.reason) ?? 'unknown',
+    mayHaveToolOutput,
+    isRecord(response?.usage) ? response.usage : undefined,
   )
 }
 
@@ -1965,6 +1977,7 @@ async function processCodexEvents(
   requestCacheMetadata?: CodexRequestCacheMetadata,
   httpFallback?: HttpFallbackEventsFactory,
   transportContext?: CodexStreamTransportContext,
+  canReportOutputLimit = true,
 ): Promise<void> {
   const messageId = `msg_codex_${Date.now()}`
   const defaultStartMs = Date.now()
@@ -1992,6 +2005,16 @@ async function processCodexEvents(
   const rawEventTypes: Record<string, number> = {}
   let hadToolCalls = false
   let hadHostedWebSearch = false
+  let hadUnpairedToolEvents = false
+  let outputLimitError: CodexResponseIncompleteError | undefined
+
+  const updateUsage = (usage: Record<string, unknown> | undefined) => {
+    if (!usage) return
+    outputTokens = (usage.output_tokens as number) || outputTokens
+    inputTokens = (usage.input_tokens as number) || inputTokens
+    const inputDetails = (usage.input_tokens_details ?? usage.prompt_tokens_details) as Record<string, number> | undefined
+    cachedInputTokens = inputDetails?.cached_tokens || 0
+  }
 
   const noteVisibleOutput = (options?: { userVisible?: boolean }) => {
     if (firstVisibleAtMs === null) {
@@ -2528,6 +2551,7 @@ async function processCodexEvents(
             ) {
               const argDelta = event.delta as string
               const toolCall = resolveOpenToolCall(event)
+              if (!toolCall) hadUnpairedToolEvents = true
               if (typeof argDelta === 'string' && toolCall) {
                 toolCall.args += argDelta
                 noteVisibleOutput()
@@ -2552,6 +2576,7 @@ async function processCodexEvents(
               eventType === 'response.custom_tool_call_input.done'
             ) {
               const toolCall = resolveOpenToolCall(event)
+              if (!toolCall) hadUnpairedToolEvents = true
               if (toolCall) {
                 const finalArgs =
                   (event.arguments as string) ||
@@ -2590,6 +2615,8 @@ async function processCodexEvents(
                 const toolCall = resolveOpenToolCall(event, item)
                 if (toolCall) {
                   closeOpenToolCall(toolCall)
+                } else {
+                  hadUnpairedToolEvents = true
                 }
               } else if (item?.type === 'web_search_call') {
                 closeAllOpenReasoningBlocks()
@@ -2721,13 +2748,7 @@ async function processCodexEvents(
             // Response completed — extract usage
             else if (eventType === 'response.completed') {
               const response = event.response as Record<string, unknown>
-              const usage = response?.usage as Record<string, unknown> | undefined
-              if (usage) {
-                outputTokens = (usage.output_tokens as number) || outputTokens
-                inputTokens = (usage.input_tokens as number) || inputTokens
-                const inputDetails = (usage.input_tokens_details ?? usage.prompt_tokens_details) as Record<string, number> | undefined
-                cachedInputTokens = inputDetails?.cached_tokens || 0
-              }
+              updateUsage(response?.usage as Record<string, unknown> | undefined)
               completedAtMs = eventObservedAtMs
             }
             else if (eventType === 'response.failed') {
@@ -2756,6 +2777,24 @@ async function processCodexEvents(
       break stream_loop
     } catch (err) {
       const normalizedError = normalizeCodexStreamError(err, requestCacheMetadata)
+      if (
+        canReportOutputLimit &&
+        normalizedError instanceof CodexResponseIncompleteError &&
+        normalizedError.reason === 'max_output_tokens' &&
+        textPartsEmitted.size > 0 &&
+        !hadToolCalls &&
+        openToolCallBlocks.size === 0 &&
+        !hadUnpairedToolEvents &&
+        !hadHostedWebSearch &&
+        !normalizedError.mayHaveToolOutput
+      ) {
+        // Closing the stream normally delivers the text block stops before
+        // max_tokens. The provider response itself still ended incomplete.
+        outputLimitError = normalizedError
+        updateUsage(normalizedError.usage)
+        closeAllOpenReasoningBlocks()
+        break stream_loop
+      }
       const canFallbackToHttp =
         !usingHttpFallback &&
         !emittedVisibleOutput &&
@@ -2907,10 +2946,10 @@ async function processCodexEvents(
     outputTokens,
     inputTokens,
     cachedInputTokens,
-    hadToolCalls,
+    outputLimitError ? 'max_tokens' : hadToolCalls ? 'tool_use' : 'end_turn',
     requestCacheMetadata,
   )
-  recordStreamSurface({ completed: true })
+  recordStreamSurface({ completed: !outputLimitError, errorName: outputLimitError?.name })
 }
 
 function closeToolCallBlock(
@@ -3083,6 +3122,7 @@ function buildAnthropicStreamResponse(
   httpFallback?: HttpFallbackEventsFactory,
   transportContext?: CodexStreamTransportContext,
   cancelSource?: (reason?: unknown) => void,
+  canReportOutputLimit = true,
 ): Response {
   const messageId = `msg_codex_${Date.now()}`
   const encoder = new TextEncoder()
@@ -3096,6 +3136,7 @@ function buildAnthropicStreamResponse(
         requestCacheMetadata,
         httpFallback,
         transportContext,
+        canReportOutputLimit,
       )
     },
     cancel(reason) {
@@ -3373,6 +3414,8 @@ async function translateCodexStreamToAnthropicMessage(
     requestCacheMetadata,
     undefined,
     transportContext,
+    undefined,
+    false, // Only the streaming query consumes the max_tokens stop reason.
   )
   const sseBody = await anthropicStreamResponse.text()
   const message = materializeAnthropicMessageFromSse(sseBody, codexModel)
@@ -3416,11 +3459,9 @@ function finishStream(
   outputTokens: number,
   inputTokens: number,
   cachedInputTokens: number,
-  hadToolCalls: boolean,
+  stopReason: 'max_tokens' | 'tool_use' | 'end_turn',
   requestCacheMetadata?: CodexRequestCacheMetadata,
 ) {
-  const stopReason = hadToolCalls ? 'tool_use' : 'end_turn'
-
   if (inputTokens > 0) {
     const cacheRatio = cachedInputTokens / inputTokens
     const pct = (cacheRatio * 100).toFixed(1)

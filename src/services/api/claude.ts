@@ -2966,12 +2966,14 @@ async function* queryModel(
 
             if (stopReason === 'max_tokens') {
               logEvent('tengu_max_tokens_reached', {
-                max_tokens: maxOutputTokens,
+                max_tokens: requestProvider === 'openai' ? undefined : maxOutputTokens,
               })
               yield createAssistantAPIErrorMessage({
-                content: `${API_ERROR_MESSAGE_PREFIX}: Claude's response exceeded the ${
-                  maxOutputTokens
-                } output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.`,
+                content: requestProvider === 'openai'
+                  ? `${API_ERROR_MESSAGE_PREFIX}: The model reached its output token limit.`
+                  : `${API_ERROR_MESSAGE_PREFIX}: Claude's response exceeded the ${
+                    maxOutputTokens
+                  } output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable.`,
                 apiError: 'max_output_tokens',
                 error: 'max_output_tokens',
               })

@@ -1794,6 +1794,7 @@ async function* queryLoop(
         )
         if (
           capEnabled &&
+          currentProvider !== 'openai' &&
           maxOutputTokensOverride === undefined &&
           !process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS
         ) {
