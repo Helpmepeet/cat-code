@@ -1,6 +1,6 @@
 import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
-import { readdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 const root = process.env.HOME
 if (!root || process.cwd() !== join(root, 'workspace') ||
@@ -9,6 +9,8 @@ if (!root || process.cwd() !== join(root, 'workspace') ||
 }
 const [scope, strategy] = process.argv.slice(2)
 const background = scope === 'background'
+const sessionMemory = strategy === 'session-memory'
+const sessionMemorySummary = 'Isolated session memory summary.'
 const parentTurn = Promise.withResolvers<void>()
 const model = 'claude-sonnet-4-5'
 const archiveDir = join(root, 'archive')
@@ -21,7 +23,7 @@ for (const [index, evidence] of readFiles.entries()) {
 
 type ToolCall = { name: string; input: Record<string, unknown> }
 
-function messageResponse(id: string, output: ToolCall | string): Response {
+function messageResponse(id: string, output: ToolCall | string, inputTokens = 100): Response {
   const tool = typeof output === 'string' ? undefined : output
   const events = [
     {
@@ -29,7 +31,7 @@ function messageResponse(id: string, output: ToolCall | string): Response {
       message: {
         id, type: 'message', role: 'assistant', model, content: [],
         stop_reason: null, stop_sequence: null, usage: {
-          input_tokens: 100, cache_read_input_tokens: 20,
+          input_tokens: inputTokens, cache_read_input_tokens: 20,
           cache_creation_input_tokens: 5, output_tokens: 0,
         },
       },
@@ -82,7 +84,7 @@ globalThis.fetch = (async (input, init) => {
   if (userText.includes('CRITICAL: Respond with TEXT ONLY.')) {
     return messageResponse(id, '<summary>Isolated compaction summary.</summary>')
   }
-  if (userText.includes('Isolated compaction summary')) {
+  if (userText.includes(sessionMemory ? sessionMemorySummary : 'Isolated compaction summary')) {
     recoveryPath = /read the full transcript at: ([^\n]+)/.exec(userText)?.[1]
     preservedRead = body.messages.some(({ role, content }) =>
       role === 'assistant' && Array.isArray(content) &&
@@ -116,7 +118,7 @@ globalThis.fetch = (async (input, init) => {
     return messageResponse(id, {
       name: 'Read',
       input: { file_path: join(process.cwd(), `evidence-${round}.txt`) },
-    })
+    }, sessionMemory ? 150_000 : undefined)
   }
   if (round === readRounds) {
     return Response.json({
@@ -144,6 +146,12 @@ const { parseTaskNotificationDetails } = await import('../utils/taskNotification
 enableConfigs()
 const sessionId = getSessionId()
 switchSession(sessionId, archiveDir)
+if (sessionMemory) {
+  const { getSessionMemoryPath } = await import('../utils/permissions/filesystem.js')
+  const memoryPath = getSessionMemoryPath()
+  await mkdir(dirname(memoryPath), { recursive: true })
+  await writeFile(memoryPath, `# Current State\n${sessionMemorySummary}\n`)
+}
 let state = getDefaultAppState()
 state = {
   ...state,

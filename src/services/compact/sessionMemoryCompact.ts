@@ -16,7 +16,7 @@ import { getMainLoopModel } from '../../utils/model/model.js'
 import { getAPIProvider, resolveRequestProvider } from '../../utils/model/providers.js'
 import { getSessionMemoryPath } from '../../utils/permissions/filesystem.js'
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
-import { getTranscriptPath } from '../../utils/sessionStorage.js'
+import { getAgentTranscriptPath, getTranscriptPath } from '../../utils/sessionStorage.js'
 import { tokenCountFromLastAPIResponse } from '../../utils/tokens.js'
 import { extractDiscoveredToolNames } from '../../utils/toolSearch.js'
 import {
@@ -600,7 +600,9 @@ export async function trySessionMemoryCompaction(
     })
 
     // Get transcript path for the summary message
-    const transcriptPath = getTranscriptPath()
+    const transcriptPath = agentId
+      ? getAgentTranscriptPath(agentId)
+      : getTranscriptPath()
 
     const compactionResult = createCompactionResultFromSessionMemory(
       messages,

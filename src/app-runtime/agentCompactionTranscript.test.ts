@@ -9,7 +9,7 @@ const fixture = fileURLToPath(
 )
 
 for (const scope of ['worker', 'main', 'background'] as const) {
-  for (const strategy of scope === 'background' ? ['prefix'] : ['full', 'prefix']) {
+  for (const strategy of scope === 'background' ? ['prefix'] : ['full', 'prefix', 'session-memory']) {
     test(`${scope} ${strategy} compaction directs recovery to the archive that contains its earlier Read`, async () => {
       const root = await realpath(await mkdtemp(join(tmpdir(), 'compact-archive-')))
       const workspace = join(root, 'workspace')
@@ -31,6 +31,10 @@ for (const scope of ['worker', 'main', 'background'] as const) {
               BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0',
               CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
               DISABLE_TELEMETRY: '1',
+              ...(strategy === 'session-memory' && {
+                ENABLE_CLAUDE_CODE_SM_COMPACT: '1',
+                CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '50',
+              }),
             },
             stdout: 'pipe',
             stderr: 'pipe',
@@ -54,9 +58,9 @@ for (const scope of ['worker', 'main', 'background'] as const) {
             savedUsage?: { totalTokens: number }
           }
           expect(evidence.olderReadInArchive).toBe(true)
-          expect(evidence.preservedRead).toBe(strategy === 'prefix')
+          expect(evidence.preservedRead).toBe(strategy !== 'full')
           expect(evidence.recoveryPath).toBe(evidence.transcript)
-          if (scope === 'worker') {
+          if (scope === 'worker' && strategy !== 'session-memory') {
             // Read request(s), compaction summary request, and final response.
             const requests = strategy === 'prefix' ? 4 : 3
             expect(evidence.receiptUsage).toMatchObject({
