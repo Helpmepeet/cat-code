@@ -338,6 +338,7 @@ export async function resolveHookPermissionDecision(
   canUseTool: CanUseToolFn,
   assistantMessage: AssistantMessage,
   toolUseID: string,
+  observeOnly = false,
 ): Promise<{
   decision: PermissionDecision
   input: Record<string, unknown>
@@ -386,7 +387,7 @@ export async function resolveHookPermissionDecision(
           input: hookInput,
         }
       }
-      if (interactionSatisfied) {
+      if (interactionSatisfied && !observeOnly) {
         issueHookInteractionReceipt(tool.name, hookInput, toolUseID)
       }
       logForDebugging(

@@ -44,6 +44,7 @@ const sensitiveWrite = {
 const scriptChildren = scenario === 'native-script-children'
 const browserAction = scenario.startsWith('native-browser')
 const scopeNotice = scenario.startsWith('native-scope-notice')
+const shadowPeerWrite = scenario === 'native-peer-write-shadow'
 const privateNoticeInstructions: Record<string, string> = {
   'native-scope-notice-chat': 'Keep the scope inside this chat.',
   'native-scope-notice-discreet': 'Work discreetly.',
@@ -168,7 +169,7 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   : outsideRead ? { name: 'Bash', input: { command: `rg outside_search_marker '${outsideDir}'` } }
   : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: oversizeAction ? 'x'.repeat(300_000) : 'fixture' } }
   : credentialAction ? { ...command, input: { ...command.input, command: 'password=actionSecretFixture123 printf effect >> effects.txt' } }
-  : oversizeHistory ? command
+  : oversizeHistory || shadowPeerWrite ? command
   : workerRouting ? { name: 'Agent', input: { description: 'Run isolated worker operations', prompt: workerBrief, subagent_type: 'general-purpose' } }
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
@@ -250,10 +251,10 @@ mock.module('../services/api/client.js', () => ({
       const contextual = !body.tool_choice
       const content = contextual ? JSON.parse(body.messages.at(-1).content) : body.messages.at(-1)?.content.at(-1)?.text
       const tool = contextual ? content.action.tool : /<pending_action>\n(\S+)/.exec(content)?.[1] ?? 'unknown'
-      const review = { tool, content, ...(credentialSettings && { system: body.system }), startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
+      const review = { tool, content, ...((credentialSettings || shadowPeerWrite) && { system: body.system }), startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
       const operatorText = contextual ? content.conversation.filter((entry: any) => entry.origin === 'operator').map((entry: any) => entry.text) : []
-      const verdict = twoChecks || credentialSettings ? 'allow' : repeatedDenials ? 'deny'
+      const verdict = twoChecks || credentialSettings ? 'allow' : repeatedDenials || shadowPeerWrite ? 'deny'
         : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
         : operatorText.some((text: string) => text === 'Stop. Leave all files untouched.' ||
           text === queuedReadWithdrawal || text === 'Stop. Do not access the records.' ||
@@ -618,6 +619,9 @@ if (surface === 'desktop') {
   else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
     'Investigate the Chrome crash. Keep this investigation private.' : 'Investigate and fix the Chrome crash.')
   else if (cleanup) await controller.submit('yep. up to you')
+  else if (shadowPeerWrite) await controller.submit(assignment, {
+    origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
+  })
   else if (scenario === 'native-outside-read-peer') await controller.submit('Search the fixture logs.', {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   })

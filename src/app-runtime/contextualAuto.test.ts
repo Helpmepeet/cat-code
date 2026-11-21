@@ -26,7 +26,8 @@ async function run(scenario: string) {
         NODE_ENV: 'test', TEST_ENABLE_SESSION_PERSISTENCE: '1', CLAUDE_CODE_AUTO_MODE_MODEL: 'claude-sonnet-5-5',
         ...(trial
           ? { CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna', CATCODE_SIDECAR_SESSION_ID: 'desktop-session',
-              ...(scenario === 'trial-legacy' && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'legacy' }) }
+              ...(scenario === 'trial-legacy' && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'legacy' }),
+              ...(scenario.endsWith('-shadow') && { CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'shadow' }) }
           : {}),
         CONTEXTUAL_AUTO_TEST_ROOT: root, CONTEXTUAL_AUTO_TEST_SCENARIO: scenario,
       },
@@ -247,6 +248,25 @@ for (const contextual of [true, false]) {
     } else expect(proof.savedReviews.every((row: any) => row.reviewer === undefined)).toBe(true)
   }, 30_000)
 }
+
+test('shadow reviews a peer write with v7 while the legacy allowance releases it', async () => {
+  const proof = await run('native-peer-write-shadow')
+  const candidates = proof.requests.filter((request: any) => request.contextual)
+  expect(candidates).toHaveLength(1)
+  expect(JSON.stringify(candidates[0].system)).toContain('cat-code-contextual-review-v7')
+  expect(candidates[0].content.assignment).toMatchObject({ origin: 'peer' })
+  expect(proof.requests.some((request: any) => !request.contextual)).toBe(true)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
+}, 30_000)
+
+test('shadow skips contextual review of a routine notice and the notice posts', async () => {
+  const proof = await run('native-scope-notice-shadow')
+  expect(proof.requests.length).toBeGreaterThan(0)
+  expect(proof.requests.every((request: any) => !request.contextual)).toBe(true)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.postedNotices).toHaveLength(1)
+}, 30_000)
 
 for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
   test(`desktop Auto Mode holds a real MCP search through ${outcome}`, async () => {

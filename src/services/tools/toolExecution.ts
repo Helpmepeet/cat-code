@@ -99,7 +99,7 @@ import {
 } from '../../utils/errors.js'
 import { executePermissionDeniedHooks } from '../../utils/hooks.js'
 import { logError } from '../../utils/log.js'
-import { checkRuleBasedPermissions, getEffectiveAutoMode } from '../../utils/permissions/permissions.js'
+import { checkRuleBasedPermissions, getEffectiveAutoMode, hasPermissionsToUseTool } from '../../utils/permissions/permissions.js'
 import {
   CANCEL_MESSAGE,
   createProgressMessage,
@@ -1306,31 +1306,51 @@ async function checkPermissionsAndCallTool(
     ? captureCodeModePermissionPolicy(toolUseContext) : undefined
   contextualAttempt = getEffectiveAutoMode(toolUseContext.getAppState().toolPermissionContext) === null
     ? undefined : await createContextualAttempt(tool, processedInput, toolUseContext, assistantMessage, toolUseID)
-  if (contextualAttempt) toolUseContext = { ...toolUseContext, contextualAutoAttempt: contextualAttempt }
   const permissionStart = Date.now()
 
-  const resolved = await resolveHookPermissionDecision(
-    hookPermissionResult,
-    tool,
-    processedInput,
-    toolUseContext,
-    canUseTool,
-    assistantMessage,
-    toolUseID,
-  )
+  async function resolvePermissions(context: ToolUseContext, decide: CanUseToolFn, observeOnly = false) {
+    const resolved = await resolveHookPermissionDecision(
+      hookPermissionResult, tool, processedInput, context, decide, assistantMessage, toolUseID, observeOnly,
+    )
+    const attempt = context.contextualAutoAttempt
+    // A queued instruction can cross a file permission, model verdict, hook or
+    // human reply. Reassess only the pending action with the new operator text.
+    if (resolved.decision.behavior === 'allow' && attempt?.id === toolUseID &&
+        attempt.mode === 'experimental' &&
+        attempt.needsInstructionReview()) {
+      const updated = await attempt.reviewFollowUp()
+      if (updated.behavior !== 'allow') {
+        resolved.decision = updated.behavior === 'ask'
+          ? await decide(tool, resolved.input, context, assistantMessage, toolUseID, updated)
+          : updated
+      }
+    }
+    return resolved
+  }
+
+  if (contextualAttempt?.mode === 'shadow') {
+    // Use the experimental routing gates for the candidate. Its attempt still
+    // suppresses persistence, and the isolated context never reaches dispatch.
+    const candidateContext: ToolUseContext = {
+      ...toolUseContext,
+      contextualAutoAttempt: Object.create(contextualAttempt, { mode: { value: 'experimental' } }),
+      setAppState: () => {},
+      localDenialTracking: toolUseContext.localDenialTracking && { ...toolUseContext.localDenialTracking },
+    }
+    try {
+      const candidate = await resolvePermissions(candidateContext,
+        async (...args) => args[5] ?? hasPermissionsToUseTool(...args), true)
+      logForDebugging(`[contextual-auto-review] shadow disposition=${candidate.decision.behavior}`)
+    } catch {
+      logForDebugging('[contextual-auto-review] shadow disposition=unavailable')
+    }
+  } else if (contextualAttempt) {
+    toolUseContext = { ...toolUseContext, contextualAutoAttempt: contextualAttempt }
+  }
+
+  const resolved = await resolvePermissions(toolUseContext, canUseTool)
   let permissionDecision = resolved.decision
   processedInput = resolved.input
-  // A queued instruction can cross a file permission, model verdict, hook or
-  // human reply. Reassess only the pending action with the new operator text.
-  if (permissionDecision.behavior === 'allow' && contextualAttempt?.mode === 'experimental' &&
-      contextualAttempt.needsInstructionReview()) {
-    const updated = await contextualAttempt.reviewFollowUp()
-    if (updated.behavior !== 'allow') {
-      permissionDecision = updated.behavior === 'ask'
-        ? await canUseTool(tool, processedInput, toolUseContext, assistantMessage, toolUseID, updated)
-        : updated
-    }
-  }
   const permissionDurationMs = Date.now() - permissionStart
   // In auto mode, canUseTool awaits the classifier (side_query) — if that's
   // slow the collapsed view shows "Running…" with no (Ns) tick since

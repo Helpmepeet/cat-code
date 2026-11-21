@@ -953,10 +953,6 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       }
 
       if (attempt?.mode === 'experimental') return reviewContextually()
-      if (attempt?.mode === 'shadow') {
-        const candidate = await attempt.review()
-        logForDebugging(`[contextual-auto-review] shadow disposition=${candidate.behavior}`)
-      }
 
       // Run the auto mode classifier
       // Outcomes are no longer passed in here: they render inline, beneath the

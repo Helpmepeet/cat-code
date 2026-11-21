@@ -23,7 +23,7 @@ import { getPreparedFileMutationSet } from '../fileAuthorization.js'
 import { expandPath } from '../path.js'
 import { getSourcedAutoModeInstructions } from '../settings/settings.js'
 import { buildContextualReview, contextualReviewerProfile, sendContextualReview } from './contextualReviewer.js'
-import { CONTEXTUAL_REVIEW_VERSION, CONTEXTUAL_SHADOW_REVIEW_VERSION } from './contextualReviewPrompt.js'
+import { CONTEXTUAL_REVIEW_VERSION } from './contextualReviewPrompt.js'
 import { readContextualAuthority, recentShellRuns, resolveContextualPeerParent } from './contextualAuthority.js'
 import { createDenialTrackingState, DENIAL_LIMITS, persistDenialState, recordDenial, recordSuccess } from './denialTracking.js'
 import type { ContextualEvidence } from './contextualReviewPrompt.js'
@@ -106,18 +106,12 @@ function containsCredentialMaterial(value: string): boolean {
     scanForSecrets(value).length > 0
 }
 
-// Keep the surrounding instruction (including any withdrawal). Unrecognized
-// formats still take the existing human-only path in the final payload scan.
-function redactOldText(text: string): string {
+// Keep surrounding instructions. Leave incomplete private keys for the final
+// payload scan, which blocks a request if redaction could not remove them.
+function redactRecognizedTokens(text: string): string {
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/iu.test(text)) return text
   return redactSecrets(text)
     .replace(/\b(?:sk-(?:ant-|proj-)?[a-z0-9_-]{15,}|gh[pousr]_[a-z0-9]{20,}|eyJ[a-z0-9_-]{15,}\.[a-z0-9_-]{10,}(?:\.[a-z0-9_-]+)?)/giu, '[…]')
-}
-
-function redactHistory(rows: ContextualEvidence['conversation']) {
-  const latest = rows.findLast(row => row.origin === 'operator')
-  return rows.map(row => row === latest ? row : { ...row, text: redactOldText(row.text),
-    ...(row.proposal && { proposal: { ...row.proposal, text: redactOldText(row.proposal.text) } }) })
 }
 
 const REVIEW_SECRET = '[…]'
@@ -129,7 +123,7 @@ function redactReviewText(text: string): string {
     /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----/giu,
     REVIEW_SECRET,
   )
-  return redactOldText(withoutKeys).replace(credentialAssignment, '$1' + REVIEW_SECRET)
+  return redactRecognizedTokens(withoutKeys).replace(credentialAssignment, '$1' + REVIEW_SECRET)
     .replaceAll('[REDACTED]', REVIEW_SECRET)
 }
 
@@ -178,15 +172,13 @@ export async function createContextualAttempt(
 ) {
   const mode = readMode()
   if (!mode) return undefined
-  const version = mode === 'shadow' ? CONTEXTUAL_SHADOW_REVIEW_VERSION : CONTEXTUAL_REVIEW_VERSION
   const mcp = isMcpTool(tool)
   // The engine's typed question receipt authorizes its display and answer.
   // Any action proposed in response still goes through its own permission check.
   if (!mcp && tool.name === ASK_USER_QUESTION_TOOL_NAME) return undefined
   const snapshot = structuredClone(input)
   const action = projectAction(tool, snapshot, context)
-  const peerParent = await resolveContextualPeerParent(context,
-    mode === 'experimental' || (!mcp && tool.name === 'Announce') ? context.lookupLegacyPeerCreator : undefined)
+  const peerParent = await resolveContextualPeerParent(context, context.lookupLegacyPeerCreator)
   let authority = readContextualAuthority(context, peerParent)
   const policy: ToolPermissionContext = structuredClone(context.getAppState().toolPermissionContext)
   const instructions = getSourcedAutoModeInstructions()
@@ -194,7 +186,6 @@ export async function createContextualAttempt(
   const { cellId, generation } = assistant.codeMode ?? {}
   let allowedOutsideRead = false
   function isReviewException(): boolean {
-    if (mode !== 'experimental') return false
     if (mcp) return tool.contextualClosedWorldRead === true
     return tool.name === 'REPL' || tool.name === 'LSP' ||
       tool.name === 'BrowserAct' || tool.name === 'BrowserNavigate' ||
@@ -235,7 +226,7 @@ export async function createContextualAttempt(
   let humanAllowed = false
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
-  let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version }
+  let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
   let boundProjection: { value: unknown } | undefined
 
   function currentProjection(): unknown {
@@ -285,8 +276,8 @@ export async function createContextualAttempt(
   }
 
   function emit(outcome: AutoModeReview['outcome'], reason?: string) {
-    if (mode !== 'experimental') return
     lastOutcome = outcome
+    if (mode !== 'experimental') return
     const event: AutoModeReview = { type: 'tool.review', toolUseId, attemptId, startedAt, outcome,
       reviewer,
       ...(outcome !== 'reviewing' && { completedAt: Math.max(startedAt, Date.now()) }),
@@ -316,13 +307,11 @@ export async function createContextualAttempt(
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
   }
 
-  function ask(reason: string, outcome: 'asking' | 'inconclusive' = 'asking'): PermissionDecision {
+  function ask(reason: string): PermissionDecision {
     requiresHuman = true
     humanAllowed = false
-    if (mode === 'experimental') {
-      emit(outcome, reason)
-      recordAutoModeOutcome(toolUseId, outcome === 'inconclusive' ? 'automode-unavailable' : 'unanswered')
-    }
+    emit('asking', reason)
+    if (mode === 'experimental') recordAutoModeOutcome(toolUseId, 'unanswered')
     if (policy.shouldAvoidPermissionPrompts) return {
       behavior: 'deny', message: reason + ' Interactive approval is unavailable.',
       decisionReason: { type: 'asyncAgent', reason },
@@ -352,7 +341,7 @@ export async function createContextualAttempt(
       emit('inconclusive', 'New instructions require a fresh review of this action.')
       attemptId = randomUUID()
       startedAt = Date.now()
-      reviewer = { kind: 'contextual', version }
+      reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
       lastOutcome = undefined
     }
     actionAllowed = false
@@ -363,9 +352,6 @@ export async function createContextualAttempt(
     if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
     if (!refreshInstructions()) return stale('The assignment or action changed before review.')
     reviewedInstructions = true
-    if (mode === 'shadow' && delegatedStateChange() && !authority.verifiedSource) {
-      return ask('This helper has no verified user assignment for the requested action.')
-    }
     let toolDescription: string | undefined
     if (!action.effect) {
       try {
@@ -392,8 +378,7 @@ export async function createContextualAttempt(
     const rawEvidence: ContextualEvidence = {
       ...(toolDescription && { toolDescription }),
       ...(!mcp && tool.name === 'Bash' && typeof input.description === 'string' && { agentStatedPurpose: input.description }),
-      ...(runs.length && { recentShellRuns: mode === 'experimental' ? runs : runs.map(run => run.proposedCommand && containsCredentialMaterial(run.proposedCommand)
-        ? { ...run, proposedCommand: undefined } : run) }),
+      ...(runs.length && { recentShellRuns: runs }),
       action: { ...action, effect, attempt: toolUseId, actor: authority.actor,
         execution: { ...action.execution,
           ...(changedLines?.length && { changeSinceCompleteRead: {
@@ -402,21 +387,18 @@ export async function createContextualAttempt(
           } }),
           ...(boundProjection && { resolvedAction: boundProjection.value }) },
         tool: tool.name, ...(cellId && generation && { script: { cellId, generation, source: context.contextualParentScriptSource } }) },
-      assignment: mode !== 'experimental' && authority.assignment?.parent
-        ? { ...authority.assignment, parent: redactHistory(authority.assignment.parent) } : authority.assignment,
-      conversation: mode === 'experimental' ? conversation : redactHistory(conversation),
+      assignment: authority.assignment,
+      conversation,
       priorDecisions: collectPermissionDecisionContexts(context.messages).slice(-16).map(decision => ({
         action: decision.toolName, outcome: decision.outcome,
       })),
-      workspaceInstructions: mode === 'experimental' ? source : source && redactOldText(source),
+      workspaceInstructions: source,
     }
-    const experimental = mode === 'experimental'
-    const evidence = experimental ? redactReviewFields(rawEvidence) : rawEvidence
-    const reviewerInstructions = experimental ? redactReviewFields(withoutDefaultRules(instructions)) : instructions
-    const profile = contextualReviewerProfile(getConfiguredAutoModeModel(), version)
-    const built = buildContextualReview(evidence, profile, reviewerInstructions, experimental)
+    const evidence = redactReviewFields(rawEvidence)
+    const reviewerInstructions = redactReviewFields(withoutDefaultRules(instructions))
+    const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
+    const built = buildContextualReview(evidence, profile, reviewerInstructions, true)
     if (!built) {
-      if (!experimental) return ask('The complete action and applicable instructions exceed the Auto Mode review limit.')
       if (!buildContextualReview({ action: evidence.action, conversation: [] }, profile)) {
         return denyReview('This action exceeds the Auto Mode review limit. Split this action into smaller calls and retry.')
       }
@@ -424,11 +406,9 @@ export async function createContextualAttempt(
     }
     if (containsCredentialMaterial(JSON.stringify(evidence)) ||
         containsCredentialMaterial(JSON.stringify(reviewerInstructions))) {
-      return experimental
-        ? denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
-        : ask('The action or its context may contain credentials.')
+      return denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
     }
-    reviewer = { kind: 'contextual', version, profile: { provider: profile.provider, model: profile.model,
+    reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION, profile: { provider: profile.provider, model: profile.model,
       effort: profile.effort, promptDigest: built.promptDigest } }
     emit('reviewing')
     const result = await sendContextualReview({ ...built.options, agentId: context.agentId }, context.abortController.signal)
@@ -442,21 +422,17 @@ export async function createContextualAttempt(
         ? 'The review was cancelled.' : 'The assignment or action changed during review.')
     }
     if (result.status !== 'valid') {
-      return experimental
-        ? denyReview('Auto Mode could not complete this review. Retry or report the blocker in chat.', 'inconclusive')
-        : ask('Auto Mode could not complete this review.', 'inconclusive')
+      return denyReview('Auto Mode could not complete this review. Retry or report the blocker in chat.', 'inconclusive')
     }
     const { decision, rationale } = result.verdict
     const reason = containsCredentialMaterial(rationale) ? 'Auto Mode reviewed the proposed action.' : rationale
     if (decision === 'ask') return ask(reason)
     const decisionReason = { type: 'classifier' as const, classifier: 'auto-mode', reason }
     if (decision === 'deny') {
-      if (mode === 'experimental') {
-        const state = recordDenial(context.localDenialTracking ?? context.getAppState().denialTracking ?? createDenialTrackingState())
-        persistDenialState(context, state)
-        if (state.consecutiveDenials >= DENIAL_LIMITS.maxConsecutive) {
-          return denyReview(`${state.consecutiveDenials} consecutive actions were denied. Stop and report the blocker in chat. Latest reason: ${reason}`)
-        }
+      const state = recordDenial(context.localDenialTracking ?? context.getAppState().denialTracking ?? createDenialTrackingState())
+      if (mode === 'experimental') persistDenialState(context, state)
+      if (state.consecutiveDenials >= DENIAL_LIMITS.maxConsecutive) {
+        return denyReview(`${state.consecutiveDenials} consecutive actions were denied. Stop and report the blocker in chat. Latest reason: ${reason}`)
       }
       return denyReview(reason)
     }

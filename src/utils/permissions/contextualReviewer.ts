@@ -7,18 +7,16 @@ import {
   CONTEXTUAL_REVIEW_MAX_BYTES,
   CONTEXTUAL_REVIEW_MAX_OUTPUT,
   CONTEXTUAL_REVIEW_VERSION,
-  CONTEXTUAL_SHADOW_REVIEW_VERSION,
   contextualReviewSystem,
   parseContextualVerdict,
   type ContextualEvidence,
-  type ContextualReviewVersion,
   type ContextualVerdict,
 } from './contextualReviewPrompt.js'
 
-export function contextualReviewerProfile(configuredModel: string, version: ContextualReviewVersion = CONTEXTUAL_REVIEW_VERSION) {
+export function contextualReviewerProfile(configuredModel: string) {
   const provider = resolveRequestProvider(configuredModel, getConfiguredAnthropicProvider())
   const model = normalizeModelStringForAPI(parseUserSpecifiedModel(configuredModel, provider))
-  return { provider, model, version, effort: 'provider-default' as const }
+  return { provider, model, effort: 'provider-default' as const }
 }
 
 function trimConversation(evidence: ContextualEvidence, budget: number): string | undefined {
@@ -58,11 +56,11 @@ function trimConversation(evidence: ContextualEvidence, budget: number): string 
 
 export function buildContextualReview(
   evidence: ContextualEvidence,
-  profile: { model: string; provider: APIProvider; version?: ContextualReviewVersion },
+  profile: { model: string; provider: APIProvider },
   instructions?: unknown,
   trimOlderConversation = false,
 ): { options: SideQueryOptions; requestDigest: string; promptDigest: string } | undefined {
-  const system = contextualReviewSystem(evidence.action.tool, instructions, profile.version)
+  const system = contextualReviewSystem(evidence.action.tool, instructions)
   const budget = CONTEXTUAL_REVIEW_MAX_BYTES - Buffer.byteLength(system)
   const fullContent = JSON.stringify(evidence)
   const content = Buffer.byteLength(fullContent) <= budget ? fullContent
@@ -106,8 +104,6 @@ export async function sendContextualReview(
   }
   if (signal.aborted) result = { status: 'cancelled' }
   else if (deadline.aborted) result = { status: 'unavailable' }
-  const version = typeof options.system === 'string' && options.system.startsWith(CONTEXTUAL_SHADOW_REVIEW_VERSION)
-    ? CONTEXTUAL_SHADOW_REVIEW_VERSION : CONTEXTUAL_REVIEW_VERSION
-  logForDebugging(`[contextual-auto-review] model=${options.model} provider=${options.provider} version=${version} effort=provider-default status=${result.status} durationMs=${Math.round(performance.now() - started)}`)
+  logForDebugging(`[contextual-auto-review] model=${options.model} provider=${options.provider} version=${CONTEXTUAL_REVIEW_VERSION} effort=provider-default status=${result.status} durationMs=${Math.round(performance.now() - started)}`)
   return result
 }
