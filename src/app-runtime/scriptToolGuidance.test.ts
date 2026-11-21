@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 type RequestEvidence = {
   tools: string[]
+  scriptDescription: string
   scriptGuidance?: string
   prompt: string
   resumePrompt?: string
@@ -58,6 +59,7 @@ for (const provider of ['claude', 'gpt'] as const) {
       expect(scriptPhases.filter(phase => evidence[phase]!.scriptGuidance?.includes('direct coding tools remain available')))
         .toEqual([])
       for (const phase of scriptPhases) {
+        expect(evidence[phase]!.scriptDescription.toLowerCase()).not.toContain('direct coding tools remain available')
         expect(evidence[phase]!.tools).not.toContain('Agent')
         expect(evidence[phase]!.prompt).toContain('Discover Agent through REPL')
         expect(evidence[phase]!.prompt).not.toContain("the Agent tool's available-agent list")

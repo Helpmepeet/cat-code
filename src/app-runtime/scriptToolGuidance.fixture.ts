@@ -123,6 +123,7 @@ try {
     tools: body.tools.filter(tool => !tool.defer_loading).map(tool => tool.name),
     scriptGuidance: prompt.split('\n').find(line => line.includes('REPL runs JavaScript')),
     prompt,
+    scriptDescription: body.tools.find(tool => tool.name === 'REPL')?.description,
     resumePrompt: body.tools.find(tool => tool.name === 'ResumeAgent')?.description,
     ...(probeDirectAgent && { directAgentResult: requests[1]?.messages }),
   }))
