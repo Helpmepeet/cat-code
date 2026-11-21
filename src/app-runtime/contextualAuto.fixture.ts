@@ -22,6 +22,13 @@ const mainEdit = scenario === 'native-edit' || scenario === 'native-edit-script'
 const mainEditScript = scenario === 'native-edit-script'
 const directPatch = scenario === 'native-patch'
 const loadSkill = scenario === 'native-skill'
+const outsideRead = scenario.startsWith('native-outside-read-')
+const sensitiveWrite = {
+  'native-write-git-hook': '.git/hooks/pre-commit',
+  'native-write-claude-settings': '.claude/settings.json',
+  'native-write-editor-settings': '.vscode/settings.json',
+}[scenario]
+const scriptChildren = scenario === 'native-script-children'
 const browserAction = scenario.startsWith('native-browser')
 const scopeNotice = scenario.startsWith('native-scope-notice')
 const privateNoticeInstructions: Record<string, string> = {
@@ -40,13 +47,17 @@ const browserPeer = scenario === 'native-browser-peer'
 const browserRead = scenario.startsWith('native-browser-read') || scenario === 'native-browser-screenshot'
 const browserReadTool = scenario === 'native-browser-screenshot' ? 'BrowserScreenshot' : 'BrowserRead'
 const browserScroll = scenario === 'native-browser-scroll'
+const browserNavigate = scenario === 'native-browser-navigate'
 const browserTarget = browserScroll ? 'scroll on localhost:3000' : 'click button Save changes on localhost:3000'
 const nativeAction = browserAction
-  ? browserRead ? { name: browserReadTool, input: {} } : { name: 'BrowserAct', input: browserScroll ? { action: 'scroll', ref: 'g1-e12', deltaY: 120 } : { action: 'click', ref: 'g1-e12' } }
+  ? browserRead ? { name: browserReadTool, input: {} } : browserNavigate
+    ? { name: 'BrowserNavigate', input: { action: 'navigate', target: 'http://localhost:3000/settings' } }
+    : { name: 'BrowserAct', input: browserScroll ? { action: 'scroll', ref: 'g1-e12', deltaY: 120 } : { action: 'click', ref: 'g1-e12' } }
   : directPatch
     ? { name: 'apply_patch', input: { input: '*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch' } }
     : undefined
 const localMcp = scenario.startsWith('mcp-')
+const annotatedMcp = scenario.startsWith('mcp-read-')
 const selectBrowser = scenario.startsWith('mcp-browser-')
 const mcpAction = selectBrowser ? { name: 'mcp__codex-computer-use__js', input: {
   code: 'let iab = await cua.getBrowser({ id: "iab" });' + (scenario === 'mcp-browser-extra' ? ' await iab.tabs.list();' : ''),
@@ -68,6 +79,12 @@ const hookMarker = join(cwd, 'permission-hook-ran')
 const reviewUnavailable = scenario.endsWith('-unavailable')
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
 if (outsideSymbol) await writeFile(join(root, 'symbols.txt'), 'outside')
+const outsideDir = join(root, scenario === 'native-outside-read-credential' ? '.ssh' : 'logs')
+if (outsideRead) {
+  await mkdir(outsideDir)
+  await writeFile(join(outsideDir, scenario === 'native-outside-read-nested-token' ? 'access_token.json' : 'fixture.txt'), 'outside_search_marker\n')
+}
+if (sensitiveWrite) await mkdir(dirname(join(cwd, sensitiveWrite)), { recursive: true })
 if (scenario === 'native-fingerprint-parent') await mkdir(join(cwd, 'nested'))
 if (loadSkill) {
   const skillDir = join(configuration, 'skills', 'fixture-auto-skill')
@@ -98,6 +115,7 @@ const code = scenario === 'skip-queued'
       'measure-background': 'output("background fixture");',
     } as Record<string, string>)[scenario]!
     : scenario === 'hook-edit' ? `const name = "a" + ".txt"; await tools.call({name:"Edit",input:{file_path:name,old_string:"old",new_string:"new"}});`
+    : scriptChildren ? `await tools.call(${JSON.stringify(command)}); await tools.call(${JSON.stringify(command)}); output('both writes completed');`
     : mainEditScript ? `await ${call('a')};`
     : routed ? `const pending = ${JSON.stringify(candidate)}; await tools.call(pending); output("helper completed");`
     : `await tools.call(${JSON.stringify(command)}); output("after approval");`
@@ -109,6 +127,8 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   { name: 'LSP', input: { operation: 'documentSymbol', filePath: outsideSymbol ? join(root, 'symbols.txt') : 'a.txt', line: 1, character: 1 } } :
   fingerprint ? { name: 'Bash', input: { command: scenario === 'native-fingerprint-write' ? 'git hash-object -w -- a.txt' :
     scenario === 'native-fingerprint-parent' ? 'git hash-object --no-filters -- nested/../a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
+  : outsideRead ? { name: 'Bash', input: { command: `rg outside_search_marker '${outsideDir}'` } }
+  : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: 'fixture' } }
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
@@ -188,7 +208,7 @@ mock.module('../services/api/client.js', () => ({
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
         : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
         : tool === 'REPL' ? 'allow'
-        : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction || directPatch ? 'deny'
+        : scenario.includes('withdrawn') || scenario === 'hook-edit' || questionReply || mainEdit || peerAction || directPatch || sensitiveWrite ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
         : scenario.startsWith('wait-') || scenario.startsWith('direct-') ? 'ask' : 'allow'
@@ -334,6 +354,10 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
 let browserCalls = 0
+if (sensitiveWrite) {
+  const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
+  config.tools = [...config.tools, FileWriteTool]
+}
 if (loadSkill) {
   const { SkillTool } = await import('../tools/SkillTool/SkillTool.js')
   config.tools = [...config.tools, SkillTool]
@@ -345,7 +369,9 @@ if (nativeAction || cleanup) {
       if (verb === 'browser.describe') return { ok: true, value: {
         description: browserTarget, url: 'http://localhost:3000/settings',
       } }
-      if (verb !== (browserRead ? (browserReadTool === 'BrowserRead' ? 'browser.read' : 'browser.screenshot') : 'browser.act')) throw new Error('Unexpected browser fixture request')
+      const expectedVerb = browserRead ? (browserReadTool === 'BrowserRead' ? 'browser.read' : 'browser.screenshot')
+        : browserNavigate ? 'browser.navigate' : 'browser.act'
+      if (verb !== expectedVerb) throw new Error('Unexpected browser fixture request')
       browserCalls++
       return { ok: true, value: {} }
     }) as import('../../app/sidecar/peerHostRequester.js').PeerHostRequester)]
@@ -372,8 +398,9 @@ import(${JSON.stringify(fixtureServer.href)});`)
     type: 'stdio', command: selectBrowser ? Bun.which('node')! : process.execPath,
     args: [selectBrowser ? adapter : fixtureServer.pathname],
     env: { HOME: root, CODE_MODE_TEST_ROOT: root, ...(selectBrowser && { FIXTURE_BROWSER: '1' }),
+      ...(annotatedMcp && !scenario.endsWith('-missing') && { FIXTURE_MCP_OPEN_WORLD: String(scenario.endsWith('-open')) }),
       ...(browserPreload && { NODE_OPTIONS: `--require "${preload}"`, FIXTURE_BROWSER_PRELOAD: '1' }) },
-    scope: selectBrowser && scenario !== 'mcp-browser-impostor' ? 'user' : 'local',
+    scope: scenario === 'mcp-read-project' ? 'project' : annotatedMcp || (selectBrowser && scenario !== 'mcp-browser-impostor') ? 'user' : 'local',
   })
   if (client.type !== 'connected') throw new Error('Local MCP fixture failed to connect')
   cleanupMcp = client.cleanup
@@ -522,6 +549,9 @@ if (surface === 'desktop') {
   else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
     'Investigate the Chrome crash. Keep this investigation private.' : 'Investigate and fix the Chrome crash.')
   else if (cleanup) await controller.submit('yep. up to you')
+  else if (scenario === 'native-outside-read-peer') await controller.submit('Search the fixture logs.', {
+    origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
+  })
   else if (localMcp) await controller.submit('Look up the sample record.', scenario === 'mcp-peer-only' ? {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   } : undefined)
@@ -635,6 +665,7 @@ await writeFile(join(root, 'evidence.json'), JSON.stringify({
   scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
   ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),
   ...(browserAction && { browserCalls }),
+  ...(sensitiveWrite && { sensitiveFileExists: await Bun.file(join(cwd, sensitiveWrite)).exists() }),
   ...(localMcp && { mcpCalls: await readFile(join(root, 'mcp-calls.jsonl'), 'utf8')
     .then(text => text.trim().split('\n').map(line => JSON.parse(line)), () => []) }),
   wallMs: scriptWallMs, executions, effect: await effect(), files:

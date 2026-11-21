@@ -674,7 +674,11 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         observation?.markRoute(notice.behavior === 'allow' ? 'allowlist' : 'guard')
         return notice
       }
-      if (tool.name === 'LSP' && !tool.isMcp && !tool.mcpInfo) return reviewContextually()
+      if (tool.name === REPL_TOOL_NAME && !tool.isMcp && !tool.mcpInfo && attempt.isReviewException &&
+          result.decisionReason?.type !== 'safetyCheck') {
+        observation?.markRoute('allowlist')
+        return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
+      }
     }
     // These tools can affect another session even when their own checks return
     // allow. Only an explicit permission rule can skip review for the lead.
@@ -853,9 +857,8 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // allow this action. This avoids expensive classifier API calls for safe
       // operations like file edits in the working directory.
       // Skip for Agent and REPL — their checkPermissions returns 'allow' for
-      // acceptEdits mode, which would silently bypass the classifier. REPL
-      // code can contain VM escapes between inner tool calls; the classifier
-      // must see the glue JavaScript, not just the inner tool calls.
+      // acceptEdits mode. The legacy classifier reviews Script admission to
+      // QuickJS separately from the permissions for its child calls.
       // Announce publishes peer text; file-edit approval cannot approve that text.
       if (
         result.behavior === 'ask' &&

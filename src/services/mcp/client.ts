@@ -1958,6 +1958,9 @@ export const fetchToolsForClient = memoizeWithLRU(
             // can override builtins by name. mcpInfo is used for permission checking.
             name: skipPrefix ? tool.name : fullyQualifiedName,
             mcpInfo: { serverName: client.name, toolName: tool.name },
+            ...((client.config.scope === 'user' || client.config.scope === 'local') &&
+              tool.annotations?.readOnlyHint === true && tool.annotations?.openWorldHint === false &&
+              { contextualClosedWorldRead: true as const }),
             isMcp: true,
             // Collapse whitespace: _meta is open to external MCP servers, and
             // a newline here would inject orphan lines into the deferred-tool
@@ -1999,8 +2002,8 @@ export const fetchToolsForClient = memoizeWithLRU(
             inputJSONSchema: tool.inputSchema as Tool['inputJSONSchema'],
             async checkPermissions(input, context) {
               const attempt = context.contextualAutoAttempt
-              if (attempt?.mode === 'experimental' && !attempt.delegatedMutation &&
-                  admitBrowserSelection(client, tool.name, input, attempt)) {
+              if (attempt?.mode === 'experimental' && (attempt.isReviewException ||
+                  (!attempt.delegatedMutation && admitBrowserSelection(client, tool.name, input, attempt)))) {
                 return { behavior: 'allow' as const, updatedInput: input }
               }
               return {

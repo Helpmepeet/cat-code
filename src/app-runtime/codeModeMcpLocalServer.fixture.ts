@@ -14,7 +14,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   const refreshed = await readFile(join(root, 'schema-refreshed'), 'utf8').then(() => true, () => false)
   return { tools: ['records', 'save'].map(name => ({
   name, description: `Synthetic ${name} integration tool`,
-  annotations: { readOnlyHint: name === 'records', destructiveHint: false },
+  annotations: {
+    readOnlyHint: name === 'records', destructiveHint: false,
+    ...(process.env.FIXTURE_MCP_OPEN_WORLD !== undefined && {
+      openWorldHint: process.env.FIXTURE_MCP_OPEN_WORLD === 'true',
+    }),
+  },
   inputSchema: { type: 'object', properties: { key: { type: 'string', enum: refreshed ? (process.env.CODE_MODE_MCP_NARROW === '1' ? ['replacement'] : ['sample', 'replacement']) : ['sample'] } }, required: ['key'], additionalProperties: false },
 })) }
 })

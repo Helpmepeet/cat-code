@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
-import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { feature } from 'bun:bundle'
 import type { Tool, ToolPermissionContext, ToolUseContext } from '../../Tool.js'
@@ -120,62 +120,6 @@ function redactHistory(rows: ContextualEvidence['conversation']) {
     ...(row.proposal && { proposal: { ...row.proposal, text: redactOldText(row.proposal.text) } }) })
 }
 
-// Roster text is visible to other sessions. Only ordinary development vocabulary
-// and workspace paths take the automatic route; open-ended prose goes to review.
-const scopeWords = new Set((
-  'a the this and or for to of in on with from under before after only may will no ' +
-  'work working inspect inspecting investigate investigating check checking read reading review reviewing ' +
-  'fix fixing update updating change changing add adding remove removing edit editing implement implementing ' +
-  'run running verify verifying test testing debug debugging build building clean cleaning refactor refactoring ' +
-  'docs documentation source code project workspace shared local native sandbox sandboxed browser chrome codex cat ' +
-  'launch launches layout renderer desktop app ui api tool tools script scripts runner helper helpers ' +
-  'regression tests checks file files config configuration component components module modules permission permissions ' +
-  'changes edits writes reads paths scoped read-only focused overlapping existing unrelated preserve isolated ' +
-  'offline checks coordination peer session engine runtime sidecar implementation smoke fixtures validation ' +
-  'implement notifications dock badge end decision os active queued corrections queue policy owner map ' +
-  'sidebar tab activity selectors indicators include subagents working plan audit integration results'
-).split(' '))
-
-function routineScopeNotice(input: Input, cwd: string): boolean {
-  if (typeof input.doing !== 'string' || containsCredentialMaterial(JSON.stringify(input))) return false
-  const touches = input.touches ?? []
-  if (!Array.isArray(touches)) return false
-  let root: string
-  try { root = realpathSync(cwd) } catch { return false }
-  const inWorkspace = (path: string) => {
-    const rel = relative(root, path)
-    return rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel) && !rel.split('/').some(part => part.startsWith('.'))
-  }
-  const components = new Set<string>()
-  const validTouches = touches.every(touch => {
-    if (typeof touch !== 'string' || !/^[a-z0-9_./ *~-]+$/iu.test(touch) || touch.split('/').includes('..')) return false
-    const checkedPath = (entry: string) => {
-      const path = expandPath(entry, cwd)
-      if (!inWorkspace(path)) return false
-      // A conventional test/source glob is a displayed scope, never expanded.
-      const literal = /^\*(?:\.(?:layout|test|spec))?\.(?:[jt]sx?|css|md|json|py|txt)$/iu.test(basename(path))
-        ? dirname(path) : path
-      try {
-        if (!inWorkspace(realpathSync(literal))) return false
-        const name = relative(root, literal).replace(/([a-z])([A-Z])/gu, '$1 $2')
-        for (const part of name.toLowerCase().split(/[^a-z]+/u)) if (part.length > 1) components.add(part)
-        return true
-      } catch { return false }
-    }
-    if (checkedPath(touch)) return true
-    const [area, ...words] = touch.split(/ +/u)
-    return words.length > 0 && checkedPath(area!) && words.every(word => scopeWords.has(word.toLowerCase()))
-  })
-  if (!validTouches) return false
-  const routineText = (text: unknown) => typeof text === 'string' && /^[a-z0-9_ .,;:()/*~+-]+$/iu.test(text) &&
-    text.split(/[ ,;:()]+/u).every(token => {
-      const word = token.replace(/\.$/u, '')
-      return !word || touches.includes(word) || word.toLowerCase().split(/[-/]/u)
-        .every(part => scopeWords.has(part) || components.has(part))
-    })
-  return routineText(input.doing) && (input.note === undefined || routineText(input.note))
-}
-
 function readMode(): ReviewMode | undefined {
   if (!feature('AUTO_MODE_CONTEXTUAL_REVIEW')) return undefined
   const value = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE
@@ -210,9 +154,19 @@ export async function createContextualAttempt(
   const instructions = getSourcedAutoModeInstructions()
   const principal = codeModeToolPrincipal(tool, context)
   const { cellId, generation } = assistant.codeMode ?? {}
-  // Script admission grants the isolated interpreter a single invocation.
-  // The calls it submits carry their own delegated mutation gate.
-  const delegatedMutation = authority.delegated && mayChangeState(tool, snapshot) && (mcp || tool.name !== 'REPL')
+  let allowedOutsideRead = false
+  function isReviewException(): boolean {
+    if (mode !== 'experimental') return false
+    if (mcp) return tool.contextualClosedWorldRead === true
+    return tool.name === 'REPL' || tool.name === 'LSP' ||
+      tool.name === 'BrowserAct' || tool.name === 'BrowserNavigate' ||
+      (tool.name === 'Bash' && allowedOutsideRead)
+  }
+
+  function delegatedMutation(): boolean {
+    return authority.delegated && mayChangeState(tool, snapshot) &&
+      (mcp || tool.name !== 'REPL') && !isReviewException()
+  }
   const latestOperator = authority.conversation.findLast(row => row.origin === 'operator' && row.id)
   const newOperatorTurn = latestOperator && !context.messages.some(row => row.uuid === latestOperator.id)
   const followUps = [...authority.pendingConversation, ...(newOperatorTurn && latestOperator ? [latestOperator] : [])]
@@ -294,9 +248,8 @@ export async function createContextualAttempt(
   }
 
   function routineNoticeDecision(): PermissionDecision | undefined {
-    if (mcp || tool.name !== 'Announce' || !authority.verifiedSource ||
-        (authority.delegated && !authority.assignment?.parentAnchor) ||
-        authority.stopped || authority.pendingOperatorInput || needsInstructionReview()) return undefined
+    if (mcp || tool.name !== 'Announce' ||
+        authority.stopped || authority.pendingOperatorInput) return undefined
     const operatorRows = [...(authority.assignment?.parent ?? []), ...authority.conversation].filter(row => row.origin === 'operator')
     const operatorText = operatorRows.flatMap(row => row.proposal ? [row.proposal.text, row.text] : [row.text])
     const settings = instructions.flatMap(row =>
@@ -305,21 +258,13 @@ export async function createContextualAttempt(
       const reason = 'You asked to keep this work off the workspace roster.'
       return { behavior: 'deny', message: reason, decisionReason: { type: 'other', reason } }
     }
-    // Other audience constraints may depend on the task. The ordinary GUI
-    // posting policy concerns a different destination from the workspace roster.
-    const audience = /\b(?:privat\w*|confidential\w*|secret\w*|disclos\w*|announc\w*|roster|peers?|share|sharing|broadcast|notify|quiet\w*|tell|mention|between us|to yourself)\b/iu
     const workspace = workspaceInstructionsForReview(context.autoModeInstructionContext) ?? ''
     // Audience limits apply to the roster even when they never name the tool.
     // Treat uncertain recipients as a reason to review the actual notice.
     const audienceLimit = /\b(?:discree\w*|discretion|privacy|visibility|embargo\w*|under wraps|in confidence|(?:your|our|my) eyes only|to yourself|between (?:the )?(?:two of us|you and me|us)|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to|leave|leaves) (?:of )?(?:this|our|the current) (?:chat|conversation|session))\b/iu
     const standingNoticeRule = /(?:do not|never|must not|avoid|ask before|only|don't)[^.!?\n]{0,100}\b(?:announc\w*|roster|peers?|shar\w*|disclos\w*|post|publici\w*)\b|\b(?:announc\w*|roster|shar\w*|post)\b[^.!?\n]{0,80}(?:forbidden|prohibited|approval|private)/iu
-    const mayRestrictNotice = (text: string) => {
-      const scoped = text.replace(/\b(?:tell me|mention (?:it |this )?to me|private (?:method|field|function|class))\b/giu, '')
-      return audience.test(scoped) || audienceLimit.test(scoped) || /\b(?:post(?:ing)?|silently|silent|nothing else)\b/iu.test(scoped)
-    }
-    if ([...operatorText, authority.assignment?.text ?? '', ...settings].some(mayRestrictNotice) ||
-        audienceLimit.test(workspace) || standingNoticeRule.test(workspace) ||
-        !routineScopeNotice(input, action.cwd)) return undefined
+    if ([...operatorText, authority.assignment?.text ?? '', ...settings].some(text => audienceLimit.test(text)) ||
+        audienceLimit.test(workspace) || standingNoticeRule.test(workspace)) return undefined
     actionAllowed = true
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
   }
@@ -362,7 +307,7 @@ export async function createContextualAttempt(
     if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
     if (!refreshInstructions()) return stale('The assignment or action changed before review.')
     reviewedInstructions = true
-    if (delegatedMutation && !authority.verifiedSource) {
+    if (delegatedMutation() && !authority.verifiedSource) {
       return ask('This helper has no verified user assignment for the requested action.')
     }
     let toolDescription: string | undefined
@@ -451,7 +396,10 @@ export async function createContextualAttempt(
   }
 
   return {
-    id: toolUseId, mode, delegatedMutation, routineNoticeDecision,
+    id: toolUseId, mode, routineNoticeDecision,
+    get isReviewException() { return isReviewException() },
+    get delegatedMutation() { return delegatedMutation() },
+    recordAllowedOutsideRead() { allowedOutsideRead = true },
     get requiresHuman() { return requiresHuman },
     review: () => review ??= reviewHeldAction(),
     needsInstructionReview,
@@ -466,7 +414,7 @@ export async function createContextualAttempt(
     isCurrent: current,
     release(candidate: Input, releasedContext: ToolUseContext): boolean {
       if (used) return false
-      if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation && !actionAllowed)) {
+      if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation() && !actionAllowed)) {
         stale('The approval no longer matches the current action, assignment or permissions.')
         return false
       }

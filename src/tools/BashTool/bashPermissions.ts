@@ -1142,6 +1142,7 @@ export const bashToolCheckPermission = (
   compoundCommandHasCd?: boolean,
   astCommand?: SimpleCommand,
   originalCommand?: string,
+  onOutsideRead?: () => void,
 ): PermissionResult => {
   const command = input.command.trim()
 
@@ -1219,6 +1220,7 @@ export const bashToolCheckPermission = (
     compoundCommandHasCd,
     astCommand?.redirects,
     astCommand ? [astCommand] : undefined,
+    onOutsideRead,
   )
   if (pathResult.behavior !== 'passthrough') {
     return pathResult
@@ -1289,6 +1291,7 @@ export async function checkCommandAndSuggestRules(
   commandPrefixResult: CommandPrefixResult | null | undefined,
   compoundCommandHasCd?: boolean,
   astParseSucceeded?: boolean,
+  onOutsideRead?: () => void,
 ): Promise<PermissionResult> {
   // 1. Check exact match first
   const exactMatchResult = bashToolCheckExactMatchPermission(
@@ -1304,6 +1307,9 @@ export async function checkCommandAndSuggestRules(
     input,
     toolPermissionContext,
     compoundCommandHasCd,
+    undefined,
+    undefined,
+    onOutsideRead,
   )
   // 2a. Deny/ask if command was explictly denied/asked
   if (
@@ -1805,6 +1811,22 @@ export async function bashToolHasPermission(
   context: ToolUseContext,
   getCommandSubcommandPrefixFn = getCommandSubcommandPrefix,
 ): Promise<PermissionResult> {
+  const attempt = context.contextualAutoAttempt
+  let outsideRead = false
+  const onOutsideRead = attempt?.mode === 'experimental' &&
+    !input.dangerouslyDisableSandbox && !commandHasAnyCd(input.command) && BashTool.isReadOnly(input)
+    ? () => { outsideRead = true } : undefined
+  const result = await checkBashPermission(input, context, getCommandSubcommandPrefixFn, onOutsideRead)
+  if (outsideRead && result.behavior === 'allow') attempt?.recordAllowedOutsideRead()
+  return result
+}
+
+async function checkBashPermission(
+  input: z.infer<typeof BashTool.inputSchema>,
+  context: ToolUseContext,
+  getCommandSubcommandPrefixFn: typeof getCommandSubcommandPrefix,
+  onOutsideRead: (() => void) | undefined,
+): Promise<PermissionResult> {
   let appState = context.getAppState()
 
   // 0. AST-based security parse. This replaces both tryParseShellCommand
@@ -2146,7 +2168,7 @@ export async function bashToolHasPermission(
   const commandOperatorResult = await checkCommandOperatorPermissions(
     input,
     (i: z.infer<typeof BashTool.inputSchema>) =>
-      bashToolHasPermission(i, context, getCommandSubcommandPrefixFn),
+      checkBashPermission(i, context, getCommandSubcommandPrefixFn, onOutsideRead),
     { isNormalizedCdCommand, isNormalizedGitCommand },
     astRoot,
   )
@@ -2219,6 +2241,7 @@ export async function bashToolHasPermission(
         commandHasAnyCd(input.command),
         astRedirects,
         astCommands,
+        onOutsideRead,
       )
       if (pathResult.behavior !== 'passthrough') {
         return pathResult
@@ -2409,6 +2432,7 @@ export async function bashToolHasPermission(
       compoundCommandHasCd,
       astCommandsByIdx[i],
       originalSubcommands[i],
+      onOutsideRead,
     ),
   )
 
@@ -2447,6 +2471,7 @@ export async function bashToolHasPermission(
     compoundCommandHasCd,
     astRedirects,
     astCommands,
+    onOutsideRead,
   )
   if (pathResult.behavior === 'deny') {
     return pathResult
@@ -2602,6 +2627,7 @@ export async function bashToolHasPermission(
       commandSubcommandPrefix,
       compoundCommandHasCd,
       astSubcommands !== null,
+      onOutsideRead,
     )
     if (result.behavior === 'passthrough' && context.contextualAutoAttempt?.mode === 'experimental') {
       const fingerprint = checkWorkspaceFingerprint(input, compoundCommandHasCd, appState.toolPermissionContext)
@@ -2642,6 +2668,7 @@ export async function bashToolHasPermission(
         commandSubcommandPrefix?.subcommandPrefixes.get(subcommand),
         compoundCommandHasCd,
         astSubcommands !== null,
+        onOutsideRead,
       ),
     )
   }

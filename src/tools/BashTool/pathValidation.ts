@@ -1,3 +1,4 @@
+import { opendirSync } from 'node:fs'
 import { homedir } from 'os'
 import { isAbsolute, resolve } from 'path'
 import type { z } from 'zod/v4'
@@ -8,6 +9,7 @@ import {
   splitCommand_DEPRECATED,
 } from '../../utils/bash/commands.js'
 import { tryParseShellCommand } from '../../utils/bash/shellQuote.js'
+import { getPathsForPermissionCheck } from '../../utils/fsOperations.js'
 import { getDirectoryForPath } from '../../utils/path.js'
 import { allWorkingDirectories } from '../../utils/permissions/filesystem.js'
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js'
@@ -719,6 +721,68 @@ const COMMAND_VALIDATOR: Partial<
   cp: (args: string[]) => !args.some(arg => arg?.startsWith('-')),
 }
 
+const CONTEXTUAL_BASH_CREDENTIAL_PATHS = {
+  home: ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc', 'Library/Keychains',
+    'Library/Application Support/Google/Chrome', 'Library/Application Support/Chromium',
+    'Library/Application Support/Firefox', 'Library/Application Support/Microsoft Edge',
+    'Library/Application Support/BraveSoftware', 'Library/Safari',
+    '.config/google-chrome', '.config/chromium', '.config/BraveSoftware', '.mozilla/firefox'],
+  names: /(?:^|\/)(?:keychains?|[^/]*\.keychain(?:-db)?|\.[^/]*history|[^/]+_history|\.histfile|(?:[^/]*[^a-z0-9/])?(?:tokens?|credentials?)(?:[^a-z0-9/][^/]*)?)(?:\/|$)/iu,
+}
+
+function normalizedCredentialPath(path: string): string {
+  return path.replaceAll('\\', '/').toLowerCase()
+}
+
+function touchesCredentialPath(path: string, cwd: string, recursive: boolean): boolean {
+  const protectedPaths = CONTEXTUAL_BASH_CREDENTIAL_PATHS.home.map(path =>
+    normalizedCredentialPath(resolve(homedir(), path)),
+  )
+  const isProtected = (path: string) => {
+    const normalized = normalizedCredentialPath(path)
+    return CONTEXTUAL_BASH_CREDENTIAL_PATHS.names.test(normalized) || protectedPaths.some(root =>
+      normalized === root || normalized.startsWith(`${root}/`) ||
+      (recursive && root.startsWith(normalized.endsWith('/') ? normalized : `${normalized}/`)),
+    )
+  }
+  const candidates = getPathsForPermissionCheck(resolve(cwd, expandTilde(path.replace(/^["']|["']$/g, ''))))
+  if (candidates.some(isProtected)) return true
+  if (!recursive) return false
+
+  // Recursive searches can open credential files below an otherwise ordinary
+  // directory. Inspect names only and defer large or unreadable trees to review.
+  const pending = [candidates.at(-1)!]
+  const visited = new Set<string>()
+  let remaining = 4_096
+  while (pending.length > 0) {
+    const directory = pending.pop()!
+    if (visited.has(directory)) continue
+    visited.add(directory)
+    try {
+      const entries = opendirSync(directory)
+      try {
+        for (let entry = entries.readSync(); entry; entry = entries.readSync()) {
+          if (--remaining < 0) return true
+          const child = resolve(directory, entry.name)
+          if (isProtected(child)) return true
+          if (entry.isDirectory()) pending.push(child)
+          if (entry.isSymbolicLink()) {
+            const targets = getPathsForPermissionCheck(child)
+            if (targets.some(isProtected)) return true
+            pending.push(targets.at(-1)!)
+          }
+        }
+      } finally {
+        entries.closeSync()
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return true
+    }
+  }
+  return false
+}
+
 function validateCommandPaths(
   command: PathCommand,
   args: string[],
@@ -726,6 +790,7 @@ function validateCommandPaths(
   toolPermissionContext: ToolPermissionContext,
   compoundCommandHasCd?: boolean,
   operationTypeOverride?: FileOperationType,
+  onOutsideRead?: () => void,
 ): PermissionResult {
   const extractor = PATH_EXTRACTORS[command]
   const paths = extractor(args)
@@ -782,6 +847,13 @@ function validateCommandPaths(
     )
 
     if (!allowed) {
+      const recursive = command === 'rg' || command === 'find' ||
+        (['grep', 'ls', 'diff'].includes(command) && args.some(arg => /^--recursive$|^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(arg)))
+      if (onOutsideRead && operationType === 'read' && !decisionReason &&
+          paths.every(path => !touchesCredentialPath(path, cwd, recursive))) {
+        onOutsideRead()
+        continue
+      }
       const workingDirs = Array.from(
         allWorkingDirectories(toolPermissionContext),
       )
@@ -828,6 +900,7 @@ export function createPathChecker(
     cwd: string,
     context: ToolPermissionContext,
     compoundCommandHasCd?: boolean,
+    onOutsideRead?: () => void,
   ): PermissionResult => {
     // First check normal path validation (which includes explicit deny rules)
     const result = validateCommandPaths(
@@ -837,6 +910,7 @@ export function createPathChecker(
       context,
       compoundCommandHasCd,
       operationTypeOverride,
+      onOutsideRead,
     )
 
     // If explicitly denied, respect that (don't override with dangerous path message)
@@ -955,6 +1029,7 @@ function validateSinglePathCommand(
   cwd: string,
   toolPermissionContext: ToolPermissionContext,
   compoundCommandHasCd?: boolean,
+  onOutsideRead?: () => void,
 ): PermissionResult {
   // SECURITY: Strip wrapper commands (timeout, nice, nohup, time) before extracting
   // the base command. Without this, dangerous commands wrapped with these utilities
@@ -995,7 +1070,7 @@ function validateSinglePathCommand(
     baseCmd as PathCommand,
     operationTypeOverride,
   )
-  return pathChecker(args, cwd, toolPermissionContext, compoundCommandHasCd)
+  return pathChecker(args, cwd, toolPermissionContext, compoundCommandHasCd, onOutsideRead)
 }
 
 /**
@@ -1009,6 +1084,7 @@ function validateSinglePathCommandArgv(
   cwd: string,
   toolPermissionContext: ToolPermissionContext,
   compoundCommandHasCd?: boolean,
+  onOutsideRead?: () => void,
 ): PermissionResult {
   const argv = stripWrappersFromArgv(cmd.argv)
   if (argv.length === 0) {
@@ -1037,7 +1113,7 @@ function validateSinglePathCommandArgv(
     baseCmd as PathCommand,
     operationTypeOverride,
   )
-  return pathChecker(args, cwd, toolPermissionContext, compoundCommandHasCd)
+  return pathChecker(args, cwd, toolPermissionContext, compoundCommandHasCd, onOutsideRead)
 }
 
 function validateOutputRedirections(
@@ -1141,6 +1217,7 @@ export function checkPathConstraints(
   compoundCommandHasCd?: boolean,
   astRedirects?: Redirect[],
   astCommands?: SimpleCommand[],
+  onOutsideRead?: () => void,
 ): PermissionResult {
   // SECURITY: Process substitution >(cmd) can execute commands that write to files
   // without those files appearing as redirect targets. For example:
@@ -1205,6 +1282,7 @@ export function checkPathConstraints(
         cwd,
         toolPermissionContext,
         compoundCommandHasCd,
+        onOutsideRead,
       )
       if (result.behavior === 'ask' || result.behavior === 'deny') {
         return result
@@ -1218,6 +1296,7 @@ export function checkPathConstraints(
         cwd,
         toolPermissionContext,
         compoundCommandHasCd,
+        onOutsideRead,
       )
       if (result.behavior === 'ask' || result.behavior === 'deny') {
         return result

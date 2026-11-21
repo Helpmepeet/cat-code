@@ -48,9 +48,8 @@ async function run(scenario: string) {
 for (const state of ['matching', 'script', 'other-child', 'conflicting', 'no-anchor', 'no-creator', 'queued']) {
   test(`legacy notice with ${state} parent evidence cannot authorize the next edit`, async () => {
     const proof = await run(`legacy-notice-${state}`)
-    const matching = state === 'matching' || state === 'script'
-    expect(proof.postedNotices).toHaveLength(matching ? 1 : 0)
-    expect(proof.prompts.map((p: any) => p.tool_name)).toEqual(matching || state === 'queued' ? ['Edit'] : ['Announce', 'Edit'])
+    expect(proof.postedNotices).toHaveLength(state === 'queued' ? 0 : 1)
+    expect(proof.prompts.map((p: any) => p.tool_name)).toEqual(['Edit'])
     expect(proof.files.a).toBe('old')
     expect(proof.requests.some((row: any) => row.tool === 'Announce')).toBe(false)
   }, 30_000)
@@ -65,12 +64,10 @@ for (const state of ['host-identity', 'relay-marker']) {
   }, 30_000)
 }
 
-for (const [scenario, expectedReviews] of [
-  ['native-edit', []], ['native-edit-script', ['REPL']], ['native-patch', []],
-] as const) {
-  test(`${scenario} makes the workspace edit without reviewing the file tool`, async () => {
+for (const scenario of ['native-edit', 'native-edit-script', 'native-patch']) {
+  test(`${scenario} makes the workspace edit without review`, async () => {
     const proof = await run(scenario)
-    expect(proof.requests.map((request: any) => request.tool)).toEqual(expectedReviews)
+    expect(proof.requests).toHaveLength(0)
     expect(proof.prompts).toHaveLength(0)
     expect(proof.files.a).toBe(scenario === 'native-patch' ? 'new\n' : 'new')
   }, 30_000)
@@ -228,19 +225,7 @@ for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
   }, 30_000)
 }
 
-for (const delegated of [false, true]) {
-  test(`the desktop browser can perform a reviewed action for a ${delegated ? 'verified helper' : 'direct user'} request`, async () => {
-    const proof = await run(delegated ? 'native-browser-peer' : 'native-browser')
-    expect(proof.prompts).toHaveLength(0)
-    expect(proof.browserCalls).toBe(1)
-    const review = proof.requests.find((request: any) => request.contextual)
-    expect(review?.content.action).toMatchObject({ tool: 'BrowserAct',
-      execution: { resolvedAction: 'click button Save changes on localhost:3000' } })
-    expect(review.content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator' }))
-  }, 30_000)
-}
-
-for (const scenario of ['native-browser-read', 'native-browser-screenshot', 'native-browser-scroll']) test(`${scenario} runs without an Auto Mode review`, async () => {
+for (const scenario of ['native-browser', 'native-browser-peer', 'native-browser-navigate', 'native-browser-read', 'native-browser-screenshot', 'native-browser-scroll']) test(`${scenario} runs without an Auto Mode review`, async () => {
   const proof = await run(scenario)
   expect(proof.prompts).toHaveLength(0)
   expect(proof.requests).toHaveLength(0)
@@ -256,12 +241,10 @@ for (const scenario of ['mcp-browser-select', 'mcp-browser-extra', 'mcp-browser-
   }, 30_000)
 }
 
-test('review of an outside-workspace LSP read identifies the receiving server', async () => {
+test('an outside-workspace LSP read returns symbols without review', async () => {
   const proof = await run('native-helper-symbol-outside')
-  const [review] = proof.requests
-  expect(review?.content.action.execution.resolvedAction).toMatchObject({
-    languageServer: 'fixture-symbols', operation: 'documentSymbol', filePath: expect.stringMatching(/symbols\.txt$/),
-  })
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
   const result = proof.transcript.find((row: any) => row.toolUseResult?.operation === 'documentSymbol')
   expect(result?.toolUseResult.result).toContain('symbol_from_outside')
 }, 30_000)
@@ -280,10 +263,10 @@ for (const scenario of ['native-scope-notice', 'native-scope-notice-note', 'nati
   'native-fingerprint-parent', 'native-helper-goal', 'native-helper-symbol']) {
   test(scenario, async () => {
     const proof = await run(scenario)
-    const held = ['native-scope-notice-sensitive', 'native-fingerprint-write', 'native-fingerprint-parent'].includes(scenario)
+    const held = ['native-fingerprint-write', 'native-fingerprint-parent'].includes(scenario)
     expect(proof.requests.length).toBe(held ? 1 : 0)
     expect(proof.prompts).toHaveLength(scenario === 'native-scope-notice-ask' ? 1 : 0)
-    if (scenario === 'native-scope-notice' || scenario === 'native-scope-notice-note') expect(proof.postedNotices).toHaveLength(1)
+    if (['native-scope-notice', 'native-scope-notice-note', 'native-scope-notice-sensitive'].includes(scenario)) expect(proof.postedNotices).toHaveLength(1)
     if (scenario === 'native-scope-notice-private' || scenario === 'native-scope-notice-ask') expect(proof.postedNotices).toHaveLength(0)
     if (scenario.startsWith('native-fingerprint') && scenario !== 'native-fingerprint-write') {
       const result = proof.transcript.find((row: any) =>
@@ -299,6 +282,40 @@ for (const scenario of ['native-scope-notice', 'native-scope-notice-note', 'nati
     }
     if (scenario === 'native-helper-goal') expect(proof.transcript.some((row: any) =>
       row.sourceToolAssistantUUID && row.message?.content?.some?.((block: any) => block.type === 'tool_result'))).toBe(true)
+  }, 30_000)
+}
+
+test('contextual Auto admits Script once and reviews both Bash children', async () => {
+  const proof = await run('native-script-children')
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash', 'Bash'])
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effecteffect')
+}, 30_000)
+
+for (const [scenario, reviewed] of [['logs', false], ['peer', false], ['credential', true], ['nested-token', true]] as const) {
+  test(`outside-workspace Bash search (${scenario}) follows the credential boundary`, async () => {
+    const proof = await run(`native-outside-read-${scenario}`)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(reviewed ? ['Bash'] : [])
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.transcript.some((row: any) => row.toolUseResult?.stdout?.includes('outside_search_marker'))).toBe(true)
+  }, 30_000)
+}
+
+for (const source of ['user', 'project', 'open', 'missing']) {
+  test(`MCP read from ${source} uses the configured scope and explicit closed-world hint`, async () => {
+    const proof = await run(`mcp-read-${source}`)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(source === 'user' ? [] : ['mcp__fixture__records'])
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.mcpCalls).toHaveLength(1)
+  }, 30_000)
+}
+
+for (const target of ['git-hook', 'claude-settings', 'editor-settings']) {
+  test(`Auto still reviews an in-workspace write to ${target}`, async () => {
+    const proof = await run(`native-write-${target}`)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(['Write'])
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.sensitiveFileExists).toBe(false)
   }, 30_000)
 }
 

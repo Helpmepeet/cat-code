@@ -47,8 +47,8 @@ export function createBrowserTools(requestHost: PeerHostRequester = requestPeerH
           descriptions.set(context.toolUseId, result.value.description)
           if (descriptions.size > 128) descriptions.delete(descriptions.keys().next().value!)
         }
-        if (verb === 'browser.act' && 'action' in input && input.action === 'scroll' &&
-            context.contextualAutoAttempt?.mode === 'experimental') {
+        if ((verb === 'browser.act' || verb === 'browser.navigate') &&
+            context.contextualAutoAttempt?.isReviewException) {
           return { behavior: 'allow' as const, updatedInput: input }
         }
         return { behavior: 'passthrough' as const, message: result.value.description }

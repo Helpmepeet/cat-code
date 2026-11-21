@@ -601,6 +601,8 @@ export type Tool<
    * or unprefixed (CLAUDE_AGENT_SDK_MCP_NO_PREFIX mode).
    */
   mcpInfo?: { serverName: string; toolName: string }
+  /** User- or local-scoped MCP tool with explicit read-only and closed-world hints. */
+  readonly contextualClosedWorldRead?: true
   readonly name: string
   /**
    * Maximum size in characters for tool result before it gets persisted to disk.
