@@ -7,19 +7,24 @@ if (!root || process.cwd() !== join(root, 'workspace') ||
 }
 
 const scriptFirst = process.argv[2] === 'script'
-const model = 'claude-sonnet-4-5'
+const gpt = process.env.CLAUDE_CODE_USE_OPENAI === '1'
+const model = gpt ? 'gpt-6.2-astra' : 'claude-sonnet-4-5'
+const endpoint = gpt ? 'https://chatgpt.com/backend-api/codex/responses' : 'https://auto-reminder.invalid/v1/messages'
 const requests: Record<string, unknown>[] = []
 const unexpectedRequests: string[] = []
 globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : input)
-  if (url.origin !== 'https://auto-reminder.invalid' || url.pathname !== '/v1/messages') {
+  if (`${url.origin}${url.pathname}` !== endpoint) {
     unexpectedRequests.push(url.href)
     throw new Error('Unexpected Auto reminder fixture request')
   }
   requests.push(JSON.parse(input instanceof Request ? await input.text() : String(init?.body)))
   if (requests.length > 7) throw new Error('Unexpected extra model request')
   const id = `auto-fixture-${requests.length}`
-  const events = [
+  const events = gpt ? [
+    { type: 'response.output_text.delta', delta: 'Fixture finished.' },
+    { type: 'response.completed', response: { usage: { input_tokens: 100, output_tokens: 2 } } },
+  ] : [
     { type: 'message_start', message: {
       type: 'message', id, model, role: 'assistant', content: [],
       stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 0 },
@@ -42,24 +47,43 @@ const { BashTool } = await import('../tools/BashTool/BashTool.js')
 const { FileEditTool } = await import('../tools/FileEditTool/FileEditTool.js')
 const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
-const { enableConfigs } = await import('../utils/config.js')
+const { enableConfigs, saveGlobalConfig } = await import('../utils/config.js')
 const { createFileStateCacheWithSizeLimit } = await import('../utils/fileStateCache.js')
+const { initialPermissionModeFromCLI } = await import('../utils/permissions/permissionSetup.js')
 const { createQueryEngineAppSession } = await import('./createQueryEngineAppSession.js')
 
 enableConfigs()
+if (gpt) {
+  const accountId = 'fixture-account'
+  const { _setWebSocketFactoryForTest } = await import('../services/api/codex-websocket-transport.js')
+  const { _getConversationIdForRequestForTest, _markStickyHttpFallbackForTest } = await import('../services/api/codex-fetch-adapter.js')
+  _setWebSocketFactoryForTest(() => {
+    unexpectedRequests.push('WebSocket')
+    throw new Error('Fixture uses intercepted HTTP transport only')
+  })
+  _markStickyHttpFallbackForTest(_getConversationIdForRequestForTest(accountId, model), 'fixture')
+  if (!saveGlobalConfig(config => ({ ...config, codexOAuth: {
+    accessToken: 'fixture-access-token', refreshToken: 'fixture-refresh-token',
+    accountId, credentialGeneration: 0, expiresAt: Date.now() + 86_400_000,
+  } }))) throw new Error('Could not seed the synthetic Codex credential')
+}
 const sessionId = getSessionId()
 switchSession(sessionId, null, { fresh: scriptFirst })
+const { mode } = initialPermissionModeFromCLI({
+  permissionModeCli: gpt ? undefined : 'auto', dangerouslySkipPermissions: undefined,
+})
+if (mode !== 'auto') throw new Error(`Expected Auto Mode, got ${mode}`)
 const initialState = getDefaultAppState()
 let state: typeof initialState = {
   ...initialState,
   ...(scriptFirst ? { codeModeFirstSessionId: sessionId } : {}),
-  toolPermissionContext: { ...initialState.toolPermissionContext, mode: 'auto' },
+  toolPermissionContext: { ...initialState.toolPermissionContext, mode },
 }
 const session = createQueryEngineAppSession({
   cwd: process.cwd(), tools: [REPLTool, BashTool, FileEditTool, FileWriteTool],
   commands: [], agents: [], mcpClients: [],
   getAppState: () => state, setAppState: update => { state = update(state) },
-  customSystemPrompt: 'Inspect the isolated fixture.', userSpecifiedModel: model,
+  userSpecifiedModel: model,
   readFileCache: createFileStateCacheWithSizeLimit(10), recordTranscript: async () => null,
 })
 

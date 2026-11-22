@@ -342,7 +342,7 @@ describe('assembled system prompt', () => {
         expect(prompt.split(contract).length - 1).toBe(1)
       }
       expect(prompt).toContain('does not by itself authorize implementation')
-      expect(prompt).toContain('confirm first unless the user or loaded durable instructions already authorize that scope')
+      expect(prompt).toContain('Judge pushes and cleanup by their scope and effects.')
       expect(prompt).toContain('Prefer prose and light formatting')
     }
   })

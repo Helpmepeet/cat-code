@@ -281,7 +281,7 @@ describe('GPT section boundaries', () => {
 
     expect(prompt).toContain('take the natural next action')
     expect(prompt).toContain(
-      'confirm first unless the user or loaded durable instructions already authorize that scope',
+      "Proceed within the scope authorized by the user or loaded instructions, subject to the session's permission checks.",
     )
     expect(prompt).toContain('Risky actions include')
     expect(prompt).toContain(

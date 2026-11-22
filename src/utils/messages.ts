@@ -3775,10 +3775,8 @@ function getAutoModeFileEditingInstruction(
 function getAutoModeFullInstructions(fileEditingTools?: string[], bashDeclared?: boolean): UserMessage[] {
   const content = `## Auto Mode Active
 
-Auto mode is active. The user chose continuous, autonomous execution. You should:
-
 1. **Expect course corrections** — The user may provide suggestions or course corrections at any point; treat those as normal input.
-2. **Do not take overly destructive actions** — Auto mode is not a license to destroy. Anything that deletes data or modifies shared or production systems still needs explicit user confirmation. If you reach such a decision point, ask and wait, or course correct to a safer method instead.
+2. **Do not take overly destructive actions.** Judge pushes and cleanup by their scope and effects. Proceed within the scope authorized by the user or loaded instructions, subject to the session's permission checks. If authorization is unclear, use those checks and follow any required approval.
 3. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.
 
 ${getAutoModeFileEditingInstruction(fileEditingTools, bashDeclared)}`
