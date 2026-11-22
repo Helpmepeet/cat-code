@@ -686,7 +686,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     // allow. Only an explicit permission rule can skip review for the lead.
     const changesPeerSession = !tool.isMcp && !tool.mcpInfo &&
       (tool.name === 'CreatePeer' || tool.name === 'SendToPeer')
-    if (attempt.needsWithdrawalReview() || (changesPeerSession &&
+    if (attempt.needsDelegatedScopeReview() || (changesPeerSession &&
         result.behavior === 'allow' && result.decisionReason?.type !== 'rule')) return await reviewContextually()
   }
   observation?.markRoute('base')
