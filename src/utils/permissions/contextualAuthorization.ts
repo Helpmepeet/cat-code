@@ -235,6 +235,7 @@ export async function createContextualAttempt(
   let humanAllowed = false
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
+  let reviewFailure: 'unavailable' | 'invalid_response' | undefined
   let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
   let boundProjection: { value: unknown } | undefined
   let reviewedSkillGrants: { value: Awaited<ReturnType<typeof getSkillGrantsForReview>> } | undefined
@@ -357,6 +358,7 @@ export async function createContextualAttempt(
       reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
       lastOutcome = undefined
     }
+    reviewFailure = undefined
     actionAllowed = false
   }
 
@@ -441,6 +443,9 @@ export async function createContextualAttempt(
         ? 'The review was cancelled.' : 'The assignment or action changed during review.')
     }
     if (result.status !== 'valid') {
+      if (result.status !== 'cancelled') {
+        reviewFailure = result.status === 'invalid' ? 'invalid_response' : 'unavailable'
+      }
       return denyReview('Auto Mode could not complete this review. Retry or report the blocker in chat.', 'inconclusive')
     }
     const { decision, rationale } = result.verdict
@@ -469,6 +474,7 @@ export async function createContextualAttempt(
     needsDelegatedScopeReview,
     recordAllowedOutsideRead() { allowedOutsideRead = true },
     get requiresHuman() { return requiresHuman },
+    get reviewFailure() { return reviewFailure },
     get reviewedSkillGrants() { return reviewedSkillGrants },
     review: () => review ??= reviewHeldAction(),
     needsInstructionReview,

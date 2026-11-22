@@ -110,6 +110,7 @@ const surface = scenario.includes('-sdk-') ? 'sdk' : scenario.includes('-termina
 const effect = () => readFile(join(cwd, 'effects.txt'), 'utf8').catch(() => null)
 const hookMarker = join(cwd, 'permission-hook-ran')
 const reviewUnavailable = scenario.endsWith('-unavailable')
+const observeReviewUsage = ['direct-unavailable', 'direct-invalid', 'direct-denied'].includes(scenario)
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
 if (outsideSymbol) await writeFile(join(root, 'symbols.txt'), 'outside')
 const outsideDir = join(root, scenario === 'native-outside-read-credential' ? '.ssh' : 'logs')
@@ -285,7 +286,7 @@ mock.module('../services/api/client.js', () => ({
       const review = { tool, content, ...((credentialSettings || shadowPeerWrite) && { system: body.system }), startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
       const operatorText = contextual ? content.conversation.filter((entry: any) => entry.origin === 'operator').map((entry: any) => entry.text) : []
-      const verdict = twoChecks || credentialSettings ? 'allow' : repeatedDenials || shadowPeerWrite ? 'deny'
+      const verdict = twoChecks || credentialSettings ? 'allow' : repeatedDenials || shadowPeerWrite || scenario === 'direct-denied' ? 'deny'
         : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
         : legacyNotice && tool === 'Edit' && content.assignment?.parent?.some((row: any) =>
           row.origin === 'operator' && row.text === 'Have a helper inspect a.txt. Leave it untouched.') ? 'deny'
@@ -450,7 +451,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
     return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
-      backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-'))
+      backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || observeReviewUsage || scenario.startsWith('trial-'))
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
@@ -806,11 +807,38 @@ if (lateCorrection || backgroundWithdrawal || scenario.startsWith('trial-')) {
   const { readAutoModeReviews } = await import('./autoModeReviewPersistence.js')
   savedReviews = readAutoModeReviews(getTranscriptPath())
 }
+let reviewUsage
+if (observeReviewUsage) {
+  const storage = await import('../utils/sessionStorage.js')
+  const { projectAutoModeDiagnosticPayload, reduceAutoModeUsage } = await import('../utils/autoModeUsage.js')
+  await storage.flushSessionStorage()
+  const data = await readFile(storage.getTranscriptPath(), 'utf8')
+  const sourceScope = 'fixture-session'
+  const records = data.trim().split('\n').flatMap(line => {
+    const row = JSON.parse(line)
+    const payload = projectAutoModeDiagnosticPayload(row)
+    return payload ? [{
+      sourceScope, recordId: row.uuid, observedAt: row.timestamp, diagnosticKind: 'auto_mode_observation', payload,
+    }] : []
+  })
+  const rangeStart = records[0]?.observedAt
+  if (!rangeStart) throw new Error('Expected persisted permission observations')
+  const rangeEnd = new Date().toISOString()
+  const usage = reduceAutoModeUsage({
+    records, sources: [{ sourceScope, allTools: 'complete', commands: 'complete' }],
+    rangeStart, rangeEnd, cutoff: rangeEnd,
+  })
+  reviewUsage = {
+    ends: records.map(record => record.payload).filter(payload => payload.subtype === 'auto_permission_end'),
+    outcomes: usage.commands.outcomes,
+  }
+}
 const workerDatabase = workerRouting && await Bun.file(join(cwd, 'fixture.db')).exists()
   ? Bun.spawnSync(['sqlite3', 'fixture.db', 'SELECT value FROM fixture'], { cwd }).stdout.toString().trim() : undefined
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
   scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
   ...(captureScriptResults && { modelToolResults }),
+  ...(reviewUsage && { reviewUsage }),
   ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),
   ...(browserAction && { browserCalls }),
   ...(sensitiveWrite && { sensitiveFileExists: await Bun.file(join(cwd, sensitiveWrite)).exists() }),

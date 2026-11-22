@@ -652,8 +652,11 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
   const isScriptWrapper = tool.name === REPL_TOOL_NAME && !tool.isMcp && !tool.mcpInfo
   const reviewContextually = async () => {
     observation?.markRoute('contextual')
-    const decision = await attempt!.review()
-    if (decision.behavior === 'deny' && decision.decisionReason?.type === 'classifier') {
+    const contextualAttempt = attempt!
+    const decision = await contextualAttempt.review()
+    if (contextualAttempt.reviewFailure) {
+      observation?.markFailure(contextualAttempt.reviewFailure)
+    } else if (decision.behavior === 'deny' && decision.decisionReason?.type === 'classifier') {
       observation?.markPolicy('classifier_policy')
     }
     return decision

@@ -597,13 +597,28 @@ for (const outcome of ['allow', 'mutated']) {
   }, 30_000)
 }
 
-for (const outcome of ['unavailable', 'invalid']) {
+for (const [outcome, cause] of [
+  ['unavailable', 'unavailable'],
+  ['invalid', 'invalid_response'],
+  ['denied', undefined],
+] as const) {
   test(`desktop fails closed without a prompt when review is ${outcome}`, async () => {
     const proof = await run(`direct-${outcome}`)
     expect(proof.requests).toHaveLength(1)
     expect(proof.prompts).toHaveLength(0)
     expect(proof.effect).toBeNull()
-    expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'inconclusive', reason: expect.stringContaining('Retry or report the blocker in chat') }))
+    expect(proof.reviewEvents).toContainEqual(expect.objectContaining(cause
+      ? { outcome: 'inconclusive', reason: expect.stringContaining('Retry or report the blocker in chat') }
+      : { outcome: 'blocked', reason: 'Isolated review decision.' }))
+    expect(proof.reviewUsage.ends).toEqual([expect.objectContaining({
+      raw_result: 'deny', route: 'contextual',
+      disposition: cause ? 'operational_error' : 'policy_blocked',
+      ...(cause && { cause }),
+    })])
+    expect(proof.reviewUsage.outcomes).toMatchObject({
+      operational_error: cause ? 1 : 0,
+      policy_blocked: cause ? 0 : 1,
+    })
   }, 30_000)
 }
 
