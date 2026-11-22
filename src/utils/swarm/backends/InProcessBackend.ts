@@ -73,7 +73,8 @@ export class InProcessBackend implements TeammateExecutor {
    * 5. Return spawn result with agentId, taskId, abortController
    */
   async spawn(config: TeammateSpawnConfig): Promise<TeammateSpawnResult> {
-    if (!this.context) {
+    const context = this.context
+    if (!context) {
       logForDebugging(
         `[InProcessBackend] spawn() called without context for ${config.name}`,
       )
@@ -95,7 +96,7 @@ export class InProcessBackend implements TeammateExecutor {
         color: config.color,
         planModeRequired: config.planModeRequired ?? false,
       },
-      this.context,
+      context,
     )
 
     // If spawn succeeded, start the agent execution loop
@@ -119,10 +120,7 @@ export class InProcessBackend implements TeammateExecutor {
         taskId: result.taskId,
         prompt: config.prompt,
         teammateContext: result.teammateContext,
-        // Strip messages: the teammate never reads toolUseContext.messages
-        // (runAgent overrides it via createSubagentContext). Passing the
-        // parent's conversation would pin it for the teammate's lifetime.
-        toolUseContext: { ...this.context, messages: [] },
+        toolUseContext: context,
         abortController: result.abortController,
         model: config.model,
         systemPrompt: config.systemPrompt,

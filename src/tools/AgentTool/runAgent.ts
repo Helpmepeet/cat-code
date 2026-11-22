@@ -1,4 +1,4 @@
-import { workerAssignment } from '../../utils/permissions/contextualAuthority.js'
+import { type ContextualWorkerParentBinding, workerAssignment } from '../../utils/permissions/contextualAuthority.js'
 import { createAgentInterruptedTools } from '../../services/tools/agentInterruptedTools.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from '../../services/tools/interruptedToolRun.js'
 import { feature } from 'bun:bundle'
@@ -395,6 +395,7 @@ async function* runAgentInCleanupScope({
   isAsync,
   canShowPermissionPrompts,
   forkContextMessages,
+  contextualParentBinding,
   querySource,
   override,
   model,
@@ -431,6 +432,7 @@ async function* runAgentInCleanupScope({
    * Set to true for in-process teammates that run async but share the terminal. */
   canShowPermissionPrompts?: boolean
   forkContextMessages?: Message[]
+  contextualParentBinding?: ContextualWorkerParentBinding
   querySource: QuerySource
   override?: {
     userContext?: { [k: string]: string }
@@ -1124,6 +1126,7 @@ async function* runAgentInCleanupScope({
         : message.message.content.flatMap(block => block.type === 'text' ? [block.text] : []),
     ).join('\n'),
     resume ? seededMessageUuids : undefined,
+    contextualParentBinding,
   )
 
   // A prior worker run can finish before a delivery outcome addressed to this

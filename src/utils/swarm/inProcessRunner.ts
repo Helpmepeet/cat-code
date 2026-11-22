@@ -11,6 +11,7 @@
 
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
+import { isDeepStrictEqual } from 'node:util'
 import { getSystemPrompt } from '../../constants/prompts.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import {
@@ -93,9 +94,14 @@ import {
   hasPermissionsToUseTool,
 } from '../permissions/permissions.js'
 import { resolveInitialPermissionOccurrence } from '../permissions/autoModeObservation.js'
+import { recordContextualHumanApproval } from '../permissions/contextualAuthorization.js'
+import {
+  captureContextualWorkerParent,
+  type ContextualWorkerParentBinding,
+} from '../permissions/contextualAuthority.js'
 import { emitTaskTerminatedSdk } from '../sdkEventQueue.js'
 import { sleep } from '../sleep.js'
-import { jsonStringify } from '../slowOperations.js'
+import { jsonParse, jsonStringify } from '../slowOperations.js'
 import { asSystemPrompt } from '../systemPromptType.js'
 import { claimTask, listTasks, type Task, updateTask } from '../tasks.js'
 import type { TeammateContext } from '../teammateContext.js'
@@ -304,6 +310,13 @@ function createInProcessCanUseTool(
             ) {
               if (decisionMade) return
               decisionMade = true
+              if (result.humanOnly) {
+                recordContextualHumanApproval(
+                  toolUseContext,
+                  toolUseID,
+                  updatedInput,
+                )
+              }
               issueUserApprovalReceipt(
                 (tool as Tool).name,
                 updatedInput,
@@ -439,11 +452,20 @@ function createInProcessCanUseTool(
           contentBlocks?: ContentBlockParam[],
         ) {
           if (settled) return
-          persistPermissionUpdates(permissionUpdates)
-          const finalInput =
+          let finalInput =
             updatedInput && Object.keys(updatedInput).length > 0
               ? updatedInput
               : input
+          if (result.humanOnly) {
+            // JSON drops undefined fields. Bind an unchanged reply to the
+            // original input so the release check can compare it exactly.
+            if (isDeepStrictEqual(finalInput, jsonParse(jsonStringify(input)))) {
+              finalInput = input
+            }
+            recordContextualHumanApproval(toolUseContext, toolUseID, finalInput)
+            issueUserApprovalReceipt(tool.name, finalInput, toolUseID)
+          }
+          persistPermissionUpdates(permissionUpdates)
           settle({
             behavior: 'allow',
             updatedInput: finalInput,
@@ -1299,6 +1321,7 @@ export const _forTest = {
  */
 export async function runInProcessTeammate(
   config: InProcessRunnerConfig,
+  contextualParentBinding?: ContextualWorkerParentBinding,
 ): Promise<InProcessRunnerResult> {
   const {
     identity,
@@ -1572,6 +1595,7 @@ export async function runInProcessTeammate(
             agentDefinition: iterationAgentDefinition,
             promptMessages,
             toolUseContext,
+            contextualParentBinding,
             canUseTool: createInProcessCanUseTool(
               identity,
               currentWorkAbortController,
@@ -1968,11 +1992,12 @@ export async function runInProcessTeammate(
  * @param config - Runner configuration
  */
 export function startInProcessTeammate(config: InProcessRunnerConfig): void {
-  // Extract agentId before the closure so the catch handler doesn't retain
-  // the full config object (including toolUseContext) while the promise is
-  // pending - which can be hours for a long-running teammate.
+  const parentBinding = captureContextualWorkerParent(config.toolUseContext)
+  // Keep the live parent history getter and drop the launch transcript so
+  // the teammate doesn't retain old messages after a clear or compaction.
+  const toolUseContext = { ...config.toolUseContext, messages: [] }
   const agentId = config.identity.agentId
-  void runInProcessTeammate(config).catch(error => {
+  void runInProcessTeammate({ ...config, toolUseContext }, parentBinding).catch(error => {
     logForDebugging(`[inProcessRunner] Unhandled error in ${agentId}: ${error}`)
   })
 }

@@ -673,11 +673,7 @@ async function handleSpawnInProcess(
         model,
         agentDefinition,
         teammateContext: result.teammateContext,
-        // Strip messages: the teammate never reads toolUseContext.messages
-        // (it builds its own history via allMessages in inProcessRunner).
-        // Passing the parent's full conversation here would pin it for the
-        // teammate's lifetime, surviving /clear and auto-compact.
-        toolUseContext: { ...context, messages: [] },
+        toolUseContext: context,
         abortController: result.abortController,
         invokingRequestId: input.invokingRequestId,
       })

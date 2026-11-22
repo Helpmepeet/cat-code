@@ -192,6 +192,8 @@ export type ContextualWorkerAssignment = {
   parentSignal: AbortSignal
 }
 
+export type ContextualWorkerParentBinding = Pick<ContextualWorkerAssignment, 'anchor' | 'sender'>
+
 export function findContextualAssignmentAnchor(context: ToolUseContext): string | undefined {
   if (context.agentId !== undefined) return undefined
   const evidence = conversationEvidence(context.messages)
@@ -304,19 +306,24 @@ export async function resolveContextualPeerParent(
   }
 }
 
+export function captureContextualWorkerParent(parent: ToolUseContext): ContextualWorkerParentBinding {
+  const evidence = conversationEvidence(parent.messages, parent.contextualWorkerAssignment)
+  const anchor = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
+  const sender = parent.agentId ?? (evidence.some(record => record.origin === 'peer') ? 'peer-session' : 'main')
+  return { anchor, sender }
+}
+
 export function workerAssignment(
   parent: ToolUseContext,
   initialMessages: readonly Message[],
   text: string,
   history?: ReadonlySet<string>,
+  parentBinding = captureContextualWorkerParent(parent),
 ): ContextualWorkerAssignment {
   const parentMessages = () => parent.getCurrentAutoModeMessages?.() ?? parent.messages
   const parentWorker = parent.contextualWorkerAssignment
-  const evidence = conversationEvidence(parent.messages, parentWorker)
-  const anchor = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
-  const sender = parent.agentId ?? (evidence.some(record => record.origin === 'peer') ? 'peer-session' : 'main')
-  return { text, sender, excluded: new Set(initialMessages.map(message => message.uuid)),
-    history, parentWorker, parentMessages, anchor, parentSignal: parent.abortController.signal }
+  return { text, ...parentBinding, excluded: new Set(initialMessages.map(message => message.uuid)),
+    history, parentWorker, parentMessages, parentSignal: parent.abortController.signal }
 }
 
 export function readContextualAuthority(context: ToolUseContext, peerParent?: PeerParentEvidence) {
