@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import uniqBy from 'lodash-es/uniqBy.js'
+import { isDeepStrictEqual } from 'node:util'
 import { registerSkillCommandHooks } from '../../utils/hooks/registerSkillHooks.js'
 import { dirname } from 'path'
 import { getProjectRoot } from 'src/bootstrap/state.js'
@@ -53,12 +54,14 @@ import { errorMessage } from '../../utils/errors.js'
 import {
   extractResultText,
   prepareForkedCommandContext,
+  resolveForkedCommandAgent,
 } from '../../utils/forkedAgent.js'
 import { parseFrontmatter } from '../../utils/frontmatterParser.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { createUserMessage, normalizeMessages } from '../../utils/messages.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
 import { resolveSkillModelOverride } from '../../utils/model/model.js'
+import { parseToolListFromCLI } from '../../utils/permissions/permissionSetup.js'
 import { recordSkillUsage } from '../../utils/suggestions/skillUsageTracking.js'
 import { createAgentId } from '../../utils/uuid.js'
 import { runAgent } from '../AgentTool/runAgent.js'
@@ -93,6 +96,31 @@ async function getAllCommands(context: ToolUseContext): Promise<Command[]> {
   if (mcpSkills.length === 0) return getCommands(getProjectRoot())
   const localCommands = await getCommands(getProjectRoot())
   return uniqBy([...localCommands, ...mcpSkills], 'name')
+}
+
+function projectSkillGrants(command: Command | undefined, context: ToolUseContext) {
+  if (command?.type !== 'prompt') return undefined
+  const forked = command.context === 'fork'
+  const agent = forked ? resolveForkedCommandAgent(command, context) : undefined
+  return {
+    skill: command.name,
+    source: command.source,
+    loadedFrom: command.loadedFrom,
+    scope: forked ? 'worker' : 'command',
+    allowedTools: parseToolListFromCLI(command.allowedTools ?? []),
+    ...(agent && { worker: {
+      agentType: agent.agentType,
+      source: agent.source,
+      tools: agent.tools ?? ['*'],
+      disallowedTools: agent.disallowedTools,
+      mcpServers: agent.mcpServers?.flatMap(spec => typeof spec === 'string' ? [spec] : Object.keys(spec)),
+    } }),
+  }
+}
+
+export async function getSkillGrantsForReview(skill: string, context: ToolUseContext) {
+  const command = findCommand(skill.trim().replace(/^\//u, ''), await getAllCommands(context))
+  return projectSkillGrants(command, context)
 }
 
 // Re-export Progress from centralized types to break import cycles
@@ -489,9 +517,20 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
       }
     }
 
+    const askRules = getRuleByContentsForTool(permissionContext, SkillTool as Tool, 'ask')
+    for (const [ruleContent, rule] of askRules.entries()) {
+      if (ruleMatches(ruleContent)) {
+        return {
+          behavior: 'ask',
+          message: `Execute skill: ${commandName}`,
+          decisionReason: { type: 'rule', rule },
+          updatedInput: input,
+        }
+      }
+    }
+
     // Remote canonical skills are ant-only experimental — auto-grant.
-    // Placed AFTER the deny loop so a user-configured Skill(_canonical_:*)
-    // deny rule is honored (same pattern as safe-properties auto-allow below).
+    // Explicit deny and ask rules take precedence over the canonical allowance.
     // The skill content itself is canonical/curated, not user-authored.
     if (
       feature('EXPERIMENTAL_SKILL_SEARCH') &&
@@ -618,6 +657,12 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
 
     const commands = await getAllCommands(context)
     const command = findCommand(commandName, commands)
+    const attempt = context.contextualAutoAttempt
+    if (attempt?.mode === 'experimental' && attempt.id === context.toolUseId &&
+        attempt.reviewedSkillGrants &&
+        !isDeepStrictEqual(attempt.reviewedSkillGrants.value, projectSkillGrants(command, context))) {
+      throw new Error('The skill permissions changed during review. Review the current grants and try again.')
+    }
 
     // Track skill usage for ranking
     recordSkillUsage(commandName)

@@ -13,6 +13,8 @@ import { redactSecrets, scanForSecrets } from '../../services/teamMemorySync/sec
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import { isFilePatchToolName, FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
+import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
+import type { getSkillGrantsForReview } from '../../tools/SkillTool/SkillTool.js'
 import { WEB_SEARCH_TOOL_NAME } from '../../tools/WebSearchTool/prompt.js'
 import { getBashExecutionSettings, type BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { codeModeToolPrincipal } from '../../tools/REPLTool/codeModeTools.js'
@@ -235,6 +237,7 @@ export async function createContextualAttempt(
   let lastOutcome: AutoModeReview['outcome'] | undefined
   let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
   let boundProjection: { value: unknown } | undefined
+  let reviewedSkillGrants: { value: Awaited<ReturnType<typeof getSkillGrantsForReview>> } | undefined
 
   function currentProjection(): unknown {
     try { return tool.toAutoClassifierInputForUse?.(input, toolUseId) }
@@ -372,6 +375,11 @@ export async function createContextualAttempt(
       if (!refreshInstructions()) return stale('The assignment or action changed before review.')
     }
     const effect = action.effect ?? 'Invoke the named tool with the supplied arguments.'
+    if (!mcp && tool.name === SKILL_TOOL_NAME && typeof snapshot.skill === 'string') {
+      const { getSkillGrantsForReview } = await import('../../tools/SkillTool/SkillTool.js')
+      reviewedSkillGrants = { value: structuredClone(await getSkillGrantsForReview(snapshot.skill, context)) }
+      if (!refreshInstructions()) return stale('The assignment or action changed before review.')
+    }
     const resolvedAction = currentProjection()
     if (resolvedAction !== undefined) boundProjection = { value: structuredClone(resolvedAction) }
     const source = workspaceInstructionsForReview(context.autoModeInstructionContext)
@@ -389,6 +397,7 @@ export async function createContextualAttempt(
       ...(runs.length && { recentShellRuns: runs }),
       action: { ...action, effect, attempt: toolUseId, actor: authority.actor,
         execution: { ...action.execution,
+          ...(reviewedSkillGrants?.value && { skillGrants: reviewedSkillGrants.value }),
           ...(changedLines?.length && { changeSinceCompleteRead: {
             addedLines: changedLines.filter(line => line.startsWith('+')).length,
             removedLines: changedLines.filter(line => line.startsWith('-')).length,
@@ -458,6 +467,7 @@ export async function createContextualAttempt(
     needsDelegatedScopeReview,
     recordAllowedOutsideRead() { allowedOutsideRead = true },
     get requiresHuman() { return requiresHuman },
+    get reviewedSkillGrants() { return reviewedSkillGrants },
     review: () => review ??= reviewHeldAction(),
     needsInstructionReview,
     reviewFollowUp() {

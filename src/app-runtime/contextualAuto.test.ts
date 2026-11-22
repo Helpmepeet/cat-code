@@ -429,6 +429,35 @@ test('desktop Auto Mode loads an ordinary skill without optional arguments or a 
   expect(JSON.stringify(proof.transcript)).toContain('AUTO_SKILL_INSTRUCTIONS_LOADED')
 }, 30_000)
 
+test('desktop Auto Mode honors a named skill ask before its named and routine allowances', async () => {
+  const proof = await run('native-skill-ask')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toEqual([expect.objectContaining({ tool_name: 'Skill', human_only: true })])
+  expect(JSON.stringify(proof.transcript)).not.toContain('AUTO_SKILL_INSTRUCTIONS_LOADED')
+}, 30_000)
+
+for (const scope of ['inline', 'fork'] as const) {
+  test(`desktop Auto review receives the parsed grants and scope of a ${scope} skill`, async () => {
+    const proof = await run(`native-skill-${scope}`)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(['Skill'])
+    expect(proof.requests[0].content.action.execution.skillGrants).toMatchObject({
+      source: 'userSettings',
+      scope: scope === 'inline' ? 'command' : 'worker',
+      allowedTools: ['Bash(printf fixture:*)'],
+      ...(scope === 'fork' && { worker: { agentType: 'fixture-skilled-worker', source: 'projectSettings', tools: ['Bash'] } }),
+    })
+    expect(JSON.stringify(proof.transcript)).toContain(scope === 'inline' ? 'AUTO_SKILL_INSTRUCTIONS_LOADED' : '"status":"forked"')
+  }, 30_000)
+}
+
+test('desktop Auto holds a skill when its grants change during review', async () => {
+  const proof = await run('native-skill-changed')
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Skill'])
+  expect(JSON.stringify(proof.transcript)).toContain('The skill permissions changed during review.')
+  expect(JSON.stringify(proof.transcript)).not.toContain('AUTO_SKILL_INSTRUCTIONS_LOADED')
+}, 30_000)
+
 for (const entry of ['direct', 'script']) {
   for (const tool of ['edit', 'bash']) {
     for (const source of ['verified', 'peer-only', 'withdrawn', 'stopped']) {

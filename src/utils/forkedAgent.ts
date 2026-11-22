@@ -193,6 +193,16 @@ export type PreparedForkedContext = {
   promptMessages: Message[]
 }
 
+export function resolveForkedCommandAgent(
+  command: PromptCommand,
+  context: ToolUseContext,
+): AgentDefinition | undefined {
+  const agentTypeName = command.agent ?? 'general-purpose'
+  const agents = context.options.agentDefinitions.activeAgents
+  return agents.find(agent => agent.agentType === agentTypeName) ??
+    agents.find(agent => agent.agentType === 'general-purpose') ?? agents[0]
+}
+
 /**
  * Prepares the context for executing a forked command/skill.
  * This handles the common setup that both SkillTool and slash commands need.
@@ -217,13 +227,7 @@ export async function prepareForkedCommandContext(
     allowedTools,
   )
 
-  // Use command.agent if specified, otherwise 'general-purpose'
-  const agentTypeName = command.agent ?? 'general-purpose'
-  const agents = context.options.agentDefinitions.activeAgents
-  const baseAgent =
-    agents.find(a => a.agentType === agentTypeName) ??
-    agents.find(a => a.agentType === 'general-purpose') ??
-    agents[0]
+  const baseAgent = resolveForkedCommandAgent(command, context)
 
   if (!baseAgent) {
     throw new Error('No agent available for forked execution')

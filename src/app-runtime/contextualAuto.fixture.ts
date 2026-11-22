@@ -38,7 +38,11 @@ const mainEditScript = scenario === 'native-edit-script'
 const directPatch = scenario === 'native-patch'
 const webSearch = scenario.startsWith('native-web-search')
 const searchQuery = 'Bun test documentation'
-const loadSkill = scenario === 'native-skill'
+const loadSkill = scenario.startsWith('native-skill')
+const skillAsk = scenario === 'native-skill-ask'
+const skillFork = scenario === 'native-skill-fork'
+const skillChanged = scenario === 'native-skill-changed'
+const skillGrants = skillFork || skillChanged || scenario === 'native-skill-inline'
 const outsideRead = scenario.startsWith('native-outside-read-')
 const sensitiveWrite = {
   'native-write-git-hook': '.git/hooks/pre-commit',
@@ -93,6 +97,7 @@ Object.assign(globalThis, { MACRO: { VERSION: 'contextual-auto-test' } })
 globalThis.fetch = Object.assign(async () => { throw new Error('Unexpected network request') }, { preconnect: globalThis.fetch.preconnect })
 const cwd = process.cwd()
 const configuration = join(root, 'config')
+const skillFile = join(configuration, 'skills', 'fixture-auto-skill', 'SKILL.md')
 const protectedEditPath = join(cwd, '.vscode', 'settings.json')
 const outsideBuild = join(root, 'outside-build')
 const surface = scenario.includes('-sdk-') ? 'sdk' : scenario.includes('-terminal-') ? 'terminal' : 'desktop'
@@ -120,9 +125,13 @@ if (workerRouting) {
 }
 if (scenario === 'native-fingerprint-parent') await mkdir(join(cwd, 'nested'))
 if (loadSkill) {
-  const skillDir = join(configuration, 'skills', 'fixture-auto-skill')
-  await mkdir(skillDir, { recursive: true })
-  await writeFile(join(skillDir, 'SKILL.md'), '---\nname: fixture-auto-skill\ndescription: Isolated Auto Mode skill\n---\nAUTO_SKILL_INSTRUCTIONS_LOADED')
+  await mkdir(dirname(skillFile), { recursive: true })
+  await writeFile(skillFile, [
+    '---', 'name: fixture-auto-skill', 'description: Isolated Auto Mode skill',
+    ...(skillGrants ? ['allowed-tools: ["Bash(printf fixture:*)"]'] : []),
+    ...(skillFork ? ['context: fork', 'agent: fixture-skilled-worker'] : []),
+    '---', 'AUTO_SKILL_INSTRUCTIONS_LOADED',
+  ].join('\n'))
 }
 const action = (name: string) => ({ name: 'Edit', input: { file_path: join(cwd, name + '.txt'), old_string: 'old', new_string: 'new' } })
 const command = { name: 'Bash', input: { command: 'printf effect >> effects.txt', work_lifetime: 'finite', run_in_background: false } }
@@ -173,7 +182,7 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
 } } : helperRead ? scenario === 'native-helper-goal' ? { name: 'GetGoal', input: {} } :
   { name: 'LSP', input: { operation: 'documentSymbol', filePath: outsideSymbol ? join(root, 'symbols.txt') : 'a.txt', line: 1, character: 1 } } :
   fingerprint ? { name: 'Bash', input: { command: scenario === 'native-fingerprint-write' ? 'git hash-object -w -- a.txt' :
-    scenario === 'native-fingerprint-parent' ? 'git hash-object --no-filters -- nested/../a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
+    scenario === 'native-fingerprint-parent' ? 'git hash-object --no-filters -- nested/../a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: skillAsk ? '/fixture-auto-skill' : 'fixture-auto-skill' } }
   : outsideRead ? { name: 'Bash', input: { command: `rg outside_search_marker '${outsideDir}'` } }
   : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: oversizeAction ? 'x'.repeat(300_000) : 'fixture' } }
   : credentialAction ? { ...command, input: { ...command.input, command: 'password=actionSecretFixture123 printf effect >> effects.txt' } }
@@ -286,6 +295,11 @@ mock.module('../services/api/client.js', () => ({
         : scenario.startsWith('wait-') || scenario.startsWith('direct-') ? 'ask' : 'allow'
       return (async () => {
         await Bun.sleep(2)
+        if (skillChanged && tool === 'Skill') {
+          const { clearCommandsCache } = await import('../commands.js')
+          await writeFile(skillFile, (await readFile(skillFile, 'utf8')).replace('Bash(printf fixture:*)', 'Bash(printf changed:*)'))
+          clearCommandsCache()
+        }
         if (localMcp && mcpWithdrawal && requests.length === 1) {
           const { enqueue } = await import('../utils/messageQueueManager.js')
           enqueue({ mode: 'prompt', value: 'Stop. Do not access the records.' })
@@ -376,7 +390,7 @@ const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
-if ((routed && scenario.endsWith('-direct')) || workerRouting || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
+if ((routed && scenario.endsWith('-direct')) || workerRouting || loadSkill || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
@@ -385,6 +399,10 @@ state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mod
   ...(scenario === 'native-denials-headless' && { shouldAvoidPermissionPrompts: true }),
   ...(scenario === 'native-fingerprint-rule' && { alwaysDenyRules: { session: ['Read(./a.txt)'] } }),
   ...(scenario === 'native-scope-notice-ask' && { alwaysAskRules: { session: ['Announce'] } }),
+  ...(skillAsk && {
+    alwaysAskRules: { session: ['Skill(fixture-auto-skill)'] },
+    alwaysAllowRules: { session: ['Skill(fixture-auto-skill)'] },
+  }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
 } }
 const assignment = verifiedParentEdit ? 'Update .vscode/settings.json from old to new.'
@@ -461,6 +479,8 @@ if (sensitiveWrite) {
 if (loadSkill) {
   const { SkillTool } = await import('../tools/SkillTool/SkillTool.js')
   config.tools = [...config.tools, SkillTool]
+  if (skillFork) config.agents = [{ agentType: 'fixture-skilled-worker', source: 'projectSettings',
+    whenToUse: 'Use this isolated skill worker', tools: ['Bash'], getSystemPrompt: () => 'Complete the fixture work.' }]
 }
 if (nativeAction || cleanup) {
   if (browserAction) {
