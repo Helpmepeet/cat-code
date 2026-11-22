@@ -1259,9 +1259,10 @@ async function* queryLoop(
               }
               yield yieldMessage
             }
+            const streamEvent = message.type === 'stream_event' ? message.event : undefined
             if (!backgroundOutputsSeen && (
               (message.type === 'assistant' && !message.isApiErrorMessage) ||
-              (message.type === 'stream_event' && message.event.type === 'message_start')
+              (typeof streamEvent === 'object' && streamEvent !== null && 'type' in streamEvent && streamEvent.type === 'message_start')
             )) {
               backgroundOutputsSeen = true
               codeModeHost?.markBackgroundModelOutputsSeen(messagesForQuery)
@@ -2546,13 +2547,16 @@ async function* queryLoop(
     // work. A send-now interruption during that window still owns the queued
     // prompt: leave it queued for the sidecar's between-turn submission, and
     // do not publish a transcript attachment that was never sent to a model.
-    const acceptedQueuedAttachments = new Map<string, AttachmentMessage>()
+    const acceptedQueuedAttachments = new Map<string, { timestamp?: string; data: Record<string, unknown> }>()
     for (const attachment of preparedQueuedAttachments) {
       if (toolUseContext.abortController.signal.aborted) break
       yield attachment
       toolResults.push(attachment)
-      if (attachment.attachment.type === 'queued_command' && attachment.attachment.source_uuid) {
-        acceptedQueuedAttachments.set(attachment.attachment.source_uuid, attachment)
+      if (typeof attachment.attachment === 'object' && attachment.attachment !== null) {
+        const data = attachment.attachment as Record<string, unknown>
+        if (data.type === 'queued_command' && typeof data.source_uuid === 'string' && data.source_uuid) {
+          acceptedQueuedAttachments.set(data.source_uuid, { timestamp: attachment.timestamp, data })
+        }
       }
     }
 
@@ -2608,10 +2612,9 @@ async function* queryLoop(
           // Use the attachment's persisted time, not the later time at which
           // its yield resumes after the transcript durability barrier.
           const attachment = acceptedQueuedAttachments.get(cmd.uuid)
-          const data = attachment?.attachment
+          const data = attachment?.data
           const origin = queuedCommandOrigin(data)
-          const agentOutcome = !currentAgentId && data?.type === 'queued_command' &&
-            typeof data.prompt === 'string' && isAgentOutcomeOrigin(origin)
+          const agentOutcome = !currentAgentId && typeof data?.prompt === 'string' && isAgentOutcomeOrigin(origin)
             ? { prompt: data.prompt, origin } : undefined
           notifyCommandLifecycle(cmd.uuid, 'started', attachment?.timestamp, agentOutcome)
         }

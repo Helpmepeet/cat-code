@@ -2,6 +2,7 @@ import { mock, spyOn } from 'bun:test'
 import { writeFile, mkdir, readFile, rmdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { UUID } from 'node:crypto'
+import type { TaskStateBase } from '../Task.js'
 
 const root = process.env.CODE_MODE_TEST_ROOT!
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated fixture required')
@@ -142,7 +143,7 @@ mock.module('../services/api/client.js', () => ({
         code: `await tools.call({name:"NotebookEdit",input:{notebook_path:${JSON.stringify(notebookPath)},cell_id:"intro",new_source:"After"}}); await tools.call({name:"NotebookEdit",input:{notebook_path:${JSON.stringify(unreadNotebookPath)},cell_id:"intro",new_source:"Never applied"},nothrow:true}); throw new Error("Notebook fixture stopped");`,
         description: 'Edit the notebook before stopping',
       } } : undefined
-    const scriptTasks = Object.values(state.tasks).filter(task => task.type === 'code_mode')
+    const scriptTasks = Object.values(state.tasks as Record<string, TaskStateBase>).filter(task => task.type === 'code_mode')
     if (isMidTurnQuota && index === 16) {
       midTurnTasks = JSON.parse(JSON.stringify(scriptTasks))
     }

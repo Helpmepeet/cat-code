@@ -29,10 +29,10 @@ import { bindToolActivity } from '../../app-runtime/toolActivity.js'
 
 const FOREGROUND_WALL_TIME_MS = 10 * 60_000
 const BACKGROUND_WALL_TIME_MS = 2 * 60 * 60_000
-const detachedReceipts = new WeakSet<Message>()
+const detachedReceipts = new WeakSet<object>()
 
-export function isDetachedCodeModeReceipt(message: Message): boolean {
-  return detachedReceipts.has(message)
+export function isDetachedCodeModeReceipt(message: unknown): message is Message {
+  return typeof message === 'object' && message !== null && detachedReceipts.has(message)
 }
 
 /** Late delivery can recover an exact host receipt's source from compacted history. */
