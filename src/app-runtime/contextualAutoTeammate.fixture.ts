@@ -89,6 +89,7 @@ const { registerLeaderToolUseConfirmQueue, unregisterLeaderToolUseConfirmQueue }
 const { sendPermissionResponseViaMailbox } = await import('../utils/swarm/permissionSync.js')
 const { readMailbox } = await import('../utils/teammateMailbox.js')
 const { createQueryEngineAppSession } = await import('./createQueryEngineAppSession.js')
+const { isInProcessTeammateTask } = await import('../tasks/InProcessTeammateTask/types.js')
 
 enableConfigs()
 switchSession(getSessionId())
@@ -140,7 +141,7 @@ if (usingDialog) {
 const watchdog = setTimeout(() => {
   console.error(JSON.stringify({ parentCalls, workerCalls, assignment, approval,
     messages: session.getMessages?.().filter(message => message.type === 'user' && message.toolUseResult).map(message => message.type === 'user' && message.toolUseResult),
-    tasks: Object.values(state.tasks).map(task => ({ status: task.status, type: task.type })),
+    tasks: Object.values(state.tasks).filter(isInProcessTeammateTask).map(task => ({ status: task.status, type: task.type })),
   }))
   process.exit(1)
 }, 8000)
@@ -160,7 +161,7 @@ try {
   clearTimeout(watchdog)
   unregisterLeaderToolUseConfirmQueue()
   for (const task of Object.values(state.tasks)) {
-    if (task.type === 'in_process_teammate') task.abortController?.abort()
+    if (isInProcessTeammateTask(task)) task.abortController?.abort()
   }
   session.dispose?.()
 }
