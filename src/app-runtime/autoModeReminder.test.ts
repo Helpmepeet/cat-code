@@ -54,10 +54,11 @@ for (const [provider, surface] of cases) {
       if (provider === 'gpt') {
         const actions = requestText({ ...first, input: first.input?.filter(message => message.role === 'developer') })
           .match(/# Acting and Asking\n[\s\S]+?(?=\n# )/)?.[0] ?? ''
-        expect(actions).not.toMatch(/confirm first unless/i)
+        expect(actions).toContain('For actions that are hard to reverse, affect shared systems, or are visible to others, confirm first unless the user or loaded durable instructions already authorize that scope.')
         expect(actions).toMatch(policy)
       }
-      expect(full).not.toMatch(/the user chose|anything that deletes data or modifies shared/i)
+      expect(full).not.toMatch(/the user chose/i)
+      expect(full).toMatch(/confirm before.*(?:destructive|deletes data).*shared systems.*unless.*already authorize/i)
       expect(full).toMatch(policy)
       expect(full).toContain('Expect course corrections')
       expect(full).toContain('Do not take overly destructive actions')

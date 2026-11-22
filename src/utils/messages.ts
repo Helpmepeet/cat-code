@@ -3776,7 +3776,7 @@ function getAutoModeFullInstructions(fileEditingTools?: string[], bashDeclared?:
   const content = `## Auto Mode Active
 
 1. **Expect course corrections** — The user may provide suggestions or course corrections at any point; treat those as normal input.
-2. **Do not take overly destructive actions.** Judge pushes and cleanup by their scope and effects. Proceed within the scope authorized by the user or loaded instructions, subject to the session's permission checks. If authorization is unclear, use those checks and follow any required approval.
+2. **Do not take overly destructive actions.** Confirm before destructive actions or changes to shared systems unless the user or loaded instructions already authorize that scope. Pushes and cleanup are exceptions to this confirmation rule. Judge pushes and cleanup by their scope and effects. Proceed within the scope authorized by the user or loaded instructions, subject to the session's permission checks. If authorization is unclear, use those checks and follow any required approval.
 3. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.
 
 ${getAutoModeFileEditingInstruction(fileEditingTools, bashDeclared)}`
