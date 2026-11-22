@@ -322,13 +322,8 @@ export async function* runPostToolUseFailureHooks<Input extends AnyObject>(
 /**
  * Resolve a PreToolUse hook's permission result into a final PermissionDecision.
  *
- * Encapsulates the invariant that hook 'allow' does NOT bypass settings.json
- * deny/ask rules — checkRuleBasedPermissions still applies (inc-4788 analog).
- * Also handles the requiresUserInteraction/requireCanUseTool guards and the
- * 'ask' forceDecision passthrough.
- *
- * Shared by toolExecution.ts (main query loop) and REPLTool/toolWrappers.ts
- * (REPL inner calls) so the permission semantics stay in lockstep.
+ * Preserve configured denials for both hook approval and hook confirmation.
+ * Hook approvals also respect configured asks and tool interaction requirements.
  */
 export async function resolveHookPermissionDecision(
   hookPermissionResult: PermissionResult | undefined,
@@ -424,18 +419,17 @@ export async function resolveHookPermissionDecision(
     return { decision: hookPermissionResult, input }
   }
 
-  // No hook decision or 'ask' — normal permission flow, possibly with
-  // forceDecision so the dialog shows the hook's ask message.
-  const forceDecision = hookPermissionResult?.behavior === 'ask'
-    ? toolUseContext.contextualAutoAttempt?.mode === 'experimental'
-      ? toolUseContext.contextualAutoAttempt.requireHuman(hookPermissionResult.message)
-      : hookPermissionResult
-    : undefined
-  const askInput =
-    hookPermissionResult?.behavior === 'ask' &&
-    hookPermissionResult.updatedInput
-      ? hookPermissionResult.updatedInput
-      : input
+  const hookAsk = hookPermissionResult?.behavior === 'ask' ? hookPermissionResult : undefined
+  const askInput = hookAsk?.updatedInput ?? input
+  if (hookAsk) {
+    // Forced confirmation skips the base check, so enforce denials before prompting.
+    const ruleCheck = await checkRuleBasedPermissions(tool, askInput, toolUseContext)
+    if (ruleCheck?.behavior === 'deny') return { decision: ruleCheck, input: askInput }
+  }
+  const attempt = toolUseContext.contextualAutoAttempt
+  const forceDecision = hookAsk && attempt?.mode === 'experimental'
+    ? attempt.requireHuman(hookAsk.message)
+    : hookAsk
   return {
     decision: await canUseTool(
       tool,

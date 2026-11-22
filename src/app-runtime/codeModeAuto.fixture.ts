@@ -18,6 +18,9 @@ const disabled = scenario === 'background-disabled'
 const computed = scenario === 'computed-child'
 const sensitive = scenario.startsWith('sensitive-edit-')
 const directEdit = scenario === 'sensitive-edit-direct'
+const directHookAsk = scenario.startsWith('direct-hook-ask-')
+const originalCommand = { command: 'printf fixture > original-write.txt', work_lifetime: 'finite', run_in_background: false }
+const hookCommand = { ...originalCommand, command: 'printf fixture > hook-target.txt' }
 const sensitiveEdit = { file_path: join(process.cwd(), '.cat-code', 'preview.html'), old_string: '<h1>Before</h1>', new_string: '<h1>After</h1>' }
 if (sensitive) {
   await mkdir(join(process.cwd(), '.cat-code'))
@@ -34,11 +37,15 @@ const code = queued ? waitInLane : disabled ? disabledForeground : computed ? co
   budget ? large : scenario === 'admit' || scenario === 'wrapper' ? success : refused
 const firstUse = directEdit
   ? { id: 'direct-edit', name: 'Edit', input: sensitiveEdit }
-  : { id: 'submitted-script', name: 'REPL', input: { code: wrapper ? 'output("unmodified-source")' : code, description: 'Isolated Auto script', ...(queued ? { run_in_background: true } : {}) } }
-if (wrapper || scenario === 'deny' || scenario === 'ask') {
+  : directHookAsk ? { id: 'direct-write', name: 'Bash', input: originalCommand }
+    : { id: 'submitted-script', name: 'REPL', input: { code: wrapper ? 'output("unmodified-source")' : code, description: 'Isolated Auto script', ...(queued ? { run_in_background: true } : {}) } }
+if (wrapper || scenario === 'deny' || scenario === 'ask' || directHookAsk) {
   const matcher = wrapper ? 'REPL' : 'Bash'
-  const updatedInput = wrapper ? { code, description: 'Hook replacement' } : { command: "bash -c 'printf forbidden > forbidden.txt'", work_lifetime: 'finite', run_in_background: false }
-  const output = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput } })
+  const updatedInput = directHookAsk ? hookCommand : wrapper ? { code, description: 'Hook replacement' } : { command: "bash -c 'printf forbidden > forbidden.txt'", work_lifetime: 'finite', run_in_background: false }
+  const output = JSON.stringify({ hookSpecificOutput: {
+    hookEventName: 'PreToolUse', updatedInput,
+    ...(directHookAsk && { permissionDecision: 'ask', permissionDecisionReason: 'Confirm the fixture write.' }),
+  } })
   await writeFile(join(root, 'config', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command: `printf '%s' '${output.replaceAll("'", "'\\''")}'` }] }] } }))
 }
 const classifierBodies: any[] = []
@@ -90,10 +97,15 @@ const { normalizeMessagesForAPI } = await import('../utils/messages.js')
 const { cleanMessagesForLogging, recordTranscript } = await import('../utils/sessionStorage.js')
 type Message = import('../types/message.js').Message
 enableConfigs()
+if (directHookAsk) {
+  const { getSessionId, switchSession } = await import('../bootstrap/state.js')
+  switchSession(getSessionId())
+}
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: queued || disabled ? 'default' : 'auto',
   alwaysAllowRules: queued || disabled ? { session: ['Bash(bash:*)'] } : {},
-  alwaysDenyRules: scenario === 'deny' ? { session: ["Bash(*forbidden*)"] } : {},
+  alwaysDenyRules: scenario === 'direct-hook-ask-denied' ? { session: [`Bash(${hookCommand.command})`] }
+    : scenario === 'deny' ? { session: ['Bash(*forbidden*)'] } : {},
   alwaysAskRules: scenario === 'ask' ? { session: ["Bash(*forbidden*)"] } : {} } }
 const scriptTasks = () => Object.values(state.tasks).filter((task): task is CodeModeTaskState =>
   task !== null && typeof task === 'object' && 'type' in task && task.type === 'code_mode')
@@ -119,9 +131,14 @@ const permissions: unknown[] = []
 const reviews: unknown[] = []
 controller.subscribe(event => {
   if (event.type === 'tool.review') reviews.push(event)
-  if (event.type === 'permission.requested') { permissions.push(event.request); controller.respondToPermissionRequest(event.request.requestId, { behavior: 'deny', message: 'Isolated explicit refusal', decisionClassification: 'user_reject' }) }
+  if (event.type === 'permission.requested') {
+    permissions.push(event.request)
+    controller.respondToPermissionRequest(event.request.requestId, directHookAsk
+      ? { behavior: 'allow' }
+      : { behavior: 'deny', message: 'Isolated explicit refusal', decisionClassification: 'user_reject' })
+  }
 })
-await controller.submit('Run the script and report selected output.')
+await controller.submit(directHookAsk ? 'Write a fixture file.' : 'Run the script and report selected output.')
 if (queued) {
   // Both launches have returned running receipts. The first cell still holds the
   // interpreter lane until we create the release marker.

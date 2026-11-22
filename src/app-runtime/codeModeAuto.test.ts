@@ -3,13 +3,16 @@ import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wrapper', 'computed-child', 'sensitive-edit-direct', 'sensitive-edit-script', 'sensitive-edit-block', 'queued-policy', 'queued-unchanged', 'background-disabled']) {
+for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wrapper', 'computed-child', 'sensitive-edit-direct', 'sensitive-edit-script', 'sensitive-edit-block', 'queued-policy', 'queued-unchanged', 'background-disabled', 'direct-hook-ask-denied', 'direct-hook-ask-approved']) {
   test(`Code Mode permission lifecycle: ${scenario}`, async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-auto-')))
     try {
       await mkdir(join(root, 'config'))
       await mkdir(join(root, 'workspace'))
-      const child = Bun.spawn([process.execPath, '--feature=CODE_MODE', '--feature=TRANSCRIPT_CLASSIFIER', '--feature=AUTO_MODE_UPSTREAM_PORT', new URL('./codeModeAuto.fixture.ts', import.meta.url).pathname], {
+      const directHookAsk = scenario.startsWith('direct-hook-ask-')
+      const features = ['--feature=CODE_MODE', '--feature=TRANSCRIPT_CLASSIFIER', '--feature=AUTO_MODE_UPSTREAM_PORT']
+      if (directHookAsk) features.push('--feature=AUTO_MODE_CONTEXTUAL_REVIEW')
+      const child = Bun.spawn([process.execPath, ...features, new URL('./codeModeAuto.fixture.ts', import.meta.url).pathname], {
         cwd: join(root, 'workspace'), stdout: 'pipe', stderr: 'pipe',
         env: { PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin', HOME: root, TMPDIR: root,
           CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
@@ -24,6 +27,28 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
       clearTimeout(timer)
       if (exit !== 0) throw new Error(`Auto fixture failed (${exit}): ${stderr}\n${stdout}`)
       const evidence = JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8'))
+      if (directHookAsk) {
+        const path = join(root, 'workspace', 'hook-target.txt')
+        expect(evidence.classifierBodies).toEqual([])
+        if (scenario === 'direct-hook-ask-denied') {
+          expect(evidence.permissions).toHaveLength(0)
+          expect(await Bun.file(path).exists()).toBe(false)
+          const result = evidence.modelBodies[1]?.messages
+            .flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
+            .find((block: any) => block.type === 'tool_result' && block.tool_use_id === 'direct-write')
+          expect(result).toMatchObject({
+            is_error: true, content: expect.stringContaining('Permission to use Bash with command printf fixture > hook-target.txt has been denied.'),
+          })
+        } else {
+          expect(evidence.permissions).toHaveLength(1)
+          expect(evidence.permissions[0].request).toMatchObject({
+            tool_name: 'Bash', input: { command: 'printf fixture > hook-target.txt' }, decision_reason: 'Confirm the fixture write.',
+          })
+          expect(await readFile(path, 'utf8')).toBe('fixture')
+        }
+        expect(await Bun.file(join(root, 'workspace', 'original-write.txt')).exists()).toBe(false)
+        return
+      }
       const results = evidence.transcript.filter((message: any) => message.toolUseResult?.kind === 'code-mode').map((message: any) => message.toolUseResult)
       if (scenario.startsWith('sensitive-edit-')) {
         const path = join(root, 'workspace', '.cat-code', 'preview.html')
