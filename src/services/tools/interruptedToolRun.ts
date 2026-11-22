@@ -15,6 +15,7 @@ export class InterruptedToolRun {
   private sink?: Sink
   private onSettled?: () => void
   private wake?: () => void
+  private retryRevision = 0
   private failed = false
   private cancel?: () => void
   private additional: { iterator: AsyncIterator<Update>; first: Promise<IteratorResult<Update>> }[] = []
@@ -27,6 +28,7 @@ export class InterruptedToolRun {
     ))
   }
   get ownPending(): boolean { return this.pending }
+  get waitingForRetry(): boolean { return this.pending && (this.failed || this.wake !== undefined) }
   isAttachedToSession(sessionId: string): boolean {
     return !!this.sink && !!this.sessionKey && JSON.parse(this.sessionKey)[0] === sessionId
   }
@@ -44,8 +46,7 @@ export class InterruptedToolRun {
     const generation = ++this.generation
     this.sink = sink
     this.onSettled = onSettled
-    this.wake?.()
-    this.wake = undefined
+    this.requestRetry()
     return {
       isCurrent: () => generation === this.generation,
       dispose: () => {
@@ -58,13 +59,22 @@ export class InterruptedToolRun {
   }
 
   retryDelivery(): void {
-    this.wake?.(); this.wake = undefined
+    this.requestRetry()
     if (!this.sessionKey) return
     const sessionId = JSON.parse(this.sessionKey)[0]
     for (const [key, run] of sessions) {
-      if (JSON.parse(key)[0] !== sessionId) continue
-      run.wake?.(); run.wake = undefined
+      if (run === this || JSON.parse(key)[0] !== sessionId) continue
+      run.requestRetry()
     }
+  }
+
+  private requestRetry(): void {
+    // A retry requested while a write is rejecting must not be lost before
+    // reconcile reaches its wait for another storage attempt.
+    this.retryRevision++
+    const wake = this.wake
+    this.wake = undefined
+    wake?.()
   }
   cancelPending(): void {
     this.cancel?.()
@@ -110,6 +120,7 @@ export class InterruptedToolRun {
       // The execution outcome is unknown. Keep the ownership fence, not a fake result.
       this.failed = true
       logError(error)
+      notifySessionListeners()
     })
   }
 
@@ -124,6 +135,7 @@ export class InterruptedToolRun {
         while (true) {
           const sink = this.sink
           const generation = this.generation
+          const retryRevision = this.retryRevision
           if (sink) {
             try {
               await this.writeReceipt(message, true)
@@ -133,8 +145,11 @@ export class InterruptedToolRun {
               logError(error)
             }
           }
-          if (generation !== this.generation) continue
-          await new Promise<void>(resolve => { this.wake = resolve })
+          if (generation !== this.generation || retryRevision !== this.retryRevision) continue
+          await new Promise<void>(resolve => {
+            this.wake = resolve
+            notifySessionListeners()
+          })
         }
       }
       next = await currentIterator.next()

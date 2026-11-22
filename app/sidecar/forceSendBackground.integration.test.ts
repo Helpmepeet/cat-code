@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
+import { feature } from 'bun:bundle'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -9,6 +10,7 @@ import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Tool } from '../../src/Tool.js'
 import type { LocalAgentTaskState } from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'
 import type { LocalShellTaskState } from '../../src/tasks/LocalShellTask/guards.js'
+import type { CodeModeTaskState } from '../../src/tasks/CodeModeTask.js'
 import type { ServerFrame, ClientFrame } from '../shared/protocol.js'
 
 // Set isolation before loading engine settings, persistence, hooks, or shell state.
@@ -29,8 +31,12 @@ const { getDefaultAppState } = await import('../../src/state/AppStateStore.js')
 const { createFileStateCacheWithSizeLimit } = await import('../../src/utils/fileStateCache.js')
 const { getTaskOutputPath } = await import('../../src/utils/task/diskOutput.js')
 const { AgentTool } = await import('../../src/tools/AgentTool/AgentTool.js')
+const { ResumeAgentTool } = await import('../../src/tools/ResumeAgentTool/ResumeAgentTool.js')
+const { REPLTool } = await import('../../src/tools/REPLTool/REPLTool.js')
 const { isAgentLifecycleOwned } = await import('../../src/tools/AgentTool/agentLifecycleOwnership.js')
 const { BashTool } = await import('../../src/tools/BashTool/BashTool.js')
+const { TaskStopTool } = await import('../../src/tools/TaskStopTool/TaskStopTool.js')
+const { getInterruptedToolRun } = await import('../../src/services/tools/interruptedToolRun.js')
 const { buildTool } = await import('../../src/Tool.js')
 const { getBuiltInAgents } = await import('../../src/tools/AgentTool/builtInAgents.js')
 const { stopTask } = await import('../../src/tasks/stopTask.js')
@@ -46,8 +52,8 @@ const { SidecarServer } = await import('./sidecarServer.js')
 const { encodeFrame, FrameDecoder } = await import('../shared/framing.js')
 const { PROTOCOL_VERSION } = await import('../shared/protocol.js')
 const { MAX_OUTBOUND_FRAME_BYTES } = await import('../shared/limits.js')
-const { projectResumedHistory } = await import('./historyProjection.js')
-const { createTranscriptState, projectServerFrames, selectNestedTranscriptRows } = await import('../renderer/src/transcriptProjector.js')
+const { mergeDisplayHistoryWithSeed, projectResumedHistory } = await import('./historyProjection.js')
+const { createTranscriptState, projectServerFrames, selectTranscriptRows } = await import('../renderer/src/transcriptProjector.js')
 const originalSession = bootstrap.getSessionId()
 const originalProject = bootstrap.getSessionProjectDir()
 const originalProvider = bootstrap.getSessionProvider()
@@ -171,7 +177,7 @@ afterAll(() => {
 function harness(tools: Tool[] = [AgentTool, BashTool], askBash = false) {
   let state: AppState = getDefaultAppState()
   const getAppState = () => state
-  const getTasks = () => Object.values(state.tasks as Record<string, LocalAgentTaskState | LocalShellTaskState>)
+  const getTasks = () => Object.values(state.tasks as Record<string, LocalAgentTaskState | LocalShellTaskState | CodeModeTaskState>)
   const setAppState = (update: (prev: AppState) => AppState) => { state = update(state) }
   const controller = createRuntimeBackedAppSession({ queryEngineConfig: {
     cwd: join(root, 'workspace'), tools, commands: [], mcpClients: [], agents: getBuiltInAgents(),
@@ -215,14 +221,23 @@ function harness(tools: Tool[] = [AgentTool, BashTool], askBash = false) {
   return { controller, send, force, frames, getAppState, getTasks, setAppState, sessionId }
 }
 
-test('a busy desktop turn displays the same worker finish live and on reopen', async () => {
+test.each([false, true])('a busy desktop turn displays the same worker finish live and on reopen (resumed=%s)', async resumed => {
   const finishWorker = deferred()
   const workerStarted = deferred()
+  let resumedProviderStarted = false
   let mainCalls = 0
   const providerInputs: (readonly unknown[])[] = []
-  const h = harness()
+  const h = harness([AgentTool, BashTool, ResumeAgentTool])
+  let firstAgentId: string | undefined
+  const finishToolUseId = resumed ? 'resume-busy-worker' : 'busy-worker'
   providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ options, messages }) {
     if (options.agentId) {
+      if (resumed && firstAgentId === undefined) {
+        firstAgentId = options.agentId
+        yield assistant([{ type: 'text', text: 'original worker answer' }])
+        return
+      }
+      resumedProviderStarted = true
       workerStarted.resolve()
       await finishWorker.promise
       yield assistant([{ type: 'text', text: 'mid-turn worker answer' }])
@@ -231,10 +246,16 @@ test('a busy desktop turn displays the same worker finish live and on reopen', a
     providerInputs.push([...messages])
     if (++mainCalls === 1) {
       yield assistant([{ type: 'tool_use', id: 'busy-worker', name: 'Agent', input: {
-        description: 'Busy worker', prompt: 'Give the test answer.', subagent_type: 'general-purpose', run_in_background: true,
+        description: 'Busy worker', prompt: 'Give the test answer.', subagent_type: 'general-purpose', run_in_background: !resumed,
       } }])
-    } else if (mainCalls === 2) {
-      await workerStarted.promise
+    } else if (resumed && mainCalls === 2) {
+      await flushSessionStorage()
+      yield assistant([{ type: 'tool_use', id: finishToolUseId, name: 'ResumeAgent', input: {
+        agentId: firstAgentId, prompt: 'Give the updated test answer.',
+      } }])
+    } else if (mainCalls === (resumed ? 3 : 2)) {
+      if (resumed) await waitFor(() => resumedProviderStarted, 'Resume did not enter its provider', 1000)
+      else await workerStarted.promise
       finishWorker.resolve()
       await waitFor(() => getCommandQueueSnapshot().some(command => command.origin?.kind === 'task-notification'), 'Worker did not report its result')
       yield assistant([{ type: 'tool_use', id: 'parent-work', name: 'Bash', input: { command: 'printf parent-work' } }])
@@ -246,21 +267,139 @@ test('a busy desktop turn displays the same worker finish live and on reopen', a
     h.send({ type: 'app.submit', requestId: 'start', prompt: 'run the worker while busy' })
     await waitFor(() => h.getTasks().some(task => task.type === 'local_agent'), 'Worker did not start')
     const id = h.getTasks().find(task => task.type === 'local_agent')!.id
-    await expectDeliveredTaskReports(h, providerInputs, [{ id, result: 'mid-turn worker answer' }])
-    expect(mainCalls).toBe(3)
+    try { await expectDeliveredTaskReports(h, providerInputs, [{ id, result: 'mid-turn worker answer' }]) }
+    catch (error) {
+      const frames = h.frames.flatMap(frame => frame.kind === 'event' && frame.event.type === 'message' && frame.event.message.type === 'user' ? [frame.event.message] : [])
+      throw new Error(JSON.stringify({ mainCalls, firstAgentId, resumedProviderStarted, frames }).slice(0, 6000), { cause: error })
+    }
+    expect(mainCalls).toBe(resumed ? 4 : 3)
     const history = await (await import('../../src/utils/sessionStorage.js')).loadTranscriptFile(getTranscriptPath())
-    const reopened = projectResumedHistory([...history.messages.values()])
+    const saved = [...history.messages.values()]
+    const reopened = projectResumedHistory(saved)
+    const backfilled = mergeDisplayHistoryWithSeed(saved, reopened.slice(-1))
+    expect(backfilled).toEqual({ history: reopened, truncated: false })
     const live = h.frames.flatMap(frame => frame.kind === 'event' && frame.event.type === 'message' ? [frame.event.message] : [])
     const finishReports = (messages: typeof live) => messages.filter(message =>
-      message.type === 'user' && message.origin?.kind === 'task-notification' && message.origin.toolUseId === 'busy-worker')
+      message.type === 'user' && message.origin?.kind === 'task-notification' && message.origin.toolUseId === finishToolUseId)
     expect(finishReports(live)).toHaveLength(1)
     expect(JSON.parse(JSON.stringify(finishReports(reopened)))).toEqual(finishReports(live))
-    const render = (frames: ServerFrame[]) => selectNestedTranscriptRows(projectServerFrames(createTranscriptState(), frames), h.sessionId)
-    const liveRows = render(h.frames)
-    const finish = liveRows.findIndex(row => row.kind === 'task-notification' && row.toolUseId === 'busy-worker')
-    expect(finish).toBeGreaterThanOrEqual(0)
-    expect(liveRows.slice(finish + 1).some(row => row.kind === 'assistant-text' && row.content === 'parent final answer')).toBe(true)
+    const render = (frames: ServerFrame[]) => selectTranscriptRows(projectServerFrames(createTranscriptState(), frames), h.sessionId)
+    const reopenedFrames: ServerFrame[] = [...h.frames.filter(frame => frame.kind === 'ready'), ...reopened.map((message): ServerFrame => ({
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: h.sessionId, event: { type: 'message', message },
+    }))]
+    for (const rows of [render(h.frames), render(reopenedFrames)]) {
+      const finish = rows.findIndex(row => row.kind === 'task-notification' && row.toolUseId === finishToolUseId)
+      if (resumed) {
+        expect(finish).toBe(-1)
+        const card = rows.find(row => row.kind === 'tool-use' && row.toolUseId === finishToolUseId)
+        expect(card).toMatchObject({ toolName: 'ResumeAgent', agentCompletion: { result: 'mid-turn worker answer' } })
+      } else {
+        expect(finish).toBeGreaterThanOrEqual(0)
+        expect(rows.slice(finish + 1).some(row => row.kind === 'assistant-text' && row.content === 'parent final answer')).toBe(true)
+      }
+    }
   } finally { finishWorker.resolve() }
+})
+
+test('TaskStop keeps the parent turn alive while the stopped worker saves a running tool result', async () => {
+  const started = deferred()
+  const complete = deferred()
+  const command = 'printf "worker effect settled"'
+  shellSpy = spyOn(shell, 'exec').mockImplementation(async (...args) => {
+    const run = await realExec(...args)
+    if (args[0] !== command) return run
+    const result = run.result.then(async outcome => { await complete.promise; return outcome })
+    started.resolve()
+    return Object.create(run, { result: { value: result } })
+  })
+  const h = harness([AgentTool, TaskStopTool, BashTool])
+  let mainCalls = 0
+  let stoppedWorkerReportInTurn = false
+  const parentErrors: unknown[] = []
+  let parentTurnResults = 0
+  let resultsBeforeContinuation = -1
+  const unsubscribe = h.controller.subscribe(event => {
+    if (event.type !== 'message') return
+    if (event.message.type === 'result') parentTurnResults++
+    if (event.message.type === 'assistant' && event.message.parent_tool_use_id === null &&
+        JSON.stringify(event.message.message.content).includes('Some tool actions have not finished')) parentErrors.push(event.message.message.content)
+  })
+  providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ options, messages }) {
+    if (options.agentId) {
+      yield assistant([{ type: 'tool_use', id: 'worker-effect', name: 'Bash', input: { command } }])
+    } else if (++mainCalls === 1) {
+      yield assistant([{ type: 'tool_use', id: 'stopped-worker', name: 'Agent', input: {
+        description: 'Worker with held effect', prompt: 'Run the held effect.', subagent_type: 'general-purpose', run_in_background: true,
+      } }])
+    } else if (mainCalls === 2) {
+      await started.promise
+      yield assistant([{ type: 'tool_use', id: 'stop-worker', name: 'TaskStop', input: {
+        task_id: h.getTasks().find(task => task.type === 'local_agent')!.id,
+      } }])
+    } else {
+      resultsBeforeContinuation = parentTurnResults
+      stoppedWorkerReportInTurn = h.controller.isTurnActive() && taskReports(messages, h.getTasks().find(task => task.type === 'local_agent')!.id).length === 1
+      yield assistant([{ type: 'text', text: 'continued after stopping worker' }])
+    }
+  })
+  try {
+    h.send({ type: 'app.submit', requestId: 'start', prompt: 'start and stop a worker' })
+    await waitFor(() => getInterruptedToolRun(bootstrap.getSessionId()).blocked, 'Worker effect was not retained on cancellation')
+    expect(mainCalls).toBe(2)
+    expect(h.controller.canStartQueuedTurn()).toBe(false)
+    await Bun.sleep(100)
+    complete.resolve()
+    await waitFor(() => mainCalls >= 3, 'Parent model did not receive the stopped worker report')
+    await h.controller.waitUntilIdle()
+    expect(parentErrors).toEqual([])
+    expect(resultsBeforeContinuation).toBe(0)
+    expect(stoppedWorkerReportInTurn).toBe(true)
+    expect(mainCalls).toBe(3)
+  } finally { started.resolve(); complete.resolve(); unsubscribe() }
+})
+
+const testWithScript = feature('CODE_MODE') ? test : test.skip
+testWithScript('a Script that finishes while idle wakes the model once, without a notification row', async () => {
+  const releaseFile = join(root, 'workspace', randomUUID())
+  const command = 'while [ ! -f ' + JSON.stringify(releaseFile) + ' ]; do /bin/sleep 0.02; done'
+  const resultMarker = 'idle-script-outcome'
+  const h = harness([REPLTool, BashTool])
+  let mainCalls = 0
+  let receiptCount = 0
+  providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages }) {
+    if (++mainCalls === 1) {
+      yield assistant([{ type: 'tool_use', id: 'idle-script', name: 'REPL', input: {
+        description: 'Wait briefly and report', run_in_background: true,
+        code: 'await tools.call({name:"Bash",input:' + JSON.stringify({ command, work_lifetime: 'finite', run_in_background: false }) + '}); output(' + JSON.stringify(resultMarker) + ')',
+      } }])
+    } else {
+      receiptCount = messages.filter(message => message.type === 'user' && typeof message.message.content === 'string' &&
+        message.message.content.includes('<background-code-mode-data>') && message.message.content.includes(resultMarker)).length
+      yield assistant([{ type: 'text', text: 'idle Script result received' }])
+    }
+  })
+  try {
+    h.send({ type: 'app.submit', requestId: 'start', prompt: 'Start an idle background Script' })
+    await waitFor(() => h.getTasks().some(task => task.type === 'code_mode'), 'Script did not start')
+    await h.controller.waitUntilIdle()
+    expect(mainCalls).toBe(2)
+    expect(receiptCount).toBe(0)
+    writeFileSync(releaseFile, '')
+    await waitFor(() => mainCalls >= 3, 'An idle completion did not wake the parent model')
+    await h.controller.waitUntilIdle()
+    expect(mainCalls).toBe(3)
+    expect(receiptCount).toBe(1)
+    expect(getCommandQueueSnapshot()).toHaveLength(0)
+    const rows = selectTranscriptRows(projectServerFrames(createTranscriptState(), h.frames), h.sessionId)
+    expect(rows.filter(row => row.kind === 'task-notification')).toHaveLength(0)
+    expect(rows.find(row => row.kind === 'tool-use' && row.toolUseId === 'idle-script')).toMatchObject({
+      result: { codeMode: { status: 'completed', output: expect.stringContaining(resultMarker) } },
+    })
+    await flushCurrentTranscriptDurably()
+    const history = await (await import('../../src/utils/sessionStorage.js')).loadTranscriptFile(getTranscriptPath())
+    expect(projectResumedHistory([...history.messages.values()]).filter(message => message.type === 'user' &&
+      message.origin?.kind === 'task-notification' && message.origin.status !== undefined)).toHaveLength(0)
+  } finally { writeFileSync(releaseFile, '') }
 })
 
 test.each([false, true])('force-send preserves three foreground agents and their results (streaming=%s)', async streaming => {

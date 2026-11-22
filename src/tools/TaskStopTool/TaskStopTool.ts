@@ -4,6 +4,8 @@ import { buildTool, type ToolDef } from '../../Tool.js'
 import { stopTask } from '../../tasks/stopTask.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import { assertCodeModeTaskAccess } from '../../tasks/CodeModeTask.js'
+import { getInterruptedToolRun } from '../../services/tools/interruptedToolRun.js'
+import { getAgentLifecycleCompletion } from '../AgentTool/agentLifecycleOwnership.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { DESCRIPTION, TASK_STOP_TOOL_NAME } from './prompt.js'
@@ -37,6 +39,27 @@ const outputSchema = lazySchema(() =>
 type OutputSchema = ReturnType<typeof outputSchema>
 
 export type Output = z.infer<OutputSchema>
+
+async function waitForStoppedAgent(id: string, lifecycle: Promise<void>, signal: AbortSignal): Promise<void> {
+  const receipts = getInterruptedToolRun(getSessionId(), id)
+  let finalized = false
+  let unsubscribe: (() => void) | undefined
+  let check: () => void = () => {}
+  try {
+    await new Promise<void>(resolve => {
+      check = () => {
+        if (signal.aborted || receipts.waitingForRetry || (finalized && !receipts.ownPending)) resolve()
+      }
+      unsubscribe = receipts.subscribe(check)
+      signal.addEventListener('abort', check, { once: true })
+      void lifecycle.then(() => { finalized = true; check() })
+      check()
+    })
+  } finally {
+    unsubscribe?.()
+    signal.removeEventListener('abort', check)
+  }
+}
 
 export const TaskStopTool = buildTool({
   name: TASK_STOP_TOOL_NAME,
@@ -118,10 +141,14 @@ export const TaskStopTool = buildTool({
 
     const task = getAppState().tasks[id]
     if (task) assertCodeModeTaskAccess(task, getSessionId(), agentId)
+    const lifecycle = task?.type === 'local_agent' ? getAgentLifecycleCompletion(id) : undefined
     const result = await stopTask(id, {
       getAppState,
       setAppState,
     })
+    // A worker writes to its own transcript. Let it publish the stopped
+    // report and settle its receipts before the parent reaches model admission.
+    if (lifecycle) await waitForStoppedAgent(id, lifecycle, abortController.signal)
 
     return {
       data: {

@@ -129,9 +129,6 @@ test('healthy background script returns a task receipt, permits a new turn, and 
   const evidence = await scenario('background')
   expect(evidence.firstTurnFenced).toBe(false)
   expect(evidence.auditWasLive).toBe(true)
-  expect(evidence.queuedBackgroundNotification.origin.kind).toBe('task-notification')
-  expect(evidence.queuedBackgroundNotification.origin.taskType).toBe('code_mode')
-  expect(evidence.queuedBackgroundNotification.value).not.toContain('retainedBG')
   const initial = Object.values(evidence.firstTurnTasks).filter((task: any) => task.type === 'code_mode') as any[]
   expect(initial).toHaveLength(1)
   expect(initial[0].settled).toBe(false)
@@ -181,6 +178,34 @@ test('TaskStop cancels a real background Bash effect and fences until its receip
   expect(task.delivery).toBe('delivered')
   expect(evidence.forbidden).toBeNull()
   expect(evidence.finalFence).toBe(false)
+  expect(evidence.requests).toBe(4)
+  expect(evidence.selectedReceiptsOnSavedChain).toHaveLength(1)
+  expect(JSON.stringify(evidence.modelBodies[3].messages)).toContain('Background Code Mode selected output')
+  expect(JSON.stringify(evidence.transcript)).not.toContain('Some tool actions have not finished')
+}, 30_000)
+
+test('finished Scripts free their slots before the launching turn ends', async () => {
+  const evidence = await scenario('background-mid-turn-quota')
+  expect(evidence.midTurnTasks).toHaveLength(8)
+  expect(evidence.midTurnTasks.map((task: any) => task.delivery)).toEqual(Array(8).fill('delivered'))
+  expect(evidence.workspaceAdmission).not.toBe('stopping')
+  expect(Object.values(evidence.tasks)).toHaveLength(9)
+  expect(evidence.selectedReceiptsOnSavedChain).toHaveLength(9)
+  expect(new Set(evidence.selectedReceiptsOnSavedChain).size).toBe(9)
+  expect(JSON.stringify(evidence.modelBodies[16].messages)).toContain('mid-turn-7')
+}, 30_000)
+
+test('a Script outcome already seen by the model does not enqueue a follow-up turn', async () => {
+  const evidence = await scenario('background-mid-turn-quota')
+  expect(evidence.completionNotifications).toBe(0)
+}, 30_000)
+
+test('running Scripts still occupy their slots and fence workspace changes', async () => {
+  const evidence = await scenario('background-running-quota')
+  expect(evidence.midTurnTasks.map((task: any) => task.status)).toEqual(Array(8).fill('running'))
+  expect(evidence.workspaceAdmission).toBe('stopping')
+  expect(JSON.stringify(evidence.modelBodies[9].messages)).toContain('At most eight background cells may await delivery')
+  expect(Object.values(evidence.tasks).every((task: any) => task.delivery === 'delivered')).toBe(true)
 }, 30_000)
 
 test('failed durable background publication retries original receipts without repeating effects', async () => {
@@ -291,7 +316,8 @@ for (const recovery of ['retry', 'newturn', 'close']) {
       // Closed incarnations do not enqueue notifications into a later conversation.
       expect(evidence.completionNotifications).toBe(0)
     } else {
-      expect(evidence.completionNotifications).toBe(1)
+      expect(evidence.completionNotifications).toBe(recovery === 'newturn' ? 0 : 1)
+      if (recovery === 'newturn') expect(JSON.stringify(evidence.modelBodies.at(-1).messages)).toContain('selected-background')
       expect(evidence.sawFence).toBe(false)
     }
   }, 30_000)

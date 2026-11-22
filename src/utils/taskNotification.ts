@@ -235,3 +235,8 @@ export function isAgentOutcomeOrigin(origin: MessageOrigin | undefined): origin 
     // Older worker reports identified themselves by their structured summary, not taskType.
     (origin.taskType === 'local_agent' || (origin.taskType === undefined && /^Agent (?:@|").+/.test(origin.summary ?? '')))
 }
+
+/** A queue wake is separate from the selected-output receipt or a recovered unknown outcome. */
+export function isCodeModeTaskWake(origin: MessageOrigin | undefined): boolean {
+  return origin?.kind === 'task-notification' && origin.taskType === 'code_mode' && !!origin.outputFile
+}

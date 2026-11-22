@@ -39,7 +39,7 @@ import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from './services/tools/interruptedToolRun.js'
-import { assertToolReceiptSource, CodeModeHost, retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
+import { assertToolReceiptSource, CodeModeHost, isDetachedCodeModeReceipt, retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
 import { CODE_MODE_CONVERSATION_CHANGE_PENDING, hasUndeliveredCodeModeTasks } from './tasks/CodeModeTask.js'
 import { logError } from './utils/log.js'
 import { restoreCodeModeHistory } from './tools/REPLTool/codeModeRestoration.js'
@@ -330,6 +330,8 @@ export function resolveMcpRuntimeInputs(
   }
 }
 
+type QueuedToolReceipt = { message: Message; isCurrent: () => boolean; resolve: () => void; reject: (error: unknown) => void }
+
 export class QueryEngine {
   private readonly toolOwnerSessionId = getSessionId()
   private readonly interruptedTools = getInterruptedToolRun(getSessionId())
@@ -351,6 +353,11 @@ export class QueryEngine {
   private discoveredSkillNames = new Set<string>()
   private loadedNestedMemoryPaths = new Set<string>()
   private transcriptLane: Promise<void> = Promise.resolve()
+  private readonly toolReceipts: QueuedToolReceipt[] = []
+  private readonly publishedToolReceipts = new WeakSet<Message>()
+  private toolReceiptReady?: () => void
+  private hasReceiptCheckpoint = false
+  private idleReceiptWriterScheduled = false
   private readonly codeModeHost: CodeModeHost
   private inlineExecutionOwner: InlineCommandOperation | null = null
   private inlineSettlements = 0
@@ -371,29 +378,11 @@ export class QueryEngine {
     this.codeModeHost = config.codeModeHost ?? new CodeModeHost()
     const initialMessages = config.initialMessages ?? []
     this.mutableMessages = config.codeModeHost ? initialMessages : restoreCodeModeHistory(initialMessages, config.getAppState().tasks)
-    this.interruptedToolLease = this.interruptedTools.attach(async (message, isCurrent) => {
-      const release = await this.acquireTranscriptLane()
-      try {
-        if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
-        await assertToolReceiptSource(message, this.mutableMessages)
-        if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
-        const snapshot = this.mutableMessages.some(row => row.uuid === message.uuid)
-          ? this.mutableMessages : [...this.mutableMessages, message]
-        if (!isSessionPersistenceDisabled()) {
-          await (this.config.recordTranscript ?? recordTranscript)(snapshot)
-          await (this.config.flushCurrentTranscriptDurably ?? flushCurrentTranscriptDurably)(message.uuid)
-        }
-        if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
-        // Keep the retained headless history alive across per-input engines.
-        // Direct engine users read receipts through getMessages(); adapters with
-        // an output transport additionally acknowledge delivery before admission.
-        if (!this.mutableMessages.some(row => row.uuid === message.uuid)) this.mutableMessages.push(message)
-        for (const frame of toSDKMessages([message])) {
-          await this.config.publishLateToolMessage?.(frame)
-          if (!isCurrent()) throw new Error('Tool receipt owner changed')
-        }
-      } finally { release() }
-    })
+    this.interruptedToolLease = this.interruptedTools.attach((message, isCurrent) => new Promise<void>((resolve, reject) => {
+      this.toolReceipts.push({ message, isCurrent, resolve, reject })
+      this.toolReceiptReady?.()
+      this.scheduleIdleReceiptWriter()
+    }))
     const reference = new WeakRef(this)
     const unsubscribe = config.onInterruptedToolsSettled
       ? this.interruptedTools.subscribe(() => {
@@ -414,6 +403,48 @@ export class QueryEngine {
     this.tailRecoveryHold = !!config.initialRecoveryReviewRequired ||
       (readTailRecoveryState(this.tailRecoveryPath, getSessionId(), config.initialMessages)?.reviewRequired ?? false)
     this.resumeHooksPending = this.tailRecoveryHold
+  }
+
+  private async appendToolReceipt(message: Message, isCurrent: () => boolean, turnMessages?: Message[]): Promise<void> {
+    const assertOwner = () => {
+      if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
+    }
+    assertOwner()
+    if (this.publishedToolReceipts.has(message)) return
+    await assertToolReceiptSource(message, this.mutableMessages)
+    assertOwner()
+    const history = turnMessages ?? this.mutableMessages
+    const snapshot = history.some(row => row.uuid === message.uuid) ? history : [...history, message]
+    if (!isSessionPersistenceDisabled()) {
+      await (this.config.recordTranscript ?? recordTranscript)(snapshot)
+      await (this.config.flushCurrentTranscriptDurably ?? flushCurrentTranscriptDurably)(message.uuid)
+    }
+    assertOwner()
+    if (!history.some(row => row.uuid === message.uuid)) history.push(message)
+    if (history !== this.mutableMessages && !this.mutableMessages.some(row => row.uuid === message.uuid)) {
+      this.mutableMessages.push(message)
+    }
+    for (const frame of toSDKMessages([message])) {
+      await this.config.publishLateToolMessage?.(frame)
+      assertOwner()
+    }
+    this.publishedToolReceipts.add(message)
+  }
+
+  private scheduleIdleReceiptWriter(): void {
+    if (this.hasReceiptCheckpoint || this.idleReceiptWriterScheduled || !this.toolReceipts.length) return
+    this.idleReceiptWriterScheduled = true
+    void this.acquireTranscriptLane().then(async release => {
+      try {
+        for (let receipt; (receipt = this.toolReceipts.shift());) {
+          try { await this.appendToolReceipt(receipt.message, receipt.isCurrent); receipt.resolve() }
+          catch (error) { receipt.reject(error) }
+        }
+      } finally {
+        this.idleReceiptWriterScheduled = false
+        release()
+      }
+    })
   }
 
   requiresRecoveryReview(): boolean { return this.tailRecoveryHold }
@@ -1324,6 +1355,39 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
+    // The turn keeps the transcript lease. Only its query checkpoints may
+    // append background receipts, using the same ordered history as tool results.
+    const signal = this.abortController.signal
+    this.hasReceiptCheckpoint = true
+    const receiptsPublishedInTurn = new Set<string>()
+    const flushTurnReceipts = async () => {
+      const settling = this.codeModeHost.settlingBackgroundPublications(getAppState().tasks)
+      let waiting = settling !== undefined
+      if (!waiting && !this.toolReceipts.length) return
+      const wake = () => this.toolReceiptReady?.()
+      void settling?.then(() => { waiting = false; wake() })
+      const onAbort = wake
+      signal.addEventListener('abort', onAbort, { once: true })
+      try {
+        while (!signal.aborted) {
+          const receipt = this.toolReceipts.shift()
+          if (receipt) {
+            try {
+              await settleTranscriptWrites()
+              await this.appendToolReceipt(receipt.message, receipt.isCurrent, messages)
+              receiptsPublishedInTurn.add(receipt.message.uuid)
+              receipt.resolve()
+            } catch (error) {
+              receipt.reject(error)
+              throw error
+            }
+          } else if (waiting) {
+            await new Promise<void>(resolve => { this.toolReceiptReady = resolve })
+            this.toolReceiptReady = undefined
+          } else break
+        }
+      } finally { signal.removeEventListener('abort', onAbort) }
+    }
     providerEntered = true
     const queryIterator = this.abortController.signal.aborted
       ? (async function* () { return { reason: 'aborted' } })()
@@ -1338,11 +1402,13 @@ export class QueryEngine {
       querySource: 'sdk',
       maxTurns,
       taskBudget,
+      flushTurnReceipts,
     })
     let queryTerminal: { reason: string } | undefined
     async function* observeQuery() { queryTerminal = yield* queryIterator }
     try {
     for await (const message of observeQuery()) {
+      if (isDetachedCodeModeReceipt(message) && receiptsPublishedInTurn.has(message.uuid)) continue
       if (
         message.type === 'system' &&
         message.subtype === 'compact_boundary'
@@ -1779,6 +1845,8 @@ export class QueryEngine {
       }
       this.mutableMessages = [...messages]
     } finally {
+      this.hasReceiptCheckpoint = false
+      this.scheduleIdleReceiptWriter()
       if (!executionClosed) {
         const terminalMessage = messages.findLast(message => message.type === 'assistant' || message.type === 'user')
         const firstContent = terminalMessage && Array.isArray(terminalMessage.message.content) ? terminalMessage.message.content[0] : undefined

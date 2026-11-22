@@ -21,6 +21,7 @@ import { getCwd } from '../../utils/cwd.js'
 import { formatTaskNotificationText, toTaskNotificationOrigin } from '../../utils/taskNotification.js'
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { updateTaskState } from '../../utils/task/framework.js'
+import { emitTaskTerminatedSdk } from '../../utils/sdkEventQueue.js'
 import { hasCompactedToolReceiptSource } from '../../utils/sessionStorage.js'
 import { assertCodeModeBackgroundAdmission } from '../../tasks/CodeModeTask.js'
 
@@ -29,6 +30,10 @@ import { bindToolActivity } from '../../app-runtime/toolActivity.js'
 const FOREGROUND_WALL_TIME_MS = 10 * 60_000
 const BACKGROUND_WALL_TIME_MS = 2 * 60 * 60_000
 const detachedReceipts = new WeakSet<Message>()
+
+export function isDetachedCodeModeReceipt(message: Message): boolean {
+  return detachedReceipts.has(message)
+}
 
 /** Late delivery can recover an exact host receipt's source from compacted history. */
 export async function assertToolReceiptSource(message: Message, history: readonly Message[]): Promise<void> {
@@ -81,11 +86,13 @@ export class CodeModeHost {
   private stopActive?: () => void
   private incarnation = randomUUID()
   private controllers = new Map<string, AbortController>()
-  private backgroundPublications = new Set<Promise<void>>()
+  private backgroundPublications = new Map<string, Promise<void>>()
   private backgroundDeliveries = new Map<string, Promise<void>>()
   private backgroundCancellations = new Map<string, () => void>()
   private backgroundOwners = new Map<string, CodeModeOwner>()
   private pendingModelMessages = new Map<string, ContextMessage>()
+  private backgroundModelTurns = 0
+  private backgroundModelWakes = new Map<string, { enqueue?: () => void; discard?: () => void }>()
   private requiredModelMessages = new Map<string, ContextMessage>()
   private pendingMemoryMessages = new Map<string, AttachmentMessage>()
   private awaitingContextRegistration = false
@@ -250,7 +257,7 @@ export class CodeModeHost {
   async close(): Promise<void> {
     this.dispose()
     await this.lane
-    await Promise.allSettled([...this.backgroundPublications])
+    await Promise.allSettled(this.backgroundPublications.values())
     // One bounded retry, not a timer or a wait for permanent storage failure.
     await Promise.all([...failedPublications.entries()]
       .filter(([taskId]) => this.backgroundDeliveries.has(taskId))
@@ -260,6 +267,33 @@ export class CodeModeHost {
   /** Resource owners can defer release after a failed close until an explicit retry succeeds. */
   whenBackgroundDelivered(): Promise<void> {
     return Promise.all([...this.backgroundDeliveries.values()]).then(() => {})
+  }
+
+  settlingBackgroundPublications(tasks: ReturnType<ToolUseContext['getAppState']>['tasks']): Promise<unknown> | undefined {
+    if (!this.backgroundPublications.size) return
+    const settling = [...this.backgroundPublications].flatMap(([id, publication]) => {
+      const task = tasks[id]
+      return task?.type === 'code_mode' && (task.settled || task.cancellationRequested) ? [publication] : []
+    })
+    if (settling.length) return Promise.allSettled(settling)
+  }
+
+  deferBackgroundModelWakes(): () => void {
+    this.backgroundModelTurns++
+    return () => {
+      if (--this.backgroundModelTurns !== 0) return
+      for (const wake of this.backgroundModelWakes.values()) wake.enqueue?.()
+    }
+  }
+
+  markBackgroundModelOutputsSeen(messages: readonly Message[]): void {
+    if (!this.backgroundModelWakes.size) return
+    for (const message of messages) {
+      const wake = this.backgroundModelWakes.get(message.uuid)
+      if (!wake) continue
+      this.backgroundModelWakes.delete(message.uuid)
+      wake.discard?.()
+    }
   }
 
   run(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, policyIsCurrent: () => boolean, background = false): Promise<CodeModeHostCompletion> {
@@ -338,7 +372,14 @@ export class CodeModeHost {
     }
     const bufferedAudit: Message[] = []
     const acceptedReceipts = new Set<string>()
-    const acceptReceipt = (message: Message) => { acceptedReceipts.add(message.uuid); this.pendingModelMessages.delete(message.uuid) }
+    let selectedReceipt: UserMessage | undefined
+    const acceptReceipt = (message: Message) => {
+      acceptedReceipts.add(message.uuid)
+      if (!context.agentId && message === selectedReceipt) {
+        this.pendingModelMessages.set(selectedReceipt.uuid, selectedReceipt)
+        if (this.awaitingContextRegistration) this.requireModelMessages([selectedReceipt])
+      } else this.pendingModelMessages.delete(message.uuid)
+    }
     let auditDelivery: Promise<void> = Promise.resolve()
     let taskId = ''
     const releaseToolLane = ownBackgroundToolLane(detached)
@@ -366,8 +407,11 @@ export class CodeModeHost {
         sourceToolAssistantUUID: assistantUuid as `${string}-${string}-${string}-${string}-${string}`,
       })
       detachedReceipts.add(notification)
-      this.pendingModelMessages.set(notification.uuid, notification)
-      if (this.awaitingContextRegistration) this.requireModelMessages([notification])
+      selectedReceipt = notification
+      if (context.agentId) {
+        this.pendingModelMessages.set(notification.uuid, notification)
+        if (this.awaitingContextRegistration) this.requireModelMessages([notification])
+      } else this.backgroundModelWakes.set(notification.uuid, {})
       return {
         ...value, messages: [...value.messages, notification],
       }
@@ -437,21 +481,32 @@ export class CodeModeHost {
         }
       } catch (error) { logError(error); await retain() }
     })
-    let notificationQueued = false
     const notify = async () => {
-      if (notificationQueued) return
       if (this.disposed || getSessionId() !== owner.sessionId) return
       const { result } = await completion
-      const { enqueuePendingNotification } = await import('../../utils/messageQueueManager.js')
+      const { enqueuePendingNotification, removeByFilter } = await import('../../utils/messageQueueManager.js')
       if (this.disposed || getSessionId() !== owner.sessionId) return
       const status = result.status === 'completed' || result.status === 'yielded' ? 'completed' as const : result.status === 'cancelled' ? 'killed' as const : 'failed' as const
       const details = {
         taskId, taskType: 'code_mode', outputFile: getTaskOutputPath(taskId), toolUseId: cellId, status,
-        summary: `Background script ${JSON.stringify(input.description)} ${result.status === 'yielded' ? 'stopped for a new model decision' : result.status}.${result.calls.some(call => call.status !== 'completed') ? ' Some actions did not complete successfully.' : ''} The selected output was delivered separately.`,
+        summary: 'Background Script outcome saved.',
       }
       updateTaskState(taskId, detached.setAppState, task => task.notified ? task : { ...task, notified: true })
-      enqueuePendingNotification({ value: formatTaskNotificationText(details), mode: 'task-notification', priority: 'next', agentId: context.agentId, origin: toTaskNotificationOrigin(details) })
-      notificationQueued = true
+      const uuid = randomUUID()
+      const enqueue = () => {
+        if (this.disposed || getSessionId() !== owner.sessionId) return
+        enqueuePendingNotification({ uuid, value: formatTaskNotificationText(details), mode: 'task-notification', priority: 'next', agentId: context.agentId, origin: toTaskNotificationOrigin(details) })
+      }
+      if (context.agentId) { enqueue(); return }
+      emitTaskTerminatedSdk(taskId, status === 'killed' ? 'stopped' : status, details)
+      const wake = selectedReceipt && this.backgroundModelWakes.get(selectedReceipt.uuid)
+      if (!wake) return
+      wake.enqueue = () => {
+        wake.enqueue = undefined
+        wake.discard = () => removeByFilter(command => command.uuid === uuid)
+        enqueue()
+      }
+      if (this.backgroundModelTurns === 0) wake.enqueue()
     }
     let delivered!: () => void
     this.backgroundDeliveries.set(taskId, new Promise<void>(resolve => { delivered = resolve }))
@@ -468,11 +523,11 @@ export class CodeModeHost {
         failedPublications.set(taskId, { sessionId: owner.sessionId, retry: publish })
         throw error
       }).finally(() => {
-        this.backgroundPublications.delete(publication)
+        this.backgroundPublications.delete(taskId)
         active = undefined
       })
       active = publication
-      this.backgroundPublications.add(publication)
+      this.backgroundPublications.set(taskId, publication)
       return publication
     }
     void publish().catch(logError)

@@ -3,23 +3,31 @@ export type AgentLifecycleOwnership = {
   token: symbol
 }
 
-const activeAgentLifecycles = new Map<string, symbol>()
+const activeAgentLifecycles = new Map<string, { token: symbol; completion: Promise<void>; release: () => void }>()
 
 export function acquireAgentLifecycleOwnership(
   agentId: string,
 ): AgentLifecycleOwnership | undefined {
   if (activeAgentLifecycles.has(agentId)) return undefined
   const ownership = { agentId, token: Symbol(agentId) }
-  activeAgentLifecycles.set(agentId, ownership.token)
+  let release!: () => void
+  const completion = new Promise<void>(resolve => { release = resolve })
+  activeAgentLifecycles.set(agentId, { token: ownership.token, completion, release })
   return ownership
 }
 
 export function releaseAgentLifecycleOwnership(
   ownership: AgentLifecycleOwnership,
 ): void {
-  if (activeAgentLifecycles.get(ownership.agentId) === ownership.token) {
+  const active = activeAgentLifecycles.get(ownership.agentId)
+  if (active?.token === ownership.token) {
     activeAgentLifecycles.delete(ownership.agentId)
+    active.release()
   }
+}
+
+export function getAgentLifecycleCompletion(agentId: string): Promise<void> | undefined {
+  return activeAgentLifecycles.get(agentId)?.completion
 }
 
 export function isAgentLifecycleOwned(agentId: string): boolean {

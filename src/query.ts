@@ -164,7 +164,7 @@ import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
 import { createCuaDriverRun, type CuaDriverRun } from './utils/cuaDriver/run.js'
 import { emitTaskTerminatedSdk } from './utils/sdkEventQueue.js'
-import { isAgentOutcomeOrigin, parseTaskNotificationDetails, queuedCommandOrigin } from './utils/taskNotification.js'
+import { isAgentOutcomeOrigin, isCodeModeTaskWake, parseTaskNotificationDetails, queuedCommandOrigin } from './utils/taskNotification.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -342,6 +342,7 @@ export type QueryParams = {
   // from cumulative API usage. See configureTaskBudgetParams in claude.ts.
   taskBudget?: { total: number }
   deps?: QueryDeps
+  flushTurnReceipts?: () => Promise<void>
 }
 
 // -- query loop state
@@ -376,6 +377,8 @@ export async function* query(
 > {
   const consumedCommandUuids: string[] = []
   const cuaDriverRun = createCuaDriverRun()
+  const endBackgroundModelTurn = !params.toolUseContext.agentId
+    ? params.toolUseContext.codeModeHost?.deferBackgroundModelWakes() : undefined
   try {
     const terminal = yield* queryLoop(
       params,
@@ -391,6 +394,7 @@ export async function* query(
     }
     return terminal
   } finally {
+    endBackgroundModelTurn?.()
     // Every terminal return of queryLoop, a throw, and a consumer's .return()
     // all pass here. Several returns (API error, max turns, hook stops) skip
     // handleStopHooks, so the stop cannot live there.
@@ -518,6 +522,7 @@ async function* queryLoop(
       assertLidWorkAdmission()
       const codeModeHost = state.toolUseContext.codeModeHost
       void retryFailedCodeModePublications(getSessionId()).catch(logError)
+      await params.flushTurnReceipts?.()
       const pendingCodeModeMessages = codeModeHost?.takePendingModelMessages(state.messages) ?? []
       if (pendingCodeModeMessages.length) {
         state = { ...state, messages: [...state.messages, ...pendingCodeModeMessages] }
@@ -1049,6 +1054,7 @@ async function* queryLoop(
           }
 
           let streamingFallbackOccured = false
+          let backgroundOutputsSeen = false
           if (interruptedTools.blocked) {
             const error = new Error(UNRESOLVED_TOOL_MESSAGE)
             yield createAssistantAPIErrorMessage({ content: error.message })
@@ -1252,6 +1258,13 @@ async function* queryLoop(
                 workerAnswerPrefixes.set(yieldMessage, state.workerAnswerPrefix)
               }
               yield yieldMessage
+            }
+            if (!backgroundOutputsSeen && (
+              (message.type === 'assistant' && !message.isApiErrorMessage) ||
+              (message.type === 'stream_event' && message.event.type === 'message_start')
+            )) {
+              backgroundOutputsSeen = true
+              codeModeHost?.markBackgroundModelOutputsSeen(messagesForQuery)
             }
             if (message.type === 'assistant') {
               if (!message.isApiErrorMessage) codeModeHost?.markModelContextDelivered(toolUseContext.codeModeModelEpoch)
@@ -2500,6 +2513,7 @@ async function* queryLoop(
       sleepRan || !isMainThread ? 'later' : 'next',
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
+      if (isMainThread && isCodeModeTaskWake(cmd.origin)) return false
       if (cmd.origin?.kind === 'deferred-continuation') return false
       if (cmd.origin?.kind === 'question-reply' && cmd.origin.engineSessionId !== undefined && cmd.origin.engineSessionId !== getSessionId()) return false
       if (isMainThread) return cmd.agentId === undefined

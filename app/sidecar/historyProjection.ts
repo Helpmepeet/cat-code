@@ -7,7 +7,7 @@ import {
   isInternalNoResponseSentinel,
 } from '../../src/utils/messages.js'
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
-import { isAgentOutcomeOrigin, queuedCommandOrigin } from '../../src/utils/taskNotification.js'
+import { isAgentOutcomeOrigin, isCodeModeTaskWake, queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { RECOVERY_WARNING } from '../../src/utils/transcriptTailRecovery.js'
 import { restoreCodeModeHistory } from '../../src/tools/REPLTool/codeModeRestoration.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
@@ -93,7 +93,8 @@ export function projectResumedHistory(messages: readonly Message[]): SDKMessage[
     messages.filter(message => message.type === 'user').map(message => message.uuid),
   )
   const visible = messages
-    .filter(message => !isInternalNoResponseSentinel(message))
+    .filter(message => !isInternalNoResponseSentinel(message) &&
+      (message.type !== 'user' || !isCodeModeTaskWake(message.origin)))
     .flatMap(message => {
       const restored = restoreQueuedMessageRow(message)
       if (restored === message) return [message]

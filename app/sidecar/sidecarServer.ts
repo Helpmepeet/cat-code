@@ -79,7 +79,7 @@ import {
 } from '../../src/utils/messageQueueManager.js'
 import { CROSS_SESSION_MESSAGE_TAG } from '../../src/constants/xml.js'
 import { setCommandLifecycleListener } from '../../src/utils/commandLifecycle.js'
-import { isAgentOutcomeOrigin, queuedCommandOrigin } from '../../src/utils/taskNotification.js'
+import { isAgentOutcomeOrigin, isCodeModeTaskWake, queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { toSDKMessageOriginProp } from '../../src/utils/messages/mappers.js'
 import { permissionRuleValueFromString } from '../../src/utils/permissions/permissionRuleParser.js'
 import { appClientMessageSchema } from '../../src/app-runtime/appSessionProtocol.js'
@@ -2631,6 +2631,7 @@ export class SidecarServer {
     const started = this.startTurn({
       prompt: command.value,
       origin,
+      announcePrompt: !isCodeModeTaskWake(origin),
       // A peer message keeps main's message id as its transcript identity, so
       // the row this turn persists is the durable record of WHICH peer message
       // was consumed — the same identity the busy path's `queued_command`
