@@ -208,6 +208,8 @@ export type ToolUseContext = {
   /** Instruction epoch actually supplied to this model request, never tool input. */
   codeModeModelEpoch?: number
   codeModeBackgroundCell?: boolean
+  /** Launching turn's signal when a Script cell has its own execution controller. */
+  launchingTurnSignal?: AbortSignal
   /** Controller-owned foreground execution, never populated from tool input. */
   inlineCommand?: {
     runId: string

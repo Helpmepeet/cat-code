@@ -37,6 +37,7 @@ import {
   isLocalAgentTask,
   killAsyncAgent,
   type ProgressTracker,
+  stopAgentTaskWithTurn,
   updateAgentProgress as updateAsyncAgentProgress,
   updateProgressFromMessage,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
@@ -1068,6 +1069,8 @@ export async function runAsyncAgentLifecycle({
   if (!lifecycleOwnership || lifecycleOwnership.agentId !== taskId) {
     throw new Error(`Agent ${taskId} already has an active lifecycle`)
   }
+  const detachTurnStop = stopAgentTaskWithTurn(taskId, runId,
+    toolUseContext.launchingTurnSignal ?? toolUseContext.abortController.signal, rootSetAppState)
   startWorkerUsage()
   let stopSummarization: (() => void) | undefined
   const agentMessages: MessageType[] = []
@@ -1345,6 +1348,7 @@ export async function runAsyncAgentLifecycle({
       ...worktreeResult,
     })
   } finally {
+    detachTurnStop()
     clearInvokedSkillsForAgent(agentIdForCleanup)
     clearDumpState(agentIdForCleanup)
     releaseAgentLifecycleOwnership(lifecycleOwnership)

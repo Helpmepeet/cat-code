@@ -479,9 +479,10 @@ export class AppSessionController {
     if (!alreadyAborting) this.setAbortState({ status: 'requested', reason })
 
     for (const [requestId, pending] of this.pendingPermissionRequests) {
-      // A submit cut cancels the main tool signal, not a detached worker's.
-      // Unscoped adapters retain the fail-closed turn-level fallback.
-      if (adapterIntent === 'interrupt' && pending.signal) continue
+      // Scoped worker approvals follow their task's cancellation signal.
+      // A submit cut also leaves the main tool's own signal to settle its request.
+      if (pending.signal && (adapterIntent === 'interrupt' ||
+          (this.activeTurn && pending.request.request.agent_id))) continue
       this.respondToPermissionRequest(requestId, markPermissionRequestCancelled({
         behavior: 'deny',
         message: reason,

@@ -7,6 +7,7 @@ import type { Attachment } from '../attachments.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
 import { SYNTHETIC_MODEL } from '../messages.js'
 import { getCommandQueueSnapshot } from '../messageQueueManager.js'
+import { wasTurnStopped } from '../abortController.js'
 import { queuedCommandOrigin } from '../taskNotification.js'
 import { isRelayedOrigin } from '../messageOrigin.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
@@ -323,7 +324,8 @@ export function workerAssignment(
   const parentMessages = () => parent.getCurrentAutoModeMessages?.() ?? parent.messages
   const parentWorker = parent.contextualWorkerAssignment
   return { text, ...parentBinding, excluded: new Set(initialMessages.map(message => message.uuid)),
-    history, parentWorker, parentMessages, parentSignal: parent.abortController.signal }
+    history, parentWorker, parentMessages,
+    parentSignal: parent.launchingTurnSignal ?? parent.abortController.signal }
 }
 
 export function readContextualAuthority(context: ToolUseContext, peerParent?: PeerParentEvidence) {
@@ -379,7 +381,8 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
     actor, delegated, assignment, conversation, pendingConversation,
     verifiedSource: Boolean(parent || conversation.some(record => record.origin === 'operator' && record.id)),
     pendingOperatorInput: Boolean(peerParent?.pendingOperatorInput) || unreadable,
-    stopped: context.abortController.signal.aborted || worker?.parentSignal.aborted === true ||
-      stopped(messages, conversation) || Boolean(parentMessages && parentEvidence && stopped(parentMessages, parentEvidence)),
+    stopped: context.abortController.signal.aborted ||
+      Boolean(worker && wasTurnStopped(worker.parentSignal)) ||
+      stopped(messages, conversation) || Boolean(!worker && parentMessages && parentEvidence && stopped(parentMessages, parentEvidence)),
   }
 }

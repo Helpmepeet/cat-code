@@ -333,6 +333,7 @@ export class CodeModeHost {
     this.backgroundOwners.set(JSON.stringify(owner), owner)
     const detached: ToolUseContext = {
       ...context, abortController: new AbortController(), onCodeModeAudit: undefined,
+      launchingTurnSignal: context.launchingTurnSignal ?? context.abortController.signal,
       setAppState: context.setAppStateForTasks ?? context.setAppState,
     }
     const bufferedAudit: Message[] = []
@@ -496,6 +497,7 @@ export class CodeModeHost {
     }
     const cellContext = {
       ...context, abortController: controller, codeModeBackgroundCell: background,
+      launchingTurnSignal: context.launchingTurnSignal ?? context.abortController.signal,
       contextualParentScriptSource: input.code,
       onHumanPermissionWait: (waiting: boolean) => this.runtime?.setHumanWait(cellId, waiting),
     }

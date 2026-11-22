@@ -77,7 +77,7 @@ export function createQueryEngineAppSession(
           yield* executeInlineCommand(options.inlineCommand, options)
           return
         }
-        engine.refreshAbortController?.()
+        engine.refreshAbortController?.(true)
         // Detached workers still use this session's permission route between turns.
         currentPermissionHandler = options?.onPermissionRequest
         if (options?.handoffContinuation) {

@@ -61,7 +61,7 @@ import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import type { Message, MessageOrigin, SystemMessage, UserMessage } from './types/message.js'
 import type { OrphanedPermission } from './types/textInputTypes.js'
-import { createAbortController } from './utils/abortController.js'
+import { createAbortController, createChildAbortController } from './utils/abortController.js'
 import type { AttributionState } from './utils/commitAttribution.js'
 import { getGlobalConfig } from './utils/config.js'
 import { resolveSelectableUserMessageByProducerPrefix } from './utils/conversationRecovery.js'
@@ -2094,8 +2094,12 @@ export class QueryEngine {
     return toSDKMessages([display, message])
   }
 
-  refreshAbortController(): AbortController {
-    if (this.abortController.signal.aborted) {
+  refreshAbortController(newTurn = false): AbortController {
+    if (newTurn) {
+      this.abortController = this.config.abortController
+        ? createChildAbortController(this.config.abortController)
+        : createAbortController()
+    } else if (this.abortController.signal.aborted) {
       this.abortController = createAbortController()
     }
     return this.abortController

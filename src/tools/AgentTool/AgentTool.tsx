@@ -19,7 +19,7 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import { selectAvailableMcpServerNames } from '../../services/mcp/mcpState.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
-import { backgroundAgentTask, completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { backgroundAgentTask, completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, stopAgentTaskWithTurn, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
@@ -1358,9 +1358,6 @@ export const AgentTool = buildTool({
         selectedAgent,
         agentName,
         setAppState: rootSetAppState,
-        // Don't link to parent's abort controller -- background agents should
-        // survive when the user presses ESC to cancel the main thread.
-        // They are killed explicitly via chat:killAgents.
         toolUseId: toolUseContext.toolUseId
       });
       registerWorkerCodexLease({
@@ -1659,6 +1656,8 @@ export const AgentTool = buildTool({
                   runWithAgentLifecycleOwnership(backgroundedTaskId, async () => {
                   const tracker = createProgressTracker();
                   const resolveActivity2 = createActivityDescriptionResolver(toolUseContext.options.tools);
+                  const detachTurnStop = stopAgentTaskWithTurn(backgroundedTaskId, backgroundedRunId,
+                    toolUseContext.launchingTurnSignal ?? toolUseContext.abortController.signal, rootSetAppState);
                   try {
                     // Initialize progress tracking from existing messages
                     for (const existingMsg of agentMessages) {
@@ -1892,6 +1891,7 @@ export const AgentTool = buildTool({
                       ...worktreeResult
                     });
                   } finally {
+                    detachTurnStop();
                     stopBackgroundedSummarization?.();
                     clearInvokedSkillsForAgent(syncAgentId);
                     clearDumpState(syncAgentId);
@@ -2052,9 +2052,7 @@ export const AgentTool = buildTool({
           // Store the error to handle after cleanup
           syncAgentError = toError(error);
         } finally {
-          // A backgrounded worker is independent from the parent turn from this
-          // point onward; task-stop owns the same controller the live iterator
-          // has used since spawn.
+          // The background lifecycle now owns turn-stop forwarding.
           detachParentAbort();
           // Clear the background hint UI
           if (toolUseContext.setToolJSX) {

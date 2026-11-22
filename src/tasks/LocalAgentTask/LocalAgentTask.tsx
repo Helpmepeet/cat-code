@@ -17,7 +17,7 @@ import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js';
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js';
 import { asAgentId, type AgentId } from '../../types/ids.js';
 import type { Message, SystemMessageLevel } from '../../types/message.js';
-import { createAbortController, createChildAbortController } from '../../utils/abortController.js';
+import { createAbortController, createChildAbortController, wasTurnStopped } from '../../utils/abortController.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
 import { getToolSearchOrReadInfo } from '../../utils/collapseReadSearch.js';
 import { enqueuePendingNotification } from '../../utils/messageQueueManager.js';
@@ -1073,6 +1073,20 @@ export function killAsyncAgent(
     releaseAgentCodexResources(taskId);
     void evictTaskOutput(taskId);
   }
+}
+
+export function stopAgentTaskWithTurn(
+  taskId: string,
+  runId: string | undefined,
+  turnSignal: AbortSignal,
+  setAppState: SetAppState,
+): () => void {
+  const stop = () => {
+    if (wasTurnStopped(turnSignal)) killAsyncAgent(taskId, setAppState, runId);
+  };
+  if (turnSignal.aborted) stop();
+  else turnSignal.addEventListener('abort', stop, { once: true });
+  return () => turnSignal.removeEventListener('abort', stop);
 }
 
 /**

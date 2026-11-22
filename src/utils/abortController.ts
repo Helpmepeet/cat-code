@@ -5,6 +5,11 @@ import { setMaxListeners } from 'events'
  */
 const DEFAULT_MAX_LISTENERS = 50
 
+/** Submit-interrupt and session backgrounding transfer work to another execution. */
+export function wasTurnStopped(signal: AbortSignal): boolean {
+  return signal.aborted && signal.reason !== 'interrupt' && signal.reason !== 'background'
+}
+
 /**
  * Creates an AbortController with proper event listener limits set.
  * This prevents MaxListenersExceededWarning when multiple listeners

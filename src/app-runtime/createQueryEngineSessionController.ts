@@ -44,7 +44,7 @@ export type QueryEngineSessionLike = {
     options?: QueryEngineSessionOptions,
   ): AsyncIterable<SDKMessage>
   interrupt?: (intent?: AppSessionAbortIntent) => void
-  refreshAbortController?: () => AbortController
+  refreshAbortController?: (newTurn?: boolean) => AbortController
   continueHandoff?: (operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void>; freshHandoffAdmission?: QueryEngineSessionOptions['freshHandoffAdmission'] } & HandoffTurnLifecycleOptions) => AsyncIterable<SDKMessage>
   readHandoffOutcome?: (operationId: string) => Promise<HandoffTerminalOutcome | null>
   recoverHandoffReconciliation?: (notice: { displayUuid: string; contextUuid: string }) => Promise<{
