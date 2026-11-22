@@ -19,6 +19,7 @@ type Member = {
 export type CodeModeStep = {
   key: string
   members: Member[]
+  changedPaths: Set<string>
   adds: number
   dels: number
 }
@@ -62,7 +63,7 @@ export function codeModeSteps({ parent, calls, lineCount, cwd, scopes, generatio
     }
   }
   const steps: CodeModeStep[] = []
-  const changedPaths = new Set<string>()
+  const listedPaths = new Set<string>()
   const reasons = new Set<string>()
   const families = new Map<NestedToolUseRow['toolFamily'], number>()
   let lastEditedPath: string | null = null
@@ -82,16 +83,28 @@ export function codeModeSteps({ parent, calls, lineCount, cwd, scopes, generatio
     const first = last?.members[0]
     const repeat = first && (editPath ? editPath === lastEditedPath
       : family !== 'edit' && !!line && first.line === line && first.call.name === call.name)
-    const step = repeat && last ? last : { key: call.toolUseId, members: [], adds: 0, dels: 0 }
+    const step: CodeModeStep = repeat && last ? last : {
+      key: call.toolUseId, members: [], changedPaths: new Set(), adds: 0, dels: 0,
+    }
     if (step !== last) steps.push(step)
     step.members.push(member)
     lastEditedPath = editPath
 
-    for (const diff of selectToolDiffs(child?.result)) {
+    const diffs = selectToolDiffs(child?.result)
+    for (const diff of diffs) {
       const counts = countDiff(diff)
       step.adds += counts.adds
       step.dels += counts.dels
-      if (child?.status === 'success') changedPaths.add(scopedTranscriptFilePath(diff.filePath, sourceCwd ?? undefined))
+    }
+    if ((status === undefined || status === 'success') && (family === 'edit' || family === 'write' || family === 'notebook')) {
+      const input = codeModeInput(call)
+      const paths = diffs.length ? diffs.map(diff => diff.filePath) : file ? [file]
+        : family === 'notebook' && typeof input.notebook_path === 'string' ? [input.notebook_path] : []
+      for (const path of paths) {
+        const scoped = scopedTranscriptFilePath(path, sourceCwd ?? undefined)
+        step.changedPaths.add(scoped)
+        listedPaths.add(scoped)
+      }
     }
     if (codeModeStepHasError(status)) {
       if (call.error) reasons.add(call.error)
@@ -101,5 +114,5 @@ export function codeModeSteps({ parent, calls, lineCount, cwd, scopes, generatio
     }
     families.set(family, (families.get(family) ?? 0) + 1)
   }
-  return { steps, changedPaths, reasons, families }
+  return { steps, listedPaths, reasons, families }
 }

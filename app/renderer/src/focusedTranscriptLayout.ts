@@ -5,7 +5,8 @@ import { deriveToolFamily } from './transcriptProjector.js'
 import { codeModeCallCompleted, codeModeForRow, codeModeInput, type CodeModeEnvelope } from './codeMode.js'
 import { codeModeLiveView, codeModeReviewingChild } from './codeModeLiveView.js'
 import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
-import { selectToolDiffs } from './toolDiffs.js'
+import { countDiff, countWrittenLines, selectToolDiffs } from './toolDiffs.js'
+import { isUserRejectionResult } from './askUserQuestionTranscript.js'
 import { isMemoryRecall } from './memoryRecall.js'
 
 export type FocusedSummary = {
@@ -30,6 +31,10 @@ export type FocusedSummary = {
   compact: string
   /** The first call still pending, with its Focus target, for naming what a stopped turn was doing. */
   activeCall: { toolUseId: string; target: string } | null
+  /** The kind of attempt, when the failures all came from edits or writes. */
+  failedAs?: 'edit' | 'write' | null
+  /** The summary already says "tried to edit" or "tried to write". */
+  triedOnly?: boolean
 }
 export type FocusedSegment = {
   kind: 'update' | 'reasoning' | 'stretch' | 'speech' | 'recall'
@@ -92,6 +97,44 @@ function rowHasError(row: NestedTranscriptRow): boolean {
     row.children.some(rowHasError)
 }
 
+const createdLines = new WeakMap<NestedToolUseRow, number | null>()
+/** A created file can lack a diff, so its lines come from what was written. */
+function createdLineCount(row: NestedToolUseRow): number | null {
+  if (row.status !== 'success' || row.toolFamily !== 'write' || selectToolDiffs(row.result).some(diff => diff.hunks.length)) return null
+  const cached = createdLines.get(row)
+  if (cached !== undefined) return cached
+  const { content } = row.input
+  const count = typeof content === 'string' && row.result?.isError === false &&
+    row.result.content.startsWith('File created successfully at: ') ? countWrittenLines(content) : null
+  createdLines.set(row, count)
+  return count
+}
+
+/** Recover missing Script totals when the child results cover every changed file. */
+function scriptTotals(row: NestedToolUseRow, cell: CodeModeEnvelope): { adds: number; dels: number } | null {
+  let adds = 0, dels = 0
+  const counted = new Set<string>()
+  for (const child of row.children) {
+    if (child.kind !== 'tool-use' || child.status !== 'success') continue
+    if (child.codeMode && (child.codeMode.cellId !== cell.cellId || child.codeMode.generation !== cell.generation)) continue
+    for (const diff of selectToolDiffs(child.result)) {
+      if (!diff.hunks.length && diff.operation !== 'update') continue
+      const counts = countDiff(diff)
+      adds += counts.adds
+      dels += counts.dels
+      counted.add(diff.filePath)
+    }
+    const created = createdLineCount(child)
+    if (created !== null && typeof child.input.file_path === 'string') {
+      adds += created
+      counted.add(child.input.file_path)
+    }
+  }
+  return cell.changedFiles.every(file => counted.has(file.path) || [...counted].some(path =>
+    !file.path.startsWith('/') && path.endsWith(`/${file.path}`) ||
+    !path.startsWith('/') && file.path.endsWith(`/${path}`))) ? { adds, dels } : null
+}
+
 /** Only top-level calls contribute counts; their original nested rows remain reachable. */
 export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): FocusedSummary {
   const reads = new Set<string>(), edits = new Set<string>(), searches = new Set<string>()
@@ -99,8 +142,10 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0, stoppedCount = 0, blockedCount = 0, questions = 0, recalls = 0
   let runningScripts = 0, reviewingScripts = 0, unknownScripts = 0
   let activeCall: FocusedSummary['activeCall'] = null
+  const failedEdits: NestedToolUseRow[] = [], attempted = new Set<string>()
   for (const row of rows) {
-    if (rowHasError(row)) errorCount++
+    const hasError = rowHasError(row)
+    if (hasError) errorCount++
     if (row.kind !== 'tool-use' || isPeerSpeechCall(row.toolName)) continue
     const cell = codeModeLiveView(row)
     if ((cell && cell.cellId === row.toolUseId) || row.toolName === 'REPL') {
@@ -130,14 +175,23 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
       const outerBlocked = cell?.status === 'blocked' || isBlocked(row)
       const outerStopped = cell?.status === 'cancelled' || cell?.status === 'yielded' || row.status === 'cancelled'
       // The outer outcome summarizes the same inner work, not another failure.
-      if (rowHasError(row)) errorCount--
-      errorCount += Math.max(innerErrors, !outerBlocked && !outerStopped && (cell?.status === 'failed' || rowHasError(row)) ? 1 : 0)
+      if (hasError) errorCount--
+      errorCount += Math.max(innerErrors, !outerBlocked && !outerStopped && (cell?.status === 'failed' || hasError) ? 1 : 0)
       blockedCount += Math.max(innerBlocked, outerBlocked ? 1 : 0)
-      stoppedCount += Math.max(innerStopped, outerStopped ? 1 : 0)
+      // The step says Paused. A pause at a limit keeps its note on the turn.
+      const routinePause = cell?.status === 'yielded' && row.status !== 'cancelled' && !/limit reached/.test(cell.error ?? '')
+      stoppedCount += Math.max(innerStopped, outerStopped && !routinePause ? 1 : 0)
       for (const file of cell?.changedFiles ?? []) {
         edits.add(file.path)
         additions += file.additions ?? 0
         deletions += file.deletions ?? 0
+      }
+      if (cell?.changedFiles.length && cell.changedFiles.every(file => file.additions === undefined && file.deletions === undefined)) {
+        const totals = scriptTotals(row, cell)
+        if (totals) {
+          additions += totals.adds
+          deletions += totals.dels
+        }
       }
       continue
     }
@@ -148,6 +202,14 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     if (row.status === 'cancelled') stoppedCount++
     // A refused call never ran, so it names no file, pattern or command.
     if (isBlocked(row)) { blockedCount++; continue }
+    if (row.status === 'error' && (row.toolFamily === 'edit' || row.toolFamily === 'write') && !selectToolDiffs(row.result).length) {
+      failedEdits.push(row)
+      const path = toolCardFilePath(row)
+      if (path) attempted.add(path)
+      for (const header of patchFilePaths(row)) attempted.add(header)
+      continue
+    }
+    additions += createdLineCount(row) ?? 0
     const path = toolCardFilePath(row)
     switch (row.toolFamily) {
       case 'read': if (isMemoryRecall(row)) recalls++; else if (path) reads.add(path); break
@@ -181,6 +243,11 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   // A patch header is relative and a diff path absolute; one file must not count twice.
   for (const edited of [...edits]) {
     if (!edited.startsWith('/') && [...edits].some(other => other.endsWith(`/${edited}`))) edits.delete(edited)
+  }
+  // Paths still name what a failed edit was for; only the words stop calling it edited.
+  const editedPaths = new Set([...edits, ...attempted])
+  for (const path of [...editedPaths]) {
+    if (!path.startsWith('/') && [...editedPaths].some(other => other.endsWith(`/${path}`))) editedPaths.delete(path)
   }
   const parts: string[] = [], compact: string[] = []
   const count = (verb: string, n: number, noun: string) => {
@@ -219,11 +286,17 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     parts.push(detachedScriptStatus)
     compact.push(detachedScriptStatus)
   }
-  const summary = parts.join(', ') || (refusedAll ? `blocked ${blockedCount} call${blockedCount === 1 ? '' : 's'}`
+  const triedOnly = failedEdits.length > 0 && !parts.length
+  const allWrites = failedEdits.every(call => call.toolFamily === 'write')
+  const failedAs: FocusedSummary['failedAs'] = failedEdits.length > 0 && failedEdits.length === errorCount &&
+    !failedEdits.some(call => isUserRejectionResult(call.result))
+    ? allWrites ? 'write' : 'edit' : null
+  const tried = `tried to ${allWrites ? 'write' : 'edit'}${attempted.size ? ` ${attempted.size} file${attempted.size === 1 ? '' : 's'}` : ''}`
+  const summary = parts.join(', ') || (triedOnly ? tried : refusedAll ? `blocked ${blockedCount} call${blockedCount === 1 ? '' : 's'}`
     : toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned')
-  return { readPaths: [...reads], editedPaths: [...edits], searchedPatterns: [...searches], commands,
+  return { readPaths: [...reads], editedPaths: [...editedPaths], failedAs, triedOnly, searchedPatterns: [...searches], commands,
     otherFamilies: other, toolCalls, additions, deletions, hasErrors: errorCount > 0, errorCount, stoppedCount, blockedCount, detachedScriptStatus, summary,
-    compact: compact.join(' · ') || (refusedAll ? '' : summary), activeCall }
+    compact: compact.join(' · ') || (refusedAll || triedOnly ? '' : summary), activeCall }
 }
 
 const segmentCache = new WeakMap<readonly NestedTranscriptRow[], readonly FocusedSegment[]>()

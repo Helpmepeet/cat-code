@@ -94,7 +94,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
         <FocusedTicker tickKey={label} className="focused-fold-label"><span className="focused-shimmer">{label}</span></FocusedTicker>
         <FocusedTicker tickKey={detail} className="focused-fold-detail">{detail}</FocusedTicker>
         <DiffTotals summary={settled} />
-        <FailureMark summary={turn} />
+        <FailureMark summary={turn} failedAs={turn.failedAs} />
       </button>
       <FocusedDisclosure open={open} id={bodyId} exitMs={TURN_BODY_EXIT_MS} className="focused-turn-disclosure">
         <BoundedChildList keys={segmentKeys} estimatedChildHeight={82} directChildren
@@ -206,14 +206,18 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
   const stopped = segment.activeCall && !finishedHead && !live ? segment.activeCall : null
   const stoppedRow = stopped ? segment.rows.find(row => row.kind === 'tool-use' && row.toolUseId === stopped.toolUseId) : undefined
   const stoppedLine = stoppedRow?.kind === 'tool-use' ? focusedCallLine(stoppedRow, callContext) : null
+  const headNames = !liveHead && !stopped ? named : null
+  const noteOmitted = headNames?.line.phase === 'stopped' ? 'stopped' : headNames?.line.phase === 'blocked' ? 'blocked'
+    : headNames?.line.phase === 'done' && headNames.line.background?.state === 'failed' ? 'failed'
+    : headNames?.line.verbTone === 'fail' && summary.errorCount === 1 ? 'failed' : null
   const [key, text] = liveHead && headLine
     ? [`run:${liveHead.toolUseId}:${headLine.phase}:${headLine.verb}`, <CallWords line={headLine} call={liveHead} kind="head" />]
     : stopped
       ? [`stop:${stopped.toolUseId}:${summary.detachedScriptStatus}`, <>Stopped <span className={(stoppedLine?.targetFace ?? 'mono') === 'mono' ? 'focused-step-target' : 'focused-step-title'}>{stoppedLine?.target ?? stopped.target}</span>{summary.detachedScriptStatus ? ` · ${summary.detachedScriptStatus}` : ''}</>]
       : named
-        ? [`named:${named.line.verb}:${named.line.target}`, <CallWords line={named.line} call={null} kind="named" />]
+        ? [`named:${named.line.verb}:${named.line.target}`, <CallWords line={namedScriptLine(named.line,
+          calls.find(call => call.toolUseId === named.toolUseId), summary, noteOmitted)} call={null} kind="named" />]
         : [`sum:${summary.summary}`, capitalize(summary.summary)]
-  const headNames = !liveHead && !stopped ? named : null
   const mainTool = headCall ?? (live ? segment.rows.find(row => row.kind === 'tool-use' && row.status === 'pending') : null)
     ?? segment.rows.find(row => row.kind === 'tool-use')
   const mainMark = mainTool?.kind === 'tool-use' ? focusedCallMark(mainTool) : null
@@ -224,8 +228,6 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
     .filter((row): row is Extract<NestedTranscriptRow, { kind: 'tool-use' }> => row.kind === 'tool-use' && !isPeerSpeechCall(row.toolName))
     .slice(-3).map(row => ({ ...row, activity: liveState?.activities[row.toolUseId], awaitingApproval: liveState?.awaitingApproval[row.toolUseId] })) : []
   const rollingList = rollingNow ? rollingCalls(calls.filter(call => call !== headCall && call.toolUseId !== named?.toolUseId)) : []
-  const noteOmitted = headNames?.line.phase === 'stopped' ? 'stopped' : headNames?.line.phase === 'blocked' ? 'blocked'
-    : headNames?.line.phase === 'done' && headNames.line.background?.state === 'failed' ? 'failed' : null
   return (
     <FocusedCallClock live={live && [...(liveHead ? [liveHead] : []), ...childCalls, ...rollingList].some(call => call.status === 'pending' && !!call.activity && !call.preparing && !call.awaitingApproval)}>
     <div className="focused-step">
@@ -238,7 +240,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
         <FocusedTicker tickKey={key} className="focused-step-text">{text}</FocusedTicker>
         <AutoModeReviewMark summary={summarizeAutoModeReviews(calls.map(call => call.autoModeReview))} />
         <DiffTotals summary={summary} />
-        <FailureMark summary={summary} omit={noteOmitted} />
+        <FailureMark summary={summary} omit={noteOmitted} failedAs={summary.triedOnly ? null : summary.failedAs} />
         {liveHead && headLine ? <CallMeta call={liveHead} line={headLine} reviewStartedAt={reviewStartedAt} /> : headNames && headNames.line.phase !== 'failed' ? <BackgroundMeta background={headNames.line.background} /> : null}
       </button>
       {liveHead ? <LiveOutput call={liveHead} className="focused-head-out" /> : null}
@@ -259,10 +261,24 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
   )
 }
 
+/** Keep the count if the Script line is the only place that shows it. */
+function namedScriptLine(line: FocusedCallLine, call: FocusedCall | undefined, summary: FocusedSummary,
+  omit: 'blocked' | 'stopped' | 'failed' | null): FocusedCallLine {
+  if (call?.toolName !== 'REPL' || !line.detail || line.phase === 'running' || line.phase === 'reviewing') return line
+  const parts = line.detail.split(' · ')
+  const blocked = omit !== 'blocked' && summary.blockedCount > 0 ? `${summary.blockedCount} blocked` : null
+  const failed = omit !== 'failed' && summary.errorCount > 0
+    ? `${summary.errorCount} ${summary.errorCount === 1 ? 'error' : 'errors'}` : null
+  const kept = parts.filter(part => part !== blocked && part !== failed)
+  if (kept.length === parts.length) return line
+  return { ...line, detail: kept.filter(part => part !== '0 calls').join(' · ') || null }
+}
+
 /** One call's words from its line; the verb is dressed by tone and never split from the target. */
 function CallWords({ line, call, kind }: { line: FocusedCallLine; call: FocusedCall | null; kind: 'head' | 'row' | 'named' }) {
   const plain = kind === 'head' ? 'focused-step-verb' : ''
   const verbClass = line.verbTone === 'live' ? kind === 'head' ? `focused-step-verb${call?.preparing ? ' focused-live-verb' : ''}` : 'focused-live-verb'
+    : line.verbTone === 'fail' ? 'focused-meta-fail'
     : line.verbTone === 'queued' ? 'focused-queued-verb' : line.verbTone === 'warn' ? 'focused-warn-verb' : plain
   const targetClass = line.targetFace === 'mono' ? 'focused-step-target' : 'focused-step-title'
   return <>
@@ -277,6 +293,7 @@ function CallWords({ line, call, kind }: { line: FocusedCallLine; call: FocusedC
 
 function CallMeta({ call, line, reviewStartedAt }: { call: FocusedCall; line: FocusedCallLine; reviewStartedAt?: number }) {
   const now = useContext(FocusedClockContext)
+  if (line.verbTone === 'fail') return null
   if (line.phase === 'failed') return <span className="focused-meta focused-meta-fail">failed</span>
   if (call.status === 'pending' && call.activity && !call.preparing && !call.awaitingApproval) {
     const elapsed = now - (reviewStartedAt ?? call.activity.startedAt)
@@ -407,13 +424,13 @@ function useSettling(live: boolean): boolean {
 }
 
 /** Failures, blocks and stops are told apart; `omit` drops the note a step's own verb already says. */
-function FailureMark({ summary, omit = null }: { summary: FocusedSummary; omit?: 'failed' | 'stopped' | 'blocked' | null }) {
+function FailureMark({ summary, omit = null, failedAs = null }: { summary: FocusedSummary; omit?: 'failed' | 'stopped' | 'blocked' | null; failedAs?: 'edit' | 'write' | null }) {
   const failed = omit === 'failed' ? 0 : summary.errorCount
   const blocked = omit === 'blocked' ? 0 : summary.blockedCount
   const stopped = omit === 'stopped' ? 0 : summary.stoppedCount
   const dot = summary.hasErrors && summary.errorCount === 0 && summary.blockedCount === 0 && summary.stoppedCount === 0
   return <>
-    {failed > 0 ? <span className="focused-fail-note">{failed} failed</span> : null}
+    {failed > 0 ? <span className="focused-fail-note">{failedAs ? `${failed} ${failedAs}${failed === 1 ? '' : 's'} failed` : `${failed} failed`}</span> : null}
     {blocked > 0 ? <span className="focused-fail-note">{blocked} blocked</span> : null}
     {stopped > 0 ? <span className="focused-warn-note">{stopped} stopped</span> : null}
     {dot ? <span className="focused-status-dot" data-failed role="img" aria-label="A tool failed" /> : null}

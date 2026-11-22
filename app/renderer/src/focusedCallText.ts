@@ -20,8 +20,9 @@
  */
 import type { TasksSnapshot } from '../../shared/protocol.js'
 import { deriveAgentDisplayVocabulary } from './agentIdentity.js'
-import { askUserQuestionTranscriptPresentation } from './askUserQuestionTranscript.js'
+import { askUserQuestionTranscriptPresentation, isUserRejectionResult } from './askUserQuestionTranscript.js'
 import type { FocusedCall } from './focusedLive.js'
+import { selectToolDiffs } from './toolDiffs.js'
 import { parseListPeersResult } from './listPeersCard.js'
 import { PEER_TONE_CLASS, peerToolPresentation } from './peerSurfaces.js'
 import { FAMILY_STYLE } from './toolCardPalette.js'
@@ -48,7 +49,7 @@ export type FocusedCallContext = {
 export type FocusedCallLine = {
   phase: FocusedCallPhase
   verb: string
-  verbTone: 'live' | 'queued' | 'warn' | null
+  verbTone: 'live' | 'queued' | 'warn' | 'fail' | null
   target: string
   targetFace: 'mono' | 'sans'
   /** Rendered after the target as " · detail" in the sans face. */
@@ -274,12 +275,20 @@ function phaseVerb(phase: FocusedCallPhase, words: Words, asking: boolean): read
   }
 }
 
+/** An edit that changed nothing uses a failure verb. */
+function failedEditVerb(call: FocusedCall, phase: FocusedCallPhase): readonly [string, 'fail'] | null {
+  if (phase !== 'failed' || (call.toolFamily !== 'edit' && call.toolFamily !== 'write') || selectToolDiffs(call.result).length) return null
+  const write = call.toolFamily === 'write'
+  if (isUserRejectionResult(call.result)) return [write ? 'Declined write to' : 'Declined edit to', 'fail']
+  return [write ? 'Failed to write' : 'Failed to edit', 'fail']
+}
+
 export function focusedCallLine(call: FocusedCall, ctx: FocusedCallContext): FocusedCallLine {
   const phase = focusedCallPhase(call, ctx.signalled)
   const words = callWords(call, ctx)
   const mark = focusedCallMark(call)
-  const [verb, verbTone] = codeModeForRow(call)?.status === 'yielded' ? ['Paused', null] as const :
-    call.toolName === 'REPL' && phase === 'preparing' ? ['Writing script', 'live'] as const : phaseVerb(phase, words, call.toolName === 'AskUserQuestion')
+  const [verb, verbTone] = failedEditVerb(call, phase) ?? (codeModeForRow(call)?.status === 'yielded' ? ['Paused', null] as const :
+    call.toolName === 'REPL' && phase === 'preparing' ? ['Writing script', 'live'] as const : phaseVerb(phase, words, call.toolName === 'AskUserQuestion'))
   return { phase, verb, verbTone, target: words.target, targetFace: words.face ?? 'mono', detail: words.detail ?? null,
     ...mark, background: backgroundOf(call, ctx) }
 }

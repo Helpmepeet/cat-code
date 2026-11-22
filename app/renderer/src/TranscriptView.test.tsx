@@ -1444,7 +1444,7 @@ test('P4-18b: a collapsed Write-create card counts input content before a result
     }),
   )
 
-  expect(html).toContain('>+3</span>')
+  expect(html).toContain('>+2</span>')
   expect(html).not.toContain('>−')
 })
 
@@ -6385,25 +6385,26 @@ test('a run whose files share no directory keeps whole paths on its rows', () =>
   expect(text).toContain('/var/log/app.log')
 })
 
-test('a ranged read states its range, a whole-file read says nothing', () => {
-  const ranged = toolRow({
-    id: 'r1',
+test('grouped ranged reads count distinct files and show only counts the ranges do not tell you', () => {
+  const ranged = (id: string, offset: number, limit: number, content: string) => toolRow({
+    id,
     toolName: 'Read',
     toolFamily: 'read',
-    input: { file_path: '/w/big.ts', offset: 811, limit: 50 },
+    input: { file_path: '/w/big.ts', offset, limit },
     status: 'success',
-    result: { content: '811\tconst x = 1', isError: false, diff: null },
+    result: { content, isError: false, diff: null },
   })
-  const html = renderMany([ranged, runReadRow('r2', '/w/small.ts')], true)
-  const text = visibleText(html)
-
-  // `offset` is ONE-based and becomes the engine's `startLine`, so the label must
-  // read the same number the body's gutter prints right below it. An earlier
-  // version added one and contradicted its own gutter.
-  expect(text).toContain('lines 811 to 860')
-  expect(text).not.toContain('lines 812')
-  // The neighbouring whole-file read claims no range at all.
-  expect(occurrences(text, 'lines 811 to 860')).toBe(1)
+  const text = visibleText(renderMany([
+    ranged('r1', 811, 2, '811\tone\n812\ttwo'),
+    ranged('r2', 861, 3, '861\tlast'),
+    ranged('r3', 900, 5, '<system-reminder>Warning: the file exists but is shorter than the provided offset (900). The file has 861 lines.</system-reminder>'),
+  ], true))
+  expect(occurrences(text, '1 file')).toBe(1)
+  expect(text).toContain('lines 811 to 812')
+  expect(text).not.toContain('Read 2 lines')
+  expect(text).toContain('lines 861 to 863')
+  expect(text).toContain('Read 1 line')
+  expect(text).toContain('Read 0 lines')
 })
 
 test('a successful read that returned no file reports NO line count', () => {
@@ -6451,7 +6452,7 @@ test('a lone read is NOT grouped — it keeps the single-card relative-path fram
   expect(visibleText(html)).not.toContain('/repo/app/shared/protocol.ts')
 })
 
-test('one failed member fails the whole run and says so on the member too', () => {
+test('one failed member fails the whole run and the member dot stays accessible', () => {
   const html = renderMany([
     runReadRow('r1', '/w/a.ts'),
     runReadRow('r2', '/w/b.ts'),
@@ -6464,7 +6465,8 @@ test('one failed member fails the whole run and says so on the member too', () =
 
   // Head reports the worst outcome, and the failed member opens itself so the
   // reason is on screen without a click.
-  expect(occurrences(html, 'failed')).toBe(2)
+  expect(html).not.toContain('>failed</span>')
+  expect(occurrences(html, 'role="img" aria-label="failed"')).toBe(2)
   expect(html).not.toContain('>done<')
   expect(visibleText(html)).toContain('File does not exist: /w/gone.ts')
 })
@@ -6531,10 +6533,10 @@ function grepRow(
 test('adjacent searches collapse into ONE card that counts the patterns', () => {
   const html = renderMany([
     grepRow('g1', 'ToolCardShell', 'Found 2 files\na.ts\nb.ts'),
-    grepRow('g2', 'FrameEShell', 'Found 1 file\nc.ts'),
+    grepRow('g2', 'ToolCardShell', 'Found 1 file\nc.ts'),
   ])
 
-  expect(html).toContain('2 patterns')
+  expect(html).toContain('1 pattern')
   expect(occurrences(html, '>Search</span>')).toBe(1)
 })
 
@@ -6571,8 +6573,8 @@ test('a search run sums its members only when they agree on the unit', () => {
     true,
   )
 
-  // Agreeing: the prototype's own `M matches · N patterns`.
-  expect(agreeing).toContain('3 matches · 2 patterns')
+  expect(agreeing).toContain('>3 matches<')
+  expect(occurrences(visibleText(agreeing), '2 patterns')).toBe(1)
   // Mixed: no invented total, just the pattern count.
   expect(mixed).toContain('>2 patterns<')
   expect(mixed).not.toContain('·')
@@ -6618,7 +6620,8 @@ test('a failed search fails the run and reports no count for that member', () =>
     grepRow('g2', 'bad(', 'rg: unclosed group', { status: 'error', isError: true }),
   ])
 
-  expect(occurrences(html, 'failed')).toBe(2)
+  expect(html).not.toContain('>failed</span>')
+  expect(occurrences(html, 'role="img" aria-label="failed"')).toBe(2)
   expect(html).not.toContain('>done<')
 })
 
@@ -6681,13 +6684,14 @@ test('a run head keeps its own expansion as the run grows', () => {
 
   const two = renderWithStore([a, b], store)
   expect(two).toContain('2 files')
-  expect(two).not.toContain('2 files read') // collapsed: no sub line
+  expect(visibleText(two)).not.toContain('b.ts')
 
   // The user opens the run head, then a third read lands.
   store.set(`run:${a.kind === 'tool-use' ? a.toolUseId : ''}`, true)
   const three = renderWithStore([a, b, c], store)
 
-  expect(three).toContain('3 files read') // still open, now counting three
+  expect(three).toContain('3 files')
+  expect(visibleText(three)).toContain('c.ts')
 })
 
 test('a pinned run stays open when a member is closed, siblings intact', () => {
@@ -6714,7 +6718,6 @@ test('a pinned run stays open when a member is closed, siblings intact', () => {
   store.set(`run:${idA}`, true)
   const after = renderWithStore([a, b], store)
 
-  expect(after).toContain('2 files read') // sub line present: head still open
   expect(visibleText(after)).toContain('b.ts') // the sibling did not vanish
   expect(visibleText(after)).not.toContain('HELD_OPEN_BODY') // that file did close
 })
@@ -6730,7 +6733,7 @@ test('without the pin, a closed member WOULD have collapsed the run', () => {
 
   store.set(idA, false) // closed, and nothing pinned the run
 
-  expect(renderWithStore([a, b], store)).not.toContain('2 files read')
+  expect(visibleText(renderWithStore([a, b], store))).not.toContain('b.ts')
 })
 
 test('a member the user CLOSED does not drag the run head open', () => {
@@ -6744,7 +6747,7 @@ test('a member the user CLOSED does not drag the run head open', () => {
   const html = renderWithStore([a, b], store)
 
   expect(html).toContain('2 files')
-  expect(html).not.toContain('2 files read') // sub line absent: head collapsed
+  expect(visibleText(html)).not.toContain('b.ts')
   expect(visibleText(html)).not.toContain('SHUT_BODY')
 })
 

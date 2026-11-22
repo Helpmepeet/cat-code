@@ -365,6 +365,64 @@ test('collapsed partial receipts keep paths visible and large lists bounded for 
   }
 })
 
+test('the stopped receipt follows whether every changed file is visible in the Script', async () => {
+  const paths = ['/repo/first.ts', '/repo/second.ts']
+  const value = row('write-loop', {
+    status: 'failed', code: 'writeAll();',
+    changedFiles: paths.map(path => ({ path })),
+    calls: paths.map((file_path, index) => ({
+      name: 'Write', toolUseId: `write-${index}`, input: { file_path }, status: 'completed', line: 1,
+    })),
+  })
+  const tree = await harness.mount(transcript([value]))
+  const receipt = () => tree.container.querySelector('.code-mode-partial')
+  const group = () => tree.container.querySelector('.code-mode-group-header button')!
+  expect(receipt()?.textContent).toContain('first.ts')
+  expect(receipt()?.textContent).toContain('second.ts')
+  await click(group())
+  expect(tree.container.querySelector('.code-mode-group-body')?.textContent).toContain('second.ts')
+  expect(receipt()).toBeNull()
+  await click(group())
+  expect(receipt()).not.toBeNull()
+  await click(tree.container.querySelector('.code-mode-disclosure')!)
+  expect(receipt()).not.toBeNull()
+  expect(tree.container.querySelector('.code-mode-group-header')).toBeNull()
+})
+
+test('Script patch files open independently and send the selected diff to full output', async () => {
+  const fileDiffs = [
+    { filePath: '/repo/added.ts', operation: 'add' as const, hunks: [] },
+    { filePath: '/repo/removed.ts', operation: 'delete' as const,
+      hunks: [{ oldStart: 1, oldLines: 1, newStart: 0, newLines: 0, lines: ['-old'] }] },
+  ]
+  const value = row('patch-script', {
+    code: 'apply_patch();',
+    calls: [{ name: 'apply_patch', toolUseId: 'patch', input: {}, status: 'completed', line: 1 }],
+    changedFiles: fileDiffs.map(diff => ({ path: diff.filePath })),
+  })
+  const patch: NestedToolUseRow = {
+    ...row('patch'), parentToolUseId: value.toolUseId, toolName: 'apply_patch', toolFamily: 'edit',
+    result: { content: 'Patch applied', isError: false, diff: null, fileDiffs },
+  }
+  value.children = [patch]
+  const opened: (number | undefined)[] = []
+  const tree = await harness.mount(<ToolOutputContext.Provider value={(_row, index) => { opened.push(index) }}>
+    {transcript([value])}
+  </ToolOutputContext.Provider>)
+  const [added, removed] = [...tree.container.querySelectorAll('.code-mode-single button[aria-expanded]')]
+  expect(added?.textContent).toContain('added.ts')
+  expect(removed?.textContent).toContain('removed.ts')
+  expect(removed?.textContent).not.toMatch(/\bEdit\b/i)
+  await click(added!)
+  expect(added?.getAttribute('aria-expanded')).toBe('false')
+  expect(removed?.getAttribute('aria-expanded')).toBe('true')
+  expect(tree.container.querySelector('.code-mode-member-body')?.textContent).toContain('Deleted')
+  const full = [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Open full output')
+  expect(full).toBeDefined()
+  await click(full!)
+  expect(opened).toEqual([1])
+})
+
 test('ordinary and MCP audit-shaped results cannot impersonate Script transcript or inspector', async () => {
   for (const toolName of ['Bash', 'mcp__foreign__audit']) {
     const ordinary = { ...row(`lookalike-${toolName}`), toolName }

@@ -271,10 +271,9 @@ export function TasksDialog({
         <div className="flex items-center justify-between gap-3 border-b border-shell-seam px-[18px] py-3.5">
           <div>
             <div className="text-sm font-semibold text-text-primary">Tasks</div>
-            <div className="mt-0.5 text-xs text-text-subtle">
-              {active.length} active · {completed.length} completed
-              {!hasActiveSession ? ' · no active session' : ''}
-            </div>
+            {hasActiveSession ? null : <div className="mt-0.5 text-xs text-text-subtle">
+              No active session
+            </div>}
           </div>
           <button
             aria-label="Close (Esc)"

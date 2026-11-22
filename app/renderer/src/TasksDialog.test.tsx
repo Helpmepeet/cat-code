@@ -83,8 +83,10 @@ test('renders active and completed task rows with their labels and kind badge', 
   expect(html).toContain('Nightly cleanup')
   expect(html).toContain('Remote')
   expect(html).toContain('Dream')
-  expect(html).toContain('1 active')
-  expect(html).toContain('1 completed')
+  expect(html).toMatch(/>Active<\/span><div[^>]*><\/div><span[^>]*>1<\/span>/)
+  expect(html).toMatch(/>Completed<\/span><div[^>]*><\/div><span[^>]*>1<\/span>/)
+  expect(html).not.toContain('1 active')
+  expect(html).not.toContain('1 completed')
 })
 
 test('excludes delegated agents from task rows and both task counts', () => {
@@ -111,8 +113,8 @@ test('excludes delegated agents from task rows and both task counts', () => {
   )
   const chip = (label: string) =>
     html.match(new RegExp(`${label}<span[^>]*>(\\d+)</span>`))?.[1]
-  expect(html).toContain('1 active')
-  expect(html).toContain('0 completed')
+  expect(html).toMatch(/>Active<\/span><div[^>]*><\/div><span[^>]*>1<\/span>/)
+  expect(html).not.toContain('>Completed</span>')
   expect(chip('Tasks')).toBe('1')
   expect(chip('Workers')).toBe('2')
   expect(html).not.toContain('Inspect the retry helper')
@@ -141,8 +143,8 @@ test('an agents-only session points the empty Tasks tab at Workers', () => {
       }}
     />,
   )
-  expect(html).toContain('0 active')
-  expect(html).toContain('0 completed')
+  expect(html).not.toContain('0 active')
+  expect(html).not.toContain('0 completed')
   expect(html).toContain('No background tasks')
   expect(html).toContain('3 workers are running, in Workers')
   expect(html).not.toContain('Run a background')

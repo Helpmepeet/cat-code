@@ -167,10 +167,10 @@ function ResultBody({ model, row }: { model: EmailToolPresentation; row: NestedT
       if (!model.messages.length) return <EmailStatus title="No emails match this search." />
       const unreadKnown = model.messages.every(message => message.unread !== undefined)
       const unread = model.messages.filter(message => message.unread).length
+      const date = sharedDate(model.messages)
       return <>
-        <div className="email-tool-meta"><span>{sharedDate(model.messages) ?? `${model.messages.length} emails`}</span>{unreadKnown ? <span>{unread} unread</span> : null}</div>
+        {date || unreadKnown ? <div className="email-tool-meta">{date ? <span>{date}</span> : null}{unreadKnown ? <span>{unread} unread</span> : null}</div> : null}
         <EmailMessages messages={model.messages} toolUseId={row.toolUseId} />
-        {model.hasMore || model.nextPageToken ? <p className="email-tool-more">{model.messages.length} emails shown · More results available</p> : null}
       </>
     }
     case 'message': return <><h3 className="email-title">{model.message.subject || '(No subject)'}</h3><MessageBody message={model.message} /></>
@@ -180,9 +180,9 @@ function ResultBody({ model, row }: { model: EmailToolPresentation; row: NestedT
       {label.type === 'system' || label.type === 'user' ? <span className="email-label-kind">{label.type === 'system' ? 'System' : 'Custom'}</span> : null}
       <span className="email-label-id">{typeof label.id === 'string' ? label.id : ''}</span>
     </li>)}</ul> : <EmailStatus title="No labels returned." />
-    case 'send': return <><p className="email-sent"><span className="email-sent-check" aria-hidden="true">✓</span>Email sent</p><EmailFields values={[
+    case 'send': return <EmailFields values={[
       ['From', model.from], ['Message', model.messageId], ['Thread', model.threadId],
-    ]} /></>
+    ]} />
     case 'dry-run': return <><EmailStatus title="Email not sent." detail="This request was a preview only." /><EmailFields values={['from', 'to', 'cc', 'bcc', 'subject'].map(name => [name === 'subject' ? 'Subject' : name[0]!.toUpperCase() + name.slice(1), typeof model.request[name] === 'string' ? model.request[name] as string : undefined] as const)} /></>
     case 'accounts': return null
     case 'failure': return <EmailStatus failed title={model.timedOut ? 'Gmail didn’t finish within the time limit.' : 'The email request failed.'} detail={model.identity?.operation === 'send' ? 'Delivery isn’t confirmed. Check Sent before trying again.' : 'No complete result is available.'} />

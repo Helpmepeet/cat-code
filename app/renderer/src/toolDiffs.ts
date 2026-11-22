@@ -8,6 +8,16 @@ export function selectToolDiffs(
   return result?.diff ? [result.diff] : []
 }
 
+/** A terminal newline ends the last line instead of starting another one. */
+export function countWrittenLines(content: string): number {
+  if (!content.length) return 0
+  let lines = 1
+  for (let index = 0; index < content.length - 1; index++) {
+    if (content[index] === '\n') lines++
+  }
+  return lines
+}
+
 const diffCounts = new WeakMap<ToolDiffProjection, { adds: number; dels: number }>()
 
 /** +adds / −dels across every hunk (from the `+`/`-` line prefixes). */

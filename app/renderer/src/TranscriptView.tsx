@@ -193,7 +193,7 @@ import {
 } from './leaseState.js'
 import { ToolOutputContext } from './toolOutputPanel.js'
 import { FileDiffNavigator } from './FileDiffNavigator.js'
-import { countDiff, selectToolDiffs } from './toolDiffs.js'
+import { countDiff, countWrittenLines, selectToolDiffs } from './toolDiffs.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import {
   FilePathMenuContext,
@@ -2233,6 +2233,9 @@ function ToolCardShell({
   tone,
   targetNode,
   headerless = false,
+  targetPath,
+  nothingToOpen = false,
+  reviewOnly = false,
   children,
 }: {
   family: ToolFamily
@@ -2286,8 +2289,15 @@ function ToolCardShell({
   targetNode?: ReactNode
   /** The line above already names this call, so the body stands alone and stays open. */
   headerless?: boolean
+  /** Full path to show on hover when the title identifies the patch file. */
+  targetPath?: string
+  /** Results with no details use a static header. */
+  nothingToOpen?: boolean
+  /** The Auto review reason is the whole body. */
+  reviewOnly?: boolean
   children?: ReactNode
 }) {
+  const Head = nothingToOpen ? 'div' : 'button'
   const focused = useContext(TranscriptModeContext).mode === 'focused'
   const inheritedReview = useContext(AutoModeReviewContext)
   const review = callGroup ? undefined : inheritedReview
@@ -2308,7 +2318,7 @@ function ToolCardShell({
   }
   const st = STATE_STYLE[status]
   const { turnLive } = useContext(TranscriptMotionContext)
-  const hasBody = children !== undefined && children !== null
+  const hasBody = reviewOnly || (children !== undefined && children !== null)
   const { style } = useContext(ToolCardStyleContext)
   const { results } = useContext(TranscriptMotionContext)
   const filePathContext = useContext(FilePathMenuContext)
@@ -2321,11 +2331,9 @@ function ToolCardShell({
     ? <BashTailPeek tail={selectPeekLines(failureOutput.split('\n'))} /> : collapsedExtra
   return (
     <div className={`${TOOL_CARD_SHELL_CLASS[style]} relative`}>
-      {headerless && hasBody ? null : <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        className={`${TOOL_CARD_HEADER_CLASS[style]}${showFileOpen ? ' pr-20' : ''}`}
+      {headerless && hasBody ? null : <Head
+        {...(nothingToOpen ? {} : { type: 'button' as const, onClick: () => setExpanded(!expanded), 'aria-expanded': expanded })}
+        className={`${nothingToOpen ? TOOL_CARD_HEADER_CLASS[style].replace(' hover:bg-white/[0.04]', '') : TOOL_CARD_HEADER_CLASS[style]}${showFileOpen ? ' pr-20' : ''}`}
       >
         <span className={`w-4 shrink-0 text-center text-[13px] ${fam.color}`} aria-hidden>
           {fam.mark}
@@ -2340,6 +2348,7 @@ function ToolCardShell({
             targetNode === undefined ? 'font-mono' : 'font-sans'
           } ${targetFilePath ? 'hover:text-accent-soft' : ''}`}
           data-file-actions={targetFilePath ? '' : undefined}
+          title={targetPath}
           onContextMenu={
             targetFilePath
               ? event => {
@@ -2359,7 +2368,12 @@ function ToolCardShell({
           {targetNode !== undefined ? (
             targetNode
           ) : targetHover === undefined ? (
-            target
+            targetPath !== undefined && dirname(target) ? (
+              <span className="flex min-w-0">
+                <span className="min-w-0 truncate">{dirname(target)}</span>
+                <span className="max-w-full shrink-0 truncate">{basename(target)}</span>
+              </span>
+            ) : target
           ) : (
             <>
               <span className="group-hover:hidden group-focus-visible:hidden">
@@ -2383,7 +2397,7 @@ function ToolCardShell({
           role="img"
           aria-label={st.word}
         />
-      </button>}
+      </Head>}
       {showFileOpen ? <div className={headerless && hasBody ? 'flex justify-end' : `absolute top-0 flex items-center ${AGENT_BACKGROUND_ANCHOR_CLASS[style]}`}><button type="button" className="rounded px-2 py-0.5 text-[11px] text-text-muted hover:bg-white/[0.06] hover:text-text-primary" onClick={openPaneTarget!} aria-label={`Open ${fileOpen?.path ?? localhostOpen!.url}`}>Open</button></div> : null}
       {!expanded && peek ? (
         <div
@@ -2399,7 +2413,7 @@ function ToolCardShell({
           {sub ? (
             <div className={TOOL_CARD_SUB_CLASS[style]}>{sub}</div>
           ) : null}
-          <div
+          {reviewOnly && style === 'cards' && review?.outcome === 'allowed' ? null : <div
             className={`${TOOL_CARD_BODY_INNER_CLASS[style]}${animateExpandedBody ? ' animate-arrive' : ''}`}
             ref={animateExpandedBody && entranceKey ? results.refFor(entranceKey, 'animate-arrive') : undefined}
             onAnimationEnd={entranceKey ? event => results.onAnimationEnd(entranceKey, event) : undefined}
@@ -2407,7 +2421,7 @@ function ToolCardShell({
             <AutoModeReviewReason review={review} />
             {children}
             {style === 'lines' ? <AutoModeReviewFooter review={review} /> : null}
-          </div>
+          </div>}
           {style === 'cards' ? <AutoModeReviewFooter review={review} fullWidth /> : null}
         </div>
       ) : null}
@@ -2826,6 +2840,10 @@ function renderScriptCall(row: ToolUseNestedRow, presentation: CodeModeMemberPre
 const CodeModeMember = memo(function CodeModeMember({ row, ...presentation }: CodeModeMemberPresentation & { row: ToolUseNestedRow }) {
   const approvals = useContext(MemoryRecallApprovalContext)
   const waiting = !!approvals?.[row.toolUseId]
+  const diffs = row.result?.fileDiffs
+  if (row.toolFamily === 'edit' && !row.children.length && diffs && diffs.length > 1) {
+    return <PatchFileMembers row={row} diffs={diffs} presentation={presentation} waiting={waiting} />
+  }
   if (row.children.length || row.toolName === 'REPL' || row.toolName === 'AskUserQuestion' ||
       row.toolName === 'ToolSearch' || row.toolFamily === 'agent' || row.toolFamily === 'imagegen' ||
       row.toolFamily === 'computer' || row.toolFamily === 'agent-control' || peerToolPresentation(row.toolName, row.input) ||
@@ -2843,8 +2861,26 @@ const CodeModeMember = memo(function CodeModeMember({ row, ...presentation }: Co
   return <CompactCodeModeMember row={row} {...presentation} waiting={waiting} />
 })
 
+function PatchFileMembers({ row, diffs, presentation, waiting }: {
+  row: ToolUseNestedRow; diffs: ToolDiffProjection[]; presentation: CodeModeMemberPresentation; waiting: boolean
+}) {
+  const { expanded: defaults } = useContext(ToolsExpandedContext)
+  const openOutput = useContext(ToolOutputContext)
+  const keys = useMemo(() => diffs.map((diff, index) => `${row.toolUseId}:file:${index}:${diff.filePath}`), [row, diffs])
+  const members = useMemo(() => diffs.map((diff, index): ToolUseNestedRow => ({
+    ...row, toolUseId: keys[index]!, input: { file_path: diff.filePath }, codeModeInputOmitted: index === 0 && row.codeModeInputOmitted ? true : undefined,
+    result: row.result ? { ...row.result, fileDiffs: undefined, diff } : null,
+    autoModeReview: index === 0 ? row.autoModeReview : undefined,
+  })), [row, diffs, keys])
+  return <BoundedChildList keys={keys} estimatedChildHeight={22} renderChild={index =>
+    <CompactCodeModeMember row={members[index]!} {...presentation} file={diffs[index]!.filePath} openResult={defaults}
+      error={index === 0 ? presentation.error : undefined} sourceLine={index === 0 ? presentation.sourceLine : undefined} waiting={waiting}
+      patchBody={<FileDiffNavigator diffs={[diffs[index]!]} showPath={false} renderDiff={diff =>
+        <DiffView diff={diff} onOpenFull={openOutput ? () => openOutput(row, index) : null} />} />} />} />
+}
+
 function CompactCodeModeMember({ row, status, error, cwd, file, sourceLine, onRevealLine,
-  grouped, pathPrefix, openResult, waiting }: CodeModeMemberPresentation & { row: ToolUseNestedRow; waiting: boolean }) {
+  grouped, pathPrefix, openResult, waiting, patchBody }: CodeModeMemberPresentation & { row: ToolUseNestedRow; waiting: boolean; patchBody?: ReactNode }) {
   const { expanded: defaults } = useContext(ToolsExpandedContext)
   const focused = useContext(FocusedNamedCallContext) !== null
   const motion = useContext(TranscriptMotionContext)
@@ -2882,9 +2918,9 @@ function CompactCodeModeMember({ row, status, error, cwd, file, sourceLine, onRe
         onAnimationEnd={resolving ? event => motion.results.onAnimationEnd(row.id, event) : undefined}>
         <AutoModeReviewReason review={row.autoModeReview} />
         {separateError ? <pre className="code-mode-error">{error}</pre> : null}
-        {content || !separateError || selectToolDiffs(row.result).length > 0 ? <ToolCardBody
+        {patchBody ?? (content || !separateError || selectToolDiffs(row.result).length > 0 ? <ToolCardBody
           row={row} content={content} ack={toolAckForResult(row.result)} omitDuplicateDenial
-        /> : null}
+        /> : null)}
         <AutoModeReviewFooter review={row.autoModeReview} />
       </div>
     ) : null}
@@ -3016,6 +3052,12 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
     row.toolFamily === 'edit' || row.toolFamily === 'write'
       ? diffCountBadge(row)
       : undefined
+  const onlyDiff = row.result?.fileDiffs?.length === 1 ? row.result.fileDiffs[0] : undefined
+  // Only a header naming that same file can stand in for the path.
+  const targetPath = onlyDiff && target === displayFilePath(onlyDiff.filePath, filePathContext?.cwd ?? null)
+    ? onlyDiff.filePath : undefined
+  const launchOnly = row.status === 'success' && row.toolFamily === 'skill' && content.trim() === `Launching skill: ${target}`
+  const reviewWords = !!visibleAutoModeReason(row.autoModeReview)
   return (
     <div className="w-full">
       <ToolCardShell
@@ -3032,6 +3074,9 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id, line: editLocationLabel(row)?.line } : undefined}
         headerBadge={headerBadge}
         targetHover={deriveTargetHover(row)}
+        targetPath={targetPath}
+        nothingToOpen={launchOnly && !reviewWords}
+        reviewOnly={launchOnly && reviewWords}
         headerless={row.toolFamily === 'bash' && row.status !== 'pending' && namedCallId === row.toolUseId}
         expansionKey={row.toolUseId}
         defaultExpanded={
@@ -3050,7 +3095,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
           ) : null
         }
       >
-        <ToolCardBody row={row} content={content} ack={ack} omitDuplicateDenial />
+        {!launchOnly ? <ToolCardBody row={row} content={content} ack={ack} omitDuplicateDenial showPath={targetPath === undefined} /> : null}
       </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 border-l border-accent/20 pl-3">
@@ -3558,21 +3603,9 @@ function ToolRunCard({
 }
 
 /**
- * The head's target and sub, per family, in the prototype's own words:
- * `N files` / `N files read` (`Messages.jsx:585-590`) and
- * `N patterns` / `M matches · N patterns` (`:677-680`).
- *
- * A READ run also hoists the directory its files share into `badge`, so the shared
- * part is stated once on the head instead of repeating down every row. That is the
- * design the operator picked from a side-by-side comparison, and it is what makes
- * the rows narrow enough to read. `commonDirPrefix` hoists nothing unless the run
- * really shares a full directory segment, so a run spanning two roots keeps whole
- * paths on its rows rather than being told they share `/`.
- *
- * The search total degrades rather than lying. A pattern run can mix output modes
- * (`grepResult.ts`), and summing a file count into a match count would print a
- * figure that means nothing, so `totalGrepDigest` returns null for a mixed run and
- * the sub falls back to the pattern count alone.
+ * Read titles count distinct files and hoist their shared directory. Search
+ * titles count distinct patterns, with an aggregate result count only when
+ * the members report the same unit.
  */
 function toolRunHead(
   family: ToolRunFamily,
@@ -3610,12 +3643,13 @@ function toolRunHead(
     }
   }
   if (family === 'read') {
-    const target = `${members.length} ${members.length === 1 ? 'file' : 'files'}`
-    const hoistedPrefix = commonDirPrefix(members.map(memberReadPath))
+    const paths = members.map(memberReadPath)
+    const fileCount = new Set(paths.map(path => scopedTranscriptFilePath(path, cwd ?? undefined))).size
+    const target = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`
+    const hoistedPrefix = commonDirPrefix(paths)
     const displayPrefix = displayFilePath(hoistedPrefix, cwd)
     return {
       target,
-      sub: `${target} read`,
       hoistedPrefix,
       badge:
         displayPrefix.length > 0 ? (
@@ -3625,11 +3659,12 @@ function toolRunHead(
         ) : undefined,
     }
   }
-  const target = `${members.length} ${members.length === 1 ? 'pattern' : 'patterns'}`
+  const patternCount = new Set(members.map(member => deriveTarget(member))).size
+  const target = `${patternCount} ${patternCount === 1 ? 'pattern' : 'patterns'}`
   const total = totalGrepDigest(members.map(memberGrepDigest))
   return {
     target,
-    sub: total === null ? target : `${formatGrepDigest(total)} · ${target}`,
+    sub: total === null ? undefined : formatGrepDigest(total),
     hoistedPrefix: '',
     badge: undefined,
   }
@@ -3756,6 +3791,7 @@ const ToolRunRow = memo(function ToolRunRow({
   const st = STATE_STYLE[row.status]
   const { turnLive } = useContext(TranscriptMotionContext)
   const fam = FAMILY_STYLE[family]
+  const shownDigest = family === 'read' ? rangedReadDigest(row, digest) : digest
   return (
     <div>
       <button
@@ -3779,9 +3815,9 @@ const ToolRunRow = memo(function ToolRunRow({
           {fam.mark}
         </span>
         <ToolRunRowLabel family={family} row={row} hoistedPrefix={hoistedPrefix} />
-        {digest !== null ? (
+        {shownDigest !== null ? (
           <span className="shrink-0 font-mono text-[11px] text-text-subtle">
-            {digest}
+            {shownDigest}
           </span>
         ) : null}
         {family === 'edit' ? diffCountBadge(row) : null}
@@ -3790,9 +3826,9 @@ const ToolRunRow = memo(function ToolRunRow({
           <span className="flex shrink-0 items-center gap-1.5">
             <span
               className={`h-1.5 w-1.5 rounded-full transition-colors duration-[var(--motion-fast)] ${st.dot} ${st.pulse && turnLive ? 'animate-pulse' : ''}`}
-              aria-hidden
+              {...(row.status === 'error' ? { role: 'img', 'aria-label': st.word, title: st.word } : { 'aria-hidden': true })}
             />
-            {row.status !== 'success' ? <span className={`text-[10.5px] ${st.color}`}>{st.word}</span> : null}
+            {row.status !== 'success' && row.status !== 'error' ? <span className={`text-[10.5px] ${st.color}`}>{st.word}</span> : null}
           </span>
         ) : null}
       </button>
@@ -3956,6 +3992,15 @@ function firstChangedLine(hunk: ToolDiffProjection['hunks'][number] | undefined)
   if (!hunk) return
   const leading = hunk.lines.findIndex(line => line.startsWith('+') || line.startsWith('-'))
   return leading === -1 ? undefined : Math.max(1, hunk.newStart + leading)
+}
+
+/** A range states the count unless the file returned fewer lines. */
+function rangedReadDigest(row: ToolRunMember, digest: string | null): string | null {
+  if (readRangeLabel(row) === null) return digest
+  const content = row.result?.content ?? ''
+  if (row.status === 'success' && content.startsWith('<system-reminder>') && content.includes('Warning: the file exists but')) return 'Read 0 lines'
+  const limit = row.input['limit']
+  return typeof limit === 'number' && digest === `Read ${limit} ${limit === 1 ? 'line' : 'lines'}` ? null : digest
 }
 
 /** The first non-blank line of the text an edit was asked to replace. */
@@ -4223,11 +4268,11 @@ function RejectedResumeCard({
         </span>
         <span className="size-[7px] shrink-0 rounded-full bg-tone-good" aria-hidden />
       </button>
-      <div className={TOOL_CARD_BAND_CLASS[cardStyle]}>
+      {!expanded ? <div className={TOOL_CARD_BAND_CLASS[cardStyle]}>
         <span className="block truncate font-mono text-[11px] leading-relaxed text-tone-danger">
           {ack.message}
         </span>
-      </div>
+      </div> : null}
       {expanded ? (
         <div
           className={`${TOOL_CARD_BODY_CLASS[cardStyle]} ${TOOL_CARD_BODY_INNER_CLASS[cardStyle]}`}
@@ -4629,11 +4674,13 @@ function ToolCardBody({
   content,
   ack,
   omitDuplicateDenial = false,
+  showPath = true,
 }: {
   row: ToolUseNestedRow
   content: string
   ack: ToolAck | null
   omitDuplicateDenial?: boolean
+  showPath?: boolean
 }) {
   // Read before any early return so the hook order is stable across families.
   // The reveal band's escape hatch, over this same real projected row; null
@@ -4645,6 +4692,7 @@ function ToolCardBody({
     return (
       <FileDiffNavigator
         diffs={row.result.fileDiffs}
+        showPath={showPath}
         renderDiff={(diff, index) => (
           <DiffView diff={diff} onOpenFull={openOutput ? () => openOutput(row, index) : null} />
         )}
@@ -5179,7 +5227,11 @@ function AdditionsBody({
   onOpenFull: (() => void) | null
   toolUseId: string
 }) {
-  const lines = useMemo(() => content.split('\n'), [content])
+  const lines = useMemo(() => {
+    const lines = content.split('\n')
+    if (content.endsWith('\n')) lines.pop()
+    return lines
+  }, [content])
   const lang = readSourceLanguage(filePath)
   const { window, visibleLines, revealMore } = useInlineOutputWindow(
     lines,
@@ -6943,7 +6995,7 @@ function rowDiffCounts(row: ToolUseNestedRow): { adds: number; dels: number } | 
         row.result?.isError !== true &&
         typeof row.input.content === 'string' &&
         row.input.content.length > 0
-      ? { adds: row.input.content.split('\n').length, dels: 0 }
+      ? { adds: countWrittenLines(row.input.content), dels: 0 }
       : null
 }
 

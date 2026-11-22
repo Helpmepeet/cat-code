@@ -45,10 +45,7 @@
 .email-label-name { min-width:0; overflow-wrap:anywhere; }
 .email-label-kind { color:var(--text-muted); font-size:11px; }
 .email-label-id { margin-left:auto; color:var(--text-muted); font:11px var(--font-mono); overflow-wrap:anywhere; }
-.email-sent { display:flex; align-items:center; gap:8px; margin:4px 0 12px; color:var(--text-primary); font-size:14px; }
-.email-sent-check { color:var(--tone-good); }
 .email-tool-warning { padding:3px 0 3px 10px; margin:10px 0; border-left:2px solid var(--tone-warn); color:var(--conversation-ink); font-size:12px; }
-.email-tool-more { padding:10px 0 2px; color:var(--text-muted); font-size:11px; }
 .email-discovery-head { min-height:26px; color:var(--text-muted); font-size:12px; }
 .email-discovery-icon { width:16px; height:16px; flex:none; color:var(--text-subtle); }
 .email-discovery-providers { margin-left:2px; color:var(--text-muted); font-size:11px; }

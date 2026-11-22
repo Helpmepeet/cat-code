@@ -213,6 +213,21 @@ test('preparing arguments grow as streaming state and the real call replaces the
   expect(tree.container.querySelector('.focused-caret')).toBeNull()
 })
 
+test('a streamed Write adds a line only when content follows its terminal newline', async () => {
+  let state = start()
+  const stream = (event: unknown) => { state = message(state, { type: 'stream_event', event }) }
+  stream({ type: 'message_start', message: { id: 'write-forming' } })
+  stream({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'write', name: 'Write', input: {} } })
+  const append = (partial_json: string) => stream({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json } })
+  append('{"file_path":"new.ts","content":"first\\nsecond\\n')
+  const tree = await harness.mount(view(state))
+  const heading = () => tree.container.querySelector('.focused-step-head')?.textContent
+  expect(heading()).toContain('Preparing new.ts +2')
+  append('third')
+  await tree.render(view(state))
+  expect(heading()).toContain('Preparing new.ts +3')
+})
+
 test('streamed tool targets update in place in both the head and rolling calls', async () => {
   for (const rolling of [false, true]) {
     for (const [name, field, chunks] of [

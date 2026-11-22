@@ -308,7 +308,7 @@ describe('focused transcript layout', () => {
     const make = (input: Record<string, unknown>, status: 'success' | 'error', result: unknown = null) =>
       ({ ...tool('p', 'edit'), toolName: 'apply_patch', input, status, result }) as NestedTranscriptRow
     const failed = summarizeFocusedWork([make(patch('/a'), 'error', { isError: true, content: 'bad', diff: null })])
-    expect(failed).toMatchObject({ editedPaths: ['/a'], errorCount: 1, summary: 'edited 1 file' })
+    expect(failed).toMatchObject({ editedPaths: ['/a'], errorCount: 1, summary: 'tried to edit 1 file', compact: '' })
     expect(summarizeFocusedWork([make(patch('/a', '/b'), 'error', { isError: true, content: 'bad', diff: null })]).editedPaths).toEqual(['/a', '/b'])
     const diff = (filePath: string) => ({ filePath, hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-o', '+n'] }] })
     const done = make(patch('a.ts', 'b.ts'), 'success', { isError: false, content: '', diff: diff('/r/a.ts'), fileDiffs: [diff('/r/a.ts'), diff('/r/b.ts')] })

@@ -180,7 +180,8 @@ test('thread bodies remain available for full:false and headers, labels, and mis
 test('only a successful send receipt shows Email sent; errors, cancellations, dry runs and truncation never do', async () => {
   const success = row(names.send, envelope(names.send, { messageId: 'sent-id', threadId: 'thread-id', from: 'sender@example.invalid' }))
   const tree = await harness.mount(view([success]))
-  expect(tree.container.querySelector('.email-sent')?.textContent).toContain('Email sent')
+  expect(tree.container.querySelector('.email-tool-summary')?.textContent).toBe('Email sent')
+  expect(tree.container.textContent?.match(/Email sent/g)).toHaveLength(1)
   expect([...tree.container.querySelectorAll('.email-fields dt')].map(node => node.textContent)).toEqual(['From', 'Message', 'Thread'])
   const attempts = [
     row(names.send, envelope(names.send, { messageId: 'not-sent' }, { exit_code: 1, stderr: 'Failure' }), { status: 'error' }),
@@ -194,14 +195,14 @@ test('only a successful send receipt shows Email sent; errors, cancellations, dr
   ]
   for (const attempt of attempts) {
     await tree.render(view([attempt]))
-    expect(tree.container.querySelector('.email-sent')).toBeNull()
     expect(tree.container.querySelector('.email-tool-summary')?.textContent).not.toBe('Email sent')
   }
 })
 
-test('page counts never imply all search results and empty results remain distinct from errors', async () => {
+test('a search page reports pagination once and empty results remain distinct from errors', async () => {
   const tree = await harness.mount(view([row(names.search, envelope(names.search, { messages: [message], count: 1, has_more: true, nextPageToken: 'next' }))]))
-  expect(tree.container.textContent).toContain('More results available')
+  expect(tree.container.querySelector('.email-tool-summary')?.textContent).toBe('1 email · more available')
+  expect(tree.container.textContent).not.toContain('More results available')
   expect(tree.container.querySelectorAll('button').length).toBe(3)
   await tree.render(view([row(names.search, envelope(names.search, { messages: [], count: 0, has_more: false, nextPageToken: '' }))]))
   expect(tree.container.textContent).toContain('No emails match this search.')

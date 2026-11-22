@@ -116,7 +116,7 @@ function readQuestionTexts(value: unknown): string[] | null {
   return questions
 }
 
-function isUserRejectionResult(result: ToolResultProjection | null): boolean {
+export function isUserRejectionResult(result: ToolResultProjection | null): boolean {
   return (
     result?.isError === true &&
     (result.content.startsWith(USER_REJECTION_PREFIX) ||

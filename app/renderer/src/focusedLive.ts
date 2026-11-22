@@ -1,5 +1,6 @@
 import { deriveToolFamily, type FocusedLiveState, type NestedTranscriptRow } from './transcriptProjector.js'
 import type { ToolActivity } from '../../../src/app-runtime/toolActivityContract.js'
+import { countWrittenLines } from './toolDiffs.js'
 
 export type FocusedCall = Extract<NestedTranscriptRow, { kind: 'tool-use' }> & { preparing?: true; awaitingApproval?: true; additions?: number; activity?: ToolActivity }
 export function duration(ms: number): string {
@@ -27,6 +28,6 @@ export function preparingCalls(state: FocusedLiveState | null, sessionId: string
     return { kind: 'tool-use', id: `preparing:${tool.toolUseId}`, sessionId, frameId: tool.messageId, messageId: tool.messageId,
       blockIndex: tool.blockIndex, parentToolUseId: null, toolUseId: tool.toolUseId, toolName: tool.toolName, toolFamily: deriveToolFamily(tool.toolName),
       input: { ...input, file_path: file }, status: 'pending', result: null, agentCompletion: null, children: [], preparing: true,
-      additions: patch ? patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length : added ? added.split('\n').length : 0 }
+      additions: patch ? patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length : countWrittenLines(added) }
   })
 }

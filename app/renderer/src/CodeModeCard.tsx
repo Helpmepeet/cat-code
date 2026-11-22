@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useMemo, type ReactNode } from 'react'
+import { memo, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import { AutoModeReviewFooter, AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { summarizeAutoModeReviews, visibleAutoModeReason } from './autoModeReview.js'
 import { BoundedChildList } from './BoundedChildList.js'
@@ -15,7 +15,7 @@ import { codeModeMcpName, codeModeStepDirectory, codeModeStepHasError, codeModeS
 import { FilePathMenuContext } from './filePathActions.js'
 import { focusedCallPhase } from './focusedCallText.js'
 import { FAMILY_STYLE } from './toolCardPalette.js'
-import { useToolCardExpanded } from './toolCardExpansion.js'
+import { useToolCardExpanded, useToolCardExpansionStore } from './toolCardExpansion.js'
 import { TOOL_CARD_BAND_CLASS, TOOL_CARD_BODY_CLASS, TOOL_CARD_HEADER_CLASS, TOOL_CARD_SHELL_CLASS, ToolCardStyleContext } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { TranscriptFileScopeContext, scopedTranscriptFilePath } from './transcriptFileScope.js'
@@ -46,13 +46,18 @@ export function CodeModeLineLink({ line, onReveal }: { line?: number; onReveal(l
     onClick={() => onReveal(line)}>L{line}</button>
 }
 
-function CodeModeGroup({ id, step, selected, sessionId, childApprovals, onRevealLine, renderMember }: {
-  id: string
+function codeModeGroupDefaultOpen(step: CodeModeStep): boolean {
+  return step.members.some(member => codeModeStepHasError(member.status))
+}
+
+function CodeModeGroup({ expansionKey, step, selected, sessionId, childApprovals, onRevealLine, onToggleFiles, renderMember }: {
+  expansionKey: string
   step: CodeModeStep
   selected: boolean
   sessionId: NestedToolUseRow['sessionId']
   childApprovals: FocusedLiveState['awaitingApproval'] | null
   onRevealLine: (line: number) => void
+  onToggleFiles: (key: string, open: boolean) => void
   renderMember: (member: CodeModeStep['members'][number], grouped: boolean, prefix?: string) => ReactNode
 }) {
   const first = step.members[0]!
@@ -60,16 +65,17 @@ function CodeModeGroup({ id, step, selected, sessionId, childApprovals, onReveal
   const status = step.members.find(member => member.status === 'failed')?.status
     ?? step.members.find(member => member.status === 'blocked')?.status
     ?? running[0]?.status ?? step.members.find(member => member.status === 'cancelled')?.status
-  const troubled = step.members.some(member => codeModeStepHasError(member.status))
-  const [open, setOpen] = useToolCardExpanded(`code-mode-group:${id}`, troubled)
+  const [open, setOpen] = useToolCardExpanded(expansionKey, codeModeGroupDefaultOpen(step))
   const keys = useMemo(() => step.members.map(member => member.call.toolUseId), [step])
   const prefix = first.family === 'read' ? codeModeStepDirectory(step) : undefined
   const count = step.members.length
+  const fileCount = first.family === 'read' ? new Set(step.members.map(member =>
+    member.file && scopedTranscriptFilePath(member.file, member.cwd ?? undefined))).size : 0
   const label = first.family === 'edit' && first.file ? <>
     <CodeModePath path={first.file} cwd={first.cwd} sessionId={sessionId} />
     <span className="code-mode-member-aside">{count} edits</span>
   </> : first.family === 'read' ? <>
-    <span className="code-mode-member-main">{count} files</span>
+    <span className="code-mode-member-main">{fileCount} {fileCount === 1 ? 'file' : 'files'}</span>
     {prefix ? <span className="code-mode-member-aside">{prefix}</span> : null}
   </> : <>
     <span className="code-mode-member-main">{first.family === 'mcp' ? codeModeMcpName(first.call.name) : first.call.name}</span>
@@ -82,7 +88,10 @@ function CodeModeGroup({ id, step, selected, sessionId, childApprovals, onReveal
   const digest = step.adds || step.dels ? <CodeModeCounts adds={step.adds} dels={step.dels} />
     : running.length > 0 ? `${count - running.length} of ${count}` : undefined
   return <div className={`code-mode-step${selected ? ' is-selected' : ''}`}>
-    <CodeModeStepHeader className="code-mode-group-header" expanded={open} onToggle={() => setOpen(!open)}
+    <CodeModeStepHeader className="code-mode-group-header" expanded={open} onToggle={() => {
+      setOpen(!open)
+      if (first.family !== 'edit' && step.changedPaths.size) onToggleFiles(expansionKey, !open)
+    }}
       family={first.family} label={label} digest={digest} status={status} phase={phase} review={<AutoModeReviewMark summary={reviews} />}
       lineLink={sourceLine ? <CodeModeLineLink line={sourceLine} onReveal={onRevealLine} /> : null} />
     {open ? <BoundedChildList className="code-mode-group-body" keys={keys} estimatedChildHeight={22}
@@ -117,12 +126,17 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
   const id = `${row.sessionId}:${row.toolUseId}`
   const code = cell?.code ?? (typeof row.input.code === 'string' ? row.input.code : '')
   const lines = useMemo(() => code ? code.split('\n') : NO_LINES, [code])
-  const { steps, changedPaths, reasons, families } = useMemo(() => codeModeSteps({
+  const { steps, listedPaths, reasons, families } = useMemo(() => codeModeSteps({
     parent: row, calls, lineCount: lines.length, cwd, scopes: scopes ?? undefined, generation: cell?.generation,
   }), [row, calls, lines.length, cwd, scopes, cell?.generation])
   const hasCallErrors = useMemo(() => calls.some(call => !!call.error || codeModeStepHasError(call.status)), [calls])
   const [expandedChoice, setPicked] = useToolCardExpanded(row.toolUseId, row.status === 'pending' || row.status === 'error' || hasCallErrors || defaults)
   const expanded = headerless || expandedChoice
+  const expansionStore = useToolCardExpansionStore()
+  const [groupChoices, setGroupChoices] = useState<ReadonlyMap<string, boolean>>(() => new Map())
+  const onToggleFiles = useCallback((key: string, open: boolean) => {
+    setGroupChoices(choices => new Map(choices).set(key, open))
+  }, [])
   const [sourceOpen, setSourceOpen] = useToolCardExpanded(`code-mode-source:${id}`, false)
   const [outputOpen, setOutputOpen] = useToolCardExpanded(`code-mode-output:${id}`, false)
   const showLine = useCallback((line: number) => {
@@ -146,7 +160,24 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
   const statusLabel = status === 'writing' ? 'Writing' : status === 'reviewing' ? 'Reviewing' : status === 'approval' ? 'Waiting for approval' : status === 'waiting' ? 'Waiting' : status === 'yielded' ? 'Paused' : status === 'unknown' ? 'Outcome unknown' : null
   const partial = !!cell?.changedFiles.length && (codeModeStepHasError(status) || status === 'yielded')
   const unlistedChanges = useMemo(() => cell?.changedFiles.filter(file =>
-    !changedPaths.has(scopedTranscriptFilePath(file.path, cwd ?? undefined))) ?? [], [cell?.changedFiles, changedPaths, cwd])
+    !listedPaths.has(scopedTranscriptFilePath(file.path, cwd ?? undefined))) ?? [], [cell?.changedFiles, listedPaths, cwd])
+  const partialRepeatsRows = useMemo(() => {
+    if (!partial || !expanded || !cell) return false
+    const visiblePaths = new Set<string>()
+    for (const step of steps) {
+      const first = step.members[0]!
+      const key = `code-mode-group:${id}:${step.key}`
+      if (step.members.length === 1 ||
+          (expansionStore?.get(key) ?? groupChoices.get(key) ?? codeModeGroupDefaultOpen(step))) {
+        for (const path of step.changedPaths) visiblePaths.add(path)
+      } else if (first.family === 'edit' && first.file) {
+        const path = scopedTranscriptFilePath(first.file, first.cwd ?? undefined)
+        if (step.changedPaths.has(path)) visiblePaths.add(path)
+      }
+    }
+    // Keep the full receipt if any changed file is absent from the visible rows.
+    return cell.changedFiles.every(file => visiblePaths.has(scopedTranscriptFilePath(file.path, cwd ?? undefined)))
+  }, [partial, expanded, cell, steps, id, expansionStore, groupChoices, cwd])
   const changedKeys = useMemo(() => unlistedChanges.map(file => file.path), [unlistedChanges])
   const showError = cell?.error && !reasons.has(cell.error) && visibleAutoModeReason(row.autoModeReview) !== cell.error
   const loneBash = steps.length === 1 && steps[0]?.members.length === 1 && steps[0].members[0]?.call.name === 'Bash'
@@ -212,11 +243,12 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
         if (step.members.length === 1) return <div className={`code-mode-step${selected ? ' is-selected' : ''}`}>
           {renderMember(step.members[0]!, false)}
         </div>
-        return <CodeModeGroup id={`${id}:${step.key}`} step={step} selected={selected}
-          sessionId={row.sessionId} childApprovals={childApprovals} onRevealLine={showLine} renderMember={renderMember} />
+        return <CodeModeGroup expansionKey={`code-mode-group:${id}:${step.key}`} step={step} selected={selected}
+          sessionId={row.sessionId} childApprovals={childApprovals} onRevealLine={showLine}
+          onToggleFiles={onToggleFiles} renderMember={renderMember} />
       }} />
       <BoundedChildList keys={childKeys} estimatedChildHeight={52} renderChild={index => renderChild(extraChildren[index]!)} />
-      {partial && cell ? <CodeModePartialChanges files={cell.changedFiles} cwd={cwd} id={id} /> : null}
+      {partial && cell && !partialRepeatsRows ? <CodeModePartialChanges files={cell.changedFiles} cwd={cwd} id={id} /> : null}
       {!partial && unlistedChanges.length > 0 ? <details className="code-mode-changes"><summary>{unlistedChanges.length === 1 ? '1 file changed' : `${unlistedChanges.length} files changed`}</summary>
         <BoundedChildList keys={changedKeys} estimatedChildHeight={22} renderChild={index => {
           const file = unlistedChanges[index]!
