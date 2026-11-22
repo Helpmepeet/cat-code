@@ -236,7 +236,7 @@ export function toolSearchCardView(row: ToolUseNestedRow): {
   return { target, lines: sameAsRequested ? [] : matches }
 }
 
-export function toolCardFilePath(row: ToolUseNestedRow): string | null {
+export function toolCardFilePath(row: Pick<ToolUseNestedRow, 'toolFamily' | 'input' | 'result'>): string | null {
   if (
     row.toolFamily !== 'read' &&
     row.toolFamily !== 'write' &&
@@ -250,7 +250,7 @@ export function toolCardFilePath(row: ToolUseNestedRow): string | null {
 }
 
 /** The one file a single-file patch names in its header, whether or not it applied. */
-export function singlePatchFile(row: ToolUseNestedRow): string | null {
+export function singlePatchFile(row: Pick<ToolUseNestedRow, 'toolName' | 'input'>): string | null {
   const headers = patchFilePaths(row)
   return headers.length === 1 ? headers[0]! : null
 }
@@ -258,7 +258,7 @@ export function singlePatchFile(row: ToolUseNestedRow): string | null {
 const PATCH_HEADER_PREFIXES = [UPDATE_FILE_PREFIX, ADD_FILE_PREFIX, DELETE_FILE_PREFIX]
 
 /** Files named by an `apply_patch` call's `*** Update/Add/Delete File:` headers, in order. */
-export function patchFilePaths(row: ToolUseNestedRow): string[] {
+export function patchFilePaths(row: Pick<ToolUseNestedRow, 'toolName' | 'input'>): string[] {
   const patch = row.input['input']
   if (!isFilePatchToolName(row.toolName) || typeof patch !== 'string') return []
   const paths = new Set<string>()

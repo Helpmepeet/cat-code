@@ -42,8 +42,10 @@ import { ComputerPaneContext } from './computerPaneContext.js'
 import './computerPane.css'
 import { AutoModeReviewFooter, AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { EmailToolResult } from './EmailToolResult.js'
-import { CodeModeCard } from './CodeModeCard.js'
+import { CodeModeCard, CodeModeLineLink, type CodeModeMemberPresentation } from './CodeModeCard.js'
+import { CodeModePath, CodeModeStepHeader } from './CodeModeStep.js'
 import { codeModeChildIsReviewing } from './codeModeLiveView.js'
+import { codeModeMcpName, codeModeStepHasError } from './codeModeSteps.js'
 import { EmailToolDiscovery } from './EmailToolChrome.js'
 import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
 import { getEmailToolIdentity } from './emailToolPresentation.js'
@@ -191,7 +193,7 @@ import {
 } from './leaseState.js'
 import { ToolOutputContext } from './toolOutputPanel.js'
 import { FileDiffNavigator } from './FileDiffNavigator.js'
-import { selectToolDiffs } from './toolDiffs.js'
+import { countDiff, selectToolDiffs } from './toolDiffs.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import {
   FilePathMenuContext,
@@ -1844,7 +1846,7 @@ function AssistantProse({
   )
 }
 
-function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: string; line?: number } | undefined): ((event: ReactMouseEvent<HTMLButtonElement>) => void) | null {
+function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: string; line?: number; sourceCwd?: string } | undefined): ((event: ReactMouseEvent<HTMLButtonElement>) => void) | null {
   const opener = useFilePaneOpener()
   const latest = useContext(LatestPaneFileCardContext)
   const scopes = useContext(TranscriptFileScopeContext)
@@ -1854,7 +1856,7 @@ function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: str
   return event => {
     event.stopPropagation()
     const path = file.line && filePreviewKind(file.path) === 'text' ? `${file.path}:${file.line}` : file.path
-    void opener(file.sessionId, scopedTranscriptFilePath(path, scopes?.get(file.cardId)), { external: event.metaKey }).then(result => {
+    void opener(file.sessionId, scopedTranscriptFilePath(path, scopes?.get(file.cardId) ?? file.sourceCwd), { external: event.metaKey }).then(result => {
       if (!result.ok) toast(result.message, { tone: 'warn' })
     }).catch(() => toast('Could not open this file', { tone: 'warn' }))
   }
@@ -2803,7 +2805,8 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
   const approvals = useContext(MemoryRecallApprovalContext)
   if (row.toolName === 'REPL') {
-    return <CodeModeCard row={row} waitingForApproval={!!approvals?.[row.toolUseId] || row.children.some(child => child.kind === 'tool-use' && !!approvals?.[child.toolUseId])} renderChild={child => <TranscriptRowView row={child} narration={false} />} renderCall={child => <CodeModeMember row={child} />} />
+    return <CodeModeCard row={row} waitingForApproval={!!approvals?.[row.toolUseId] || row.children.some(child => child.kind === 'tool-use' && !!approvals?.[child.toolUseId])}
+      childApprovals={approvals} renderChild={renderScriptChild} renderCall={renderScriptCall} />
   }
   return <AutoModeReviewContext.Provider value={row.autoModeReview}>
     {row.codeModeInputOmitted ? <div className="code-mode-input-note">Final input is too large to display</div> : null}
@@ -2811,29 +2814,77 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   </AutoModeReviewContext.Provider>
 }
 
-/** A Script member uses the compact row grammar; agent and rich nested calls keep their own cards. */
-function CodeModeMember({ row }: { row: ToolUseNestedRow }) {
-  const { expanded: defaults } = useContext(ToolsExpandedContext)
+function renderScriptChild(row: NestedTranscriptRow) {
+  return <TranscriptRowView row={row} narration={false} />
+}
+
+function renderScriptCall(row: ToolUseNestedRow, presentation: CodeModeMemberPresentation) {
+  return <CodeModeMember row={row} {...presentation} />
+}
+
+/** Keep the transcript's specialized result surfaces inside a Script. */
+const CodeModeMember = memo(function CodeModeMember({ row, ...presentation }: CodeModeMemberPresentation & { row: ToolUseNestedRow }) {
   const approvals = useContext(MemoryRecallApprovalContext)
-  const [open, setOpen] = useToolCardExpanded(row.toolUseId, defaults || row.status === 'error')
-  if (row.children.length || !['Read', 'Bash', 'Grep', 'Glob'].includes(row.toolName) ||
-      isMemoryRecall(row, !!approvals?.[row.toolUseId]) || bashLocalhostUrl(row.result) ||
-      row.result?.images?.length || row.result?.fileDiffs?.length) return <TranscriptRowView row={row} narration={false} />
-  const family = FAMILY_STYLE[row.toolFamily]
-  const status = STATE_STYLE[row.status]
+  const waiting = !!approvals?.[row.toolUseId]
+  if (row.children.length || row.toolName === 'REPL' || row.toolName === 'AskUserQuestion' ||
+      row.toolName === 'ToolSearch' || row.toolFamily === 'agent' || row.toolFamily === 'imagegen' ||
+      row.toolFamily === 'computer' || row.toolFamily === 'agent-control' || peerToolPresentation(row.toolName, row.input) ||
+      getEmailToolIdentity(row.toolName) || row.result?.taskOutput || row.result?.images?.length || (row.result?.fileDiffs?.length ?? 0) > 1 ||
+      isMemoryRecall(row, waiting) || (row.toolFamily === 'bash' && bashLocalhostUrl(row.result))) {
+    return <div className="code-mode-rich-member">
+      <TranscriptRowView row={row} narration={false} />
+      {presentation.sourceLine ? <div className="code-mode-step-actions">
+        <CodeModeLineLink line={presentation.sourceLine} onReveal={presentation.onRevealLine} />
+      </div> : null}
+      {presentation.error && presentation.error !== row.result?.content && presentation.error !== visibleAutoModeReason(row.autoModeReview)
+        ? <pre className="code-mode-error">{presentation.error}</pre> : null}
+    </div>
+  }
+  return <CompactCodeModeMember row={row} {...presentation} waiting={waiting} />
+})
+
+function CompactCodeModeMember({ row, status, error, cwd, file, sourceLine, onRevealLine,
+  grouped, pathPrefix, openResult, waiting }: CodeModeMemberPresentation & { row: ToolUseNestedRow; waiting: boolean }) {
+  const { expanded: defaults } = useContext(ToolsExpandedContext)
+  const focused = useContext(FocusedNamedCallContext) !== null
+  const motion = useContext(TranscriptMotionContext)
+  const trouble = codeModeStepHasError(status)
+  const [open, setOpen] = useToolCardExpanded(row.toolUseId, trouble || openResult || (focused && defaults))
+  const location = row.toolFamily === 'edit' ? editLocationLabel(row) : null
+  const openFile = usePaneCardOpen(file && (row.toolFamily === 'edit' || row.toolFamily === 'write')
+    ? { path: file, sessionId: row.sessionId, cardId: row.id, line: location?.line, sourceCwd: cwd ?? undefined } : undefined)
+  const editGroup = grouped && row.toolFamily === 'edit'
+  const mcpArgument = grouped && row.toolFamily === 'mcp'
+    ? Object.values(row.input).find((value): value is string => typeof value === 'string' && value.length > 0)
+    : undefined
+  const name = row.toolFamily === 'mcp' ? mcpArgument ?? codeModeMcpName(row.toolName) : deriveTarget(row, cwd)
+  const digest = row.toolFamily === 'edit' || row.toolFamily === 'write' ? diffCountBadge(row)
+    : row.toolFamily === 'read' ? toolRunDigest('read', row)?.replace(/^Read /, '') : undefined
+  const content = row.result?.content ?? ''
+  const reviewReason = visibleAutoModeReason(row.autoModeReview)
+  const separateError = error && error !== reviewReason &&
+    (error !== content || selectToolDiffs(row.result).length > 0)
+  const phase = waiting ? 'Waiting for approval' : codeModeChildIsReviewing(row) ? 'Reviewing' : undefined
+  const resolving = open && trouble && motion.results.active.has(row.id)
   return <div>
     {row.codeModeInputOmitted ? <div className="code-mode-input-note">Final input is too large to display</div> : null}
-    <button type="button" className="code-mode-member" aria-expanded={open} onClick={() => setOpen(!open)}>
-      <span className={`code-mode-caret${open ? ' is-open' : ''}`} aria-hidden>▸</span>
-      <span className={`code-mode-member-mark ${family.color}`} aria-hidden>{family.mark}</span>
-      <span className="code-mode-member-target">{deriveTarget(row)}</span>
-      <AutoModeReviewMark review={row.autoModeReview} />
-      {row.status !== 'success' ? <span className={`code-mode-member-status ${status.color}`}>{!approvals?.[row.toolUseId] && codeModeChildIsReviewing(row) ? 'Reviewing' : status.word}</span> : null}
-    </button>
+    <CodeModeStepHeader className="code-mode-single" expanded={open} onToggle={() => setOpen(!open)}
+      family={grouped ? undefined : row.toolFamily} status={status} pulse={status === 'running' && motion.turnLive}
+      label={editGroup ? <span className="code-mode-member-main">{location ? <>line {location.line}{location.more}</> : editSnippet(row)}</span>
+        : file ? <CodeModePath path={file} cwd={cwd} sessionId={row.sessionId} prefix={pathPrefix} />
+          : <span className="code-mode-member-main">{name}</span>}
+      digest={digest} phase={phase} review={<AutoModeReviewMark review={row.autoModeReview} />}
+      lineLink={sourceLine ? <CodeModeLineLink line={sourceLine} onReveal={onRevealLine} /> : null}
+      fileOpen={openFile ? <button type="button" className="code-mode-open-file" onClick={openFile} aria-label={`Open ${file}`}>Open</button> : null} />
     {open ? (
-      <div className="code-mode-member-body">
+      <div className={`code-mode-member-body${resolving ? ' animate-arrive' : ''}`}
+        ref={resolving ? motion.results.refFor(row.id, 'animate-arrive') : undefined}
+        onAnimationEnd={resolving ? event => motion.results.onAnimationEnd(row.id, event) : undefined}>
         <AutoModeReviewReason review={row.autoModeReview} />
-        <ToolCardBody row={row} content={row.result?.content ?? ''} ack={toolAckForResult(row.result)} omitDuplicateDenial />
+        {separateError ? <pre className="code-mode-error">{error}</pre> : null}
+        {content || !separateError || selectToolDiffs(row.result).length > 0 ? <ToolCardBody
+          row={row} content={content} ack={toolAckForResult(row.result)} omitDuplicateDenial
+        /> : null}
         <AutoModeReviewFooter review={row.autoModeReview} />
       </div>
     ) : null}
@@ -3889,18 +3940,22 @@ function editLocationLabel(
   row: ToolRunMember,
 ): { line: number; more: string | null } | null {
   const hunks = selectToolDiffs(row.result)[0]?.hunks ?? []
-  const first = hunks[0]
-  if (first === undefined) return null
+  const locations = hunks.flatMap(hunk => {
+    const line = firstChangedLine(hunk)
+    return line === undefined ? [] : [line]
+  })
+  const line = locations[0]
+  if (line === undefined) return null
   return {
-    line: firstChangedLine(first)!,
-    more: hunks.length > 1 ? ` and ${hunks.length - 1} more` : null,
+    line,
+    more: locations.length > 1 ? ` and ${locations.length - 1} more` : null,
   }
 }
 
 function firstChangedLine(hunk: ToolDiffProjection['hunks'][number] | undefined): number | undefined {
   if (!hunk) return
   const leading = hunk.lines.findIndex(line => line.startsWith('+') || line.startsWith('-'))
-  return Math.max(1, hunk.newStart + Math.max(0, leading))
+  return leading === -1 ? undefined : Math.max(1, hunk.newStart + leading)
 }
 
 /** The first non-blank line of the text an edit was asked to replace. */
@@ -4766,7 +4821,7 @@ function renderLogLine(
 ) {
   return (
     <div key={lineNumber} className="flex">
-      <span className={LOG_GUTTER_CLASS}>{lineNumber}</span>
+      <span className={`inline-log-gutter ${LOG_GUTTER_CLASS}`}>{lineNumber}</span>
       <span className={logLineClass(line)}>
         {line || ' '}
       </span>
@@ -4839,7 +4894,7 @@ const LOG_GUTTER_CLASS =
  * models are the same model: the window bounds how much is built, the box bounds
  * how much of it a card shows at once.
  */
-const INLINE_OUTPUT_SCROLLER = 'max-h-[340px] overflow-auto'
+const INLINE_OUTPUT_SCROLLER = 'inline-tool-output max-h-[340px] overflow-auto'
 
 /**
  * The same box for the bodies whose rows are source: type, size and leading are
@@ -6875,19 +6930,6 @@ function Seam({
       <div className={rule} />
     </div>
   )
-}
-
-/** +adds / −dels across every hunk (from the `+`/`-` line prefixes). */
-function countDiff(diff: ToolDiffProjection): { adds: number; dels: number } {
-  let adds = 0
-  let dels = 0
-  for (const hunk of diff.hunks) {
-    for (const line of hunk.lines) {
-      if (line.startsWith('+')) adds++
-      else if (line.startsWith('-')) dels++
-    }
-  }
-  return { adds, dels }
 }
 
 function rowDiffCounts(row: ToolUseNestedRow): { adds: number; dels: number } | null {

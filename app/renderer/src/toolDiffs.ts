@@ -7,3 +7,22 @@ export function selectToolDiffs(
   if (result?.fileDiffs?.length) return result.fileDiffs
   return result?.diff ? [result.diff] : []
 }
+
+const diffCounts = new WeakMap<ToolDiffProjection, { adds: number; dels: number }>()
+
+/** +adds / −dels across every hunk (from the `+`/`-` line prefixes). */
+export function countDiff(diff: ToolDiffProjection): { adds: number; dels: number } {
+  const cached = diffCounts.get(diff)
+  if (cached) return cached
+  let adds = 0
+  let dels = 0
+  for (const hunk of diff.hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) adds++
+      else if (line.startsWith('-')) dels++
+    }
+  }
+  const counts = { adds, dels }
+  diffCounts.set(diff, counts)
+  return counts
+}

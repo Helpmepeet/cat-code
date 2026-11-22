@@ -23,7 +23,7 @@
  * collides across a session switch or a pane remount.
  */
 
-import { createContext, useContext, useReducer, useRef } from 'react'
+import { createContext, useCallback, useContext, useReducer, useRef } from 'react'
 import { resolveToolCardExpanded } from './transcriptViewModel.js'
 
 export type ToolCardExpansionStore = {
@@ -132,11 +132,9 @@ export function useToolCardExpanded(
     store.get(key) ?? null,
     defaultExpanded,
   )
-  return [
-    expanded,
-    (next: boolean) => {
-      store.set(key, next)
-      bump()
-    },
-  ]
+  const setExpanded = useCallback((next: boolean) => {
+    store.set(key, next)
+    bump()
+  }, [store, key])
+  return [expanded, setExpanded]
 }

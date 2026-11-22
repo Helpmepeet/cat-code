@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { VirtualLineList } from './VirtualLineList.js'
 import { selectHighlightedSourceRows } from './sourceHighlight.js'
 import { selectCodeModeLine, useCodeModeSelection } from './codeModeSelection.js'
@@ -13,25 +13,13 @@ import type { CodeModeCall } from './codeMode.js'
  * card's step for that line. Lines that ran calls take the Script ink, and the
  * line a failure was attributed to turns red.
  */
-export function CodeModeSource({ sessionId, cellId, code, calls, errorLine, open, onOpenChange }: {
+export const CodeModeSource = memo(function CodeModeSource({ sessionId, cellId, lines, calls, errorLine }: {
   sessionId: string
   cellId: string
-  code: string
+  lines: readonly string[]
   calls: readonly CodeModeCall[]
   errorLine: number | null
-  open: boolean
-  onOpenChange: (open: boolean) => void
 }) {
-  const lines = useMemo(() => code.split('\n'), [code])
-  return <div className="code-mode-script">
-    <button type="button" className="code-mode-fold-head" aria-expanded={open} onClick={() => onOpenChange(!open)}>
-      <span className={`code-mode-caret${open ? ' is-open' : ''}`} aria-hidden>▸</span><span className="code-mode-output-mark" aria-hidden>{'{}'}</span> Source <span className="code-mode-output-count">{lines.length} {lines.length === 1 ? 'line' : 'lines'}</span>
-    </button>
-    {open ? <SourceBody sessionId={sessionId} cellId={cellId} lines={lines} calls={calls} errorLine={errorLine} /> : null}
-  </div>
-}
-
-function SourceBody({ sessionId, cellId, lines, calls, errorLine }: { sessionId: string; cellId: string; lines: readonly string[]; calls: readonly CodeModeCall[]; errorLine: number | null }) {
   const selection = useCodeModeSelection(sessionId, cellId)
   const coloured = useMemo(() => selectHighlightedSourceRows(lines, 'javascript'), [lines])
   const callsByLine = useMemo(() => {
@@ -42,7 +30,8 @@ function SourceBody({ sessionId, cellId, lines, calls, errorLine }: { sessionId:
     }
     return result
   }, [calls])
-  return <VirtualLineList lines={lines} className="code-mode-script-body" activeIndex={selection ? selection.line - 1 : null} activeRequest={selection?.token} renderLine={(line, index) => {
+  return <VirtualLineList lines={lines} className="code-mode-script-body" activeIndex={selection ? selection.line - 1 : null}
+    activeRequest={selection?.token} widthAffectsRowHeight={false} renderLine={(line, index) => {
     const position = index + 1
     const state = callsByLine.get(position)
     const failed = !!state?.failed || errorLine === position
@@ -54,4 +43,4 @@ function SourceBody({ sessionId, cellId, lines, calls, errorLine }: { sessionId:
       <span className={coloured ? 'code-mode-script-code hljs' : 'code-mode-script-code'}>{coloured?.[index] ?? line}</span>
     </div>
   }} />
-}
+})

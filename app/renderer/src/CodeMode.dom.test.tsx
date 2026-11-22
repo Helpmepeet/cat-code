@@ -17,6 +17,7 @@ import { createToolCardExpansionStore } from './toolCardExpansion.js'
 import { findToolOutputRow } from './toolOutputRow.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { ToolCardStyleContext } from './toolCardStyle.js'
+import { FilePaneContext } from './filePaneContext.js'
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await act(async () => { await harness.nextFrame() }); await harness.unmountAll() })
@@ -28,7 +29,7 @@ function row(id = 'cell', patch: Partial<CodeModeEnvelope> = {}): NestedToolUseR
 const transcript = (rows: NestedToolUseRow[]) => <ToolsExpandedContext.Provider value={{ expanded: true, setExpanded: () => {} }}><TranscriptRowsView rows={rows} cwd="/repo" /></ToolsExpandedContext.Provider>
 async function click(element: Element) { await act(async () => { element.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 async function openSource(scope: ParentNode) {
-  const head = scope.querySelector('.code-mode-script .code-mode-fold-head')!
+  const head = scope.querySelector('.code-mode-fold-head.code-mode-script')!
   if (head.getAttribute('aria-expanded') === 'false') await click(head)
 }
 test('the Script transcript card follows the Lines and Cards preference', async () => {
@@ -51,7 +52,7 @@ test('Script cells show call rows rather than code and keep Output closed until 
   expect(tree.container.textContent).not.toContain('selected output')
   expect(tree.container.textContent).toContain('/a')
   expect(tree.container.textContent).toContain('echo ok')
-  await click(tree.container.querySelector('.code-mode-output summary')!)
+  await click(tree.container.querySelector('.code-mode-output-toggle')!)
   expect(tree.container.textContent).toContain('selected output')
 })
 test('same-line reads form an expandable group without absorbing the next line', async () => {
@@ -67,10 +68,112 @@ test('same-line reads form an expandable group without absorbing the next line',
   expect(tree.container.textContent).toContain('/third')
   expect(tree.container.textContent).not.toContain('/first')
   await click(group)
-  expect(tree.container.textContent).toContain('/first')
-  expect(tree.container.textContent).toContain('/second')
+  expect(tree.container.querySelector('.code-mode-group-body [data-file-actions]')?.getAttribute('title')).toBe('/first')
+  expect(tree.container.querySelector('.code-mode-group-body')?.textContent).toContain('first')
+  expect(tree.container.querySelector('.code-mode-group-body')?.textContent).toContain('second')
   await click(group)
   expect(tree.container.textContent).not.toContain('/first')
+})
+
+test('adjacent edits group by file, sum real diff counts, and keep unlisted file changes', async () => {
+  const path = '/repo/long/folder/target.ts'
+  const value = row('edit-run', { code: 'edit();\nedit();\nedit();', calls: [1, 2, 3].map((line) => ({
+    toolUseId: `edit-${line}`, name: 'Edit', status: 'completed', line, input: { file_path: path, old_string: 'old source' },
+  })), changedFiles: [{ path, additions: 3, deletions: 1 }, { path: '/repo/extra.ts' }] })
+  value.children = [1, 2, 3].map(line => ({
+    ...row(`edit-${line}`), parentToolUseId: value.toolUseId, toolName: 'Edit', toolFamily: 'edit',
+    input: { file_path: path },
+    result: { content: 'Edited', isError: false, diff: line === 3 ? null : {
+      filePath: path, hunks: [{ oldStart: line * 6, oldLines: 2, newStart: line * 6, newLines: 3,
+        lines: line === 1 ? [' keep', '-old first', '+first', '+another'] : [' keep', '+second'] }],
+    } },
+  }))
+  const opened: string[] = []
+  const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path) => {
+    opened.push(path)
+    return { ok: true }
+  }}>{transcript([value])}</FilePaneContext.Provider>)
+  const group = tree.container.querySelector('.code-mode-group-header')!
+  expect(group.textContent).toContain('long/folder/target.ts')
+  expect(group.textContent).not.toContain('/repo/')
+  expect(group.textContent).toContain('3 edits')
+  expect(group.textContent).toContain('+3−1')
+  expect(tree.container.querySelector('.code-mode-changes summary')?.textContent).toBe('1 file changed')
+  await click(group.querySelector('button')!)
+  const edits = [...tree.container.querySelectorAll('.code-mode-group-body .code-mode-member')]
+  expect(edits.map(edit => edit.querySelector('.code-mode-member-target')?.textContent)).toEqual(['line 7', 'line 13', 'old source'])
+  await click(tree.container.querySelector('.code-mode-open-file')!)
+  expect(opened).toEqual([path])
+  const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+  await act(async () => { group.querySelector('[data-file-actions]')!.dispatchEvent(contextMenu) })
+  expect(contextMenu.defaultPrevented).toBe(true)
+  expect(document.querySelector('[role="menu"]')?.textContent).toContain('Copy')
+  await click(edits[0]!)
+  expect(tree.container.querySelector('.code-mode-member-body')?.textContent).toContain('old first')
+  expect(tree.container.querySelector('.code-mode-member-body')?.textContent).toContain('another')
+  expect(tree.container.querySelector('.code-mode-step.is-selected')).toBeNull()
+})
+
+test('same-line MCP rows show a readable tool name and identify the calls inside', async () => {
+  const value = row('mcp-run', { calls: ['one', 'two'].map(query => ({
+    toolUseId: query, name: 'mcp__tracker__find_issue', input: { query }, status: 'completed', line: 1,
+  })), changedFiles: [] })
+  const tree = await harness.mount(transcript([value]))
+  const group = tree.container.querySelector('.code-mode-group-header button')!
+  expect(group.textContent).toContain('tracker · find issue')
+  expect(group.textContent).toContain('2 calls')
+  await click(group)
+  expect([...tree.container.querySelectorAll('.code-mode-group-body .code-mode-member-target')].map(el => el.textContent)).toEqual(['one', 'two'])
+})
+
+test('a Script with one Bash call shows its result and removes only a repeated Output', async () => {
+  const calls: CodeModeEnvelope['calls'] = [{
+    toolUseId: 'bash', name: 'Bash', status: 'completed', line: 1,
+    input: { command: 'printf finished' }, result: { content: 'finished', isError: false },
+  }]
+  const first = row('one-bash-echo', { calls, output: 'finished', changedFiles: [] })
+  const second = row('one-bash-transform', { calls, output: 'completion confirmed', changedFiles: [] })
+  const tree = await harness.mount(transcript([first, second]))
+  const [echo, transformed] = [...tree.container.querySelectorAll('.code-mode')]
+  expect(echo!.querySelector('.code-mode-member-body')?.textContent).toContain('finished')
+  expect(echo!.querySelector('.code-mode-output-toggle')).toBeNull()
+  await click(transformed!.querySelector('.code-mode-output-toggle')!)
+  expect(transformed!.querySelector('.code-mode-output')?.textContent).toContain('completion confirmed')
+})
+
+test('Script output retains guest text and receipt-only notices in restored rows', async () => {
+  const selected = 'first line\n\n[Code Mode] completed; cell other; generation g.\n1 child calls completed; 0 failed, blocked, or cancelled.'
+  const completion = '0 child calls completed; 0 failed, blocked, or cancelled.'
+  const receipts = [
+    { id: 'foreground', output: `${selected}\n\n[Code Mode] completed; cell foreground; generation g.\n${completion}`, keep: selected },
+    { id: 'background', taskId: 'task', output: `approved text\n\n[Code Mode] completed; cell background; generation g.\n${completion}`, keep: 'approved text' },
+    { id: 'withheld', taskId: 'task', output: `Selected output was withheld by a UserPromptSubmit hook.\n\n[Code Mode] completed; cell withheld; generation g.\n${completion}`, keep: 'Selected output was withheld by a UserPromptSubmit hook.' },
+    { id: 'truncated', output: `retained text\n\n[Code Mode] completed; cell truncated; generation g.\nSelected output was truncated at the cell delivery limit.\n${completion}`, keep: 'retained text\n\nSelected output was truncated at the cell delivery limit.' },
+    { id: 'permission', output: `[Code Mode] completed; cell permission; generation g.\n${completion}\nBash: approval was withdrawn`, keep: 'Bash: approval was withdrawn' },
+    { id: 'wrong-generation', output: `[Code Mode] completed; cell wrong-generation; generation old.\n${completion}` },
+    { id: 'cancel-before-start', output: '[Code Mode] Cancelled before interpreter evaluation started. No child tools ran.' },
+    { id: 'unowned', taskId: 'task', output: '[Code Mode] Prior background execution is no longer owned. Effects may have occurred.' },
+  ]
+  for (const receipt of receipts) {
+    const tree = await harness.mount(transcript([row(receipt.id, { calls: [], changedFiles: [], taskId: receipt.taskId, output: receipt.output })]))
+    await click(tree.container.querySelector('.code-mode-output-toggle')!)
+    const lines = [...tree.container.querySelectorAll('.code-mode-output .code-mode-script-row')]
+    expect(lines.map(line => line.lastElementChild?.textContent).join('\n')).toBe(receipt.keep ?? receipt.output)
+    await tree.unmount()
+  }
+})
+
+test('a Script failure appears on its failed call only when that call carries the same reason', async () => {
+  const value = (id: string, error?: string) => row(id, {
+    status: 'failed', calls: [{ toolUseId: id + '-bash', name: 'Bash', input: { command: 'check' }, status: 'failed', error }],
+    error: 'Host request failed', output: `[Code Mode] failed; cell ${id}; generation g.\n0 child calls completed; 1 failed, blocked, or cancelled.\nHost request failed\nNon-successful calls: Bash (failed). Earlier effects were not rolled back.`,
+    changedFiles: [],
+  })
+  const tree = await harness.mount(transcript([value('same-error', 'Host request failed'), value('missing-error')]))
+  const [same, missing] = [...tree.container.querySelectorAll('.code-mode')]
+  expect(same!.textContent?.match(/Host request failed/g)).toHaveLength(1)
+  expect(same!.querySelector('.code-mode-member-body')?.textContent).toContain('Host request failed')
+  expect(missing!.querySelector('.code-mode-body > .code-mode-error')?.textContent).toBe('Host request failed')
 })
 test('calls outside the current script have no misleading line link', async () => {
   const value = row('old-helper', { code: 'Read();', calls: [
@@ -80,7 +183,7 @@ test('calls outside the current script have no misleading line link', async () =
   expect(tree.container.textContent).toContain('/old')
   expect(tree.container.querySelector('.code-mode-line')).toBeNull()
 })
-test('live grouped calls report progress and select their source line', async () => {
+test('live grouped calls show progress and only the line link selects source', async () => {
   const value = row('group-progress', { code: 'readMany();', status: 'running', calls: [
     { toolUseId: 'p1', name: 'Read', input: { file_path: '/first' }, status: 'completed', line: 1 },
     { toolUseId: 'p2', name: 'Read', input: { file_path: '/second' }, status: 'running', line: 1 },
@@ -88,9 +191,12 @@ test('live grouped calls report progress and select their source line', async ()
   const tree = await harness.mount(transcript([value]))
   const group = tree.container.querySelector<HTMLButtonElement>('.code-mode-group-header button')!
   expect(group.textContent).toContain('1 of 2')
-  expect(group.textContent).toContain('Running')
+  expect(group.parentElement?.querySelector('[aria-label="Running"]')).not.toBeNull()
+  expect(group.textContent).not.toContain('Running')
   await click(group)
-  await openSource(tree.container)
+  expect(tree.container.querySelector('.code-mode-step.is-selected')).toBeNull()
+  expect(tree.container.querySelector('.code-mode-script-body')).toBeNull()
+  await click(group.parentElement!.querySelector('[aria-label="Show line 1 in the source"]')!)
   expect(tree.container.querySelector('button[aria-label="Select line 1, executed"]')?.getAttribute('aria-pressed')).toBe('true')
 })
 
@@ -99,7 +205,7 @@ test('real transcript renders Script calls, caught errors, partial files and exa
   expect(tree.container.textContent).toContain('SCRIPT')
   expect(tree.container.textContent).toContain('/a')
   expect(tree.container.textContent).toContain('15 tests failed')
-  await click(tree.container.querySelector('.code-mode-output summary')!)
+  await click(tree.container.querySelector('.code-mode-output-toggle')!)
   expect(tree.container.textContent).toContain('result text')
   expect(tree.container.textContent).not.toContain('not the audit output')
   expect([...tree.container.querySelectorAll('.code-mode-output button')].some(button => button.textContent === 'Open')).toBe(false)
@@ -111,7 +217,7 @@ test('Script line link opens the inline source and shares selection without sele
   const [cardA, cardB] = [...tree.container.querySelectorAll('.code-mode')]
   expect(cardA!.querySelector('.code-mode-script-body')).toBeNull()
   await click(cardA!.querySelector('.code-mode-line')!)
-  expect(cardA!.querySelector('.code-mode-script .code-mode-fold-head')?.getAttribute('aria-expanded')).toBe('true')
+  expect(cardA!.querySelector('.code-mode-fold-head.code-mode-script')?.getAttribute('aria-expanded')).toBe('true')
   expect(cardA!.querySelector('.code-mode-script-row.is-active')?.textContent).toContain('Read();')
   expect(cardA!.querySelector('.code-mode-step.is-selected')).not.toBeNull()
   const gutter = cardA!.querySelector('button[aria-label="Select line 4, executed"]')!
@@ -138,7 +244,7 @@ test('large outputs and call sets mount bounded children and source lines', asyn
   expect(tree.container.querySelector('.code-mode-script-body')).toBeNull()
   await openSource(tree.container)
   const mountedSteps = tree.container.querySelectorAll('.code-mode-step').length
-  const mountedLines = tree.container.querySelectorAll('.code-mode-script button[aria-label^="Select line"]').length
+  const mountedLines = tree.container.querySelectorAll('.code-mode-script-body button[aria-label^="Select line"]').length
   expect(mountedSteps).toBeGreaterThan(0)
   expect(mountedSteps).toBeLessThan(200)
   expect(mountedLines).toBeGreaterThan(0)
@@ -149,8 +255,8 @@ test('large outputs and call sets mount bounded children and source lines', asyn
 
 test('running receipt, cancellation and syntax errors remain distinct', async () => {
   const tree = await harness.mount(transcript([row('receipt', { status: 'running', calls: [], changedFiles: [] }), row('cancelled', { status: 'cancelled', error: 'Stopped after edit' }), row('syntax', { status: 'failed', calls: [], error: 'SyntaxError: unexpected token' })]))
-  expect(tree.container.querySelector('.code-mode-status-running')?.textContent).toBe('Running')
-  expect(tree.container.querySelector('.code-mode-status-cancelled')?.textContent).toBe('cancelled')
+  expect(tree.container.querySelector('.code-mode-header .code-mode-dot-running')?.getAttribute('aria-label')).toBe('Running')
+  expect(tree.container.querySelector('.code-mode-header .code-mode-dot-cancelled')?.getAttribute('aria-label')).toBe('Stopped')
   expect(tree.container.textContent).toContain('Stopped after edit')
   expect(tree.container.textContent).toContain('SyntaxError: unexpected token')
 })
@@ -191,9 +297,11 @@ test('streaming input, live children and waiting permissions retain the Script o
 test('inline Output expands to bounded searchable full output without a second Open control', async () => {
   const value = row('inline', { output: 'result\n'.repeat(50000) })
   const tree = await harness.mount(transcript([value]))
-  const summary = tree.container.querySelector('.code-mode-output summary')!
+  const summary = tree.container.querySelector('.code-mode-output-toggle')!
   await click(summary)
   expect(tree.container.querySelector('.code-mode-inline-output input[data-output-search]')).not.toBeNull()
+  expect(tree.container.querySelector('.code-mode-inline-output [aria-label="Copy output"]')).not.toBeNull()
+  expect([...tree.container.querySelectorAll('.code-mode-inline-output button')].some(button => button.textContent === 'Wrap')).toBe(true)
   const mounted = tree.container.querySelectorAll('.code-mode-inline-output .tool-output-row').length
   expect(mounted).toBeGreaterThan(0)
   expect(mounted).toBeLessThan(300)
@@ -228,7 +336,7 @@ test('pending scripts open automatically, clean completion closes, and explicit 
   const tree = await harness.mount(view(pending))
   const header = () => tree.container.querySelector('.code-mode-disclosure')!
   expect(header().getAttribute('aria-expanded')).toBe('true')
-  expect(tree.container.querySelector('.code-mode-script .code-mode-fold-head')?.getAttribute('aria-expanded')).toBe('false')
+  expect(tree.container.querySelector('.code-mode-fold-head.code-mode-script')?.getAttribute('aria-expanded')).toBe('false')
   await tree.render(view(complete))
   expect(header().getAttribute('aria-expanded')).toBe('false')
   await click(header())
@@ -308,17 +416,17 @@ test('background child frames advance production Script, source gutter and Focus
   fixture.start('live-read', 'Read', 2)
   await tree.render(view())
   expect(full().querySelectorAll('.code-mode-step')).toHaveLength(1)
-  expect(full().querySelector('.code-mode-member')?.textContent).toContain('running')
+  expect(full().querySelector('.code-mode-single [aria-label="Running"]')).not.toBeNull()
   expect(tree.container.querySelector<HTMLButtonElement>('button[aria-label="Select line 2, executed"]')?.title).toContain('running')
   expect(focusedCount()).not.toContain('read 1')
   fixture.finish('live-read')
   await tree.render(view())
-  expect(full().querySelector('.code-mode-member')?.textContent).not.toContain('running')
+  expect(full().querySelector('.code-mode-single [aria-label="Running"]')).toBeNull()
   expect(focusedCount()).toContain('read 1')
   expect(fixture.row().result!.codeMode!.calls).toEqual([])
   expect(full().querySelector('.code-mode-member')?.textContent).not.toContain('Invented')
   expect(codeModeLiveView(fixture.row())!.calls.map(call => call.name)).toEqual(['Read'])
-  await click(full().querySelector('.code-mode-output summary')!)
+  await click(full().querySelector('.code-mode-output-toggle')!)
   expect(full().querySelector('.code-mode-output')?.textContent).toContain('Background started')
   fixture.start('live-check', 'Bash', 4)
   fixture.finish('live-check')
@@ -456,19 +564,22 @@ test('real workspace Line links reveal source again, including the same previous
   expect(tree.container.querySelector('.code-mode-script-body') === scroller).toBe(true)
   expect(scroller.scrollTop).toBeLessThan(5000)
   expect(tree.container.querySelector('.code-mode-script-row.is-active')?.textContent).toContain('Read();')
-  await click(tree.container.querySelector('.code-mode-script .code-mode-fold-head')!)
+  await click(tree.container.querySelector('.code-mode-fold-head.code-mode-script')!)
   expect(tree.container.querySelector('.code-mode-script-body')).toBeNull()
   await click(line())
   expect(tree.container.querySelector('.code-mode-script-row.is-active')?.textContent).toContain('Read();')
 })
 
-test('step selection highlights an open source line and never opens a closed source fold', async () => {
+test('a step disclosure leaves selection alone and the gutter and line link share it', async () => {
   const value = row('workspace-step-select', { code: '// Read files\nRead();\n// Verify\nBash();\n' + 'void 0;\n'.repeat(400) })
   const tree = await harness.mount(sourceWorkspace(value))
   await click(tree.container.querySelector('.code-mode-step .code-mode-member')!)
   expect(tree.container.querySelector('.code-mode-script-body')).toBeNull()
-  expect(tree.container.querySelector('.code-mode-step.is-selected')?.textContent).toContain('/a')
+  expect(tree.container.querySelector('.code-mode-step.is-selected')).toBeNull()
   await openSource(tree.container)
+  expect(tree.container.querySelector('.code-mode-script-row.is-active')).toBeNull()
+  await click(tree.container.querySelector('.code-mode-line')!)
+  expect(tree.container.querySelector('.code-mode-step.is-selected')?.textContent).toContain('/a')
   expect(tree.container.querySelector('.code-mode-script-row.is-active')?.textContent).toContain('Read();')
   await click(tree.container.querySelector('button[aria-label="Select line 4, executed"]')!)
   expect(tree.container.querySelector('.code-mode-step.is-selected')?.textContent).toContain('Bash')

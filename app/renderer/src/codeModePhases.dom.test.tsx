@@ -44,6 +44,7 @@ function view(data: ReturnType<typeof fixture>, mode: 'full' | 'focused' = 'full
   return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptRowsView rows={data.rows()} focusedLiveState={data.live()} turnLive={turnLive} /></TranscriptModeContext.Provider>
 }
 const label = (root: ParentNode) => root.querySelector('.code-mode-header .code-mode-status')?.textContent
+  ?? root.querySelector('.code-mode-header .code-mode-dot')?.getAttribute('aria-label')
 
 test('Full Script phases follow projected writing, outer review, approval and actual execution metadata', async () => {
   const data = fixture('full-phase-contract')
@@ -92,7 +93,7 @@ test('outer and child approvals can pause a running receipt, but terminal host s
   data.approval('inner')
   data.receipt('failed')
   await tree.render(view(data))
-  expect(label(tree.container)).toBe('failed')
+  expect(label(tree.container)).toBe('Failed')
   expect(tree.container.textContent).toContain('SyntaxError: invalid script')
 })
 
@@ -219,7 +220,7 @@ test('a historical launch shows an unknown outcome until a matching terminal rec
   expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('unknown outcome for 1 script')
   data.receipt('completed', 'historical-task', 'script', true)
   await tree.render(view(data, 'full', false))
-  expect(label(tree.container)).toBe('completed')
+  expect(label(tree.container)).toBe('Completed')
 })
 
 test('foreground Script card and its source show child calls before the final receipt', async () => {
@@ -231,7 +232,7 @@ test('foreground Script card and its source show child calls before the final re
     return view(data)
   }
   const tree = await harness.mount(inspectorView())
-  const fold = tree.container.querySelector('.code-mode-script .code-mode-fold-head')!
+  const fold = tree.container.querySelector('.code-mode-fold-head.code-mode-script')!
   if (fold.getAttribute('aria-expanded') === 'false') await act(async () => { fold.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
   expect(tree.container.querySelector('button[aria-label="Select line 1, executed"]')).toBeNull()
   data.child()
