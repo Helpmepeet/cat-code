@@ -3,6 +3,7 @@ import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { deriveToolFamily } from './transcriptProjector.js'
 import { codeModeCallCompleted, codeModeForRow, codeModeInput, type CodeModeEnvelope } from './codeMode.js'
+import { codeModeChildView } from './codeModeChildView.js'
 import { codeModeLiveView, codeModeReviewingChild } from './codeModeLiveView.js'
 import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
 import { countDiff, countWrittenLines, selectToolDiffs } from './toolDiffs.js'
@@ -114,20 +115,33 @@ function createdLineCount(row: NestedToolUseRow): number | null {
 function scriptTotals(row: NestedToolUseRow, cell: CodeModeEnvelope): { adds: number; dels: number } | null {
   let adds = 0, dels = 0
   const counted = new Set<string>()
+  const children = new Map<string, NestedToolUseRow>()
   for (const child of row.children) {
-    if (child.kind !== 'tool-use' || child.status !== 'success') continue
+    if (child.kind !== 'tool-use' || child.sessionId !== row.sessionId) continue
     if (child.codeMode && (child.codeMode.cellId !== cell.cellId || child.codeMode.generation !== cell.generation)) continue
-    for (const diff of selectToolDiffs(child.result)) {
-      if (!diff.hunks.length && diff.operation !== 'update') continue
+    children.set(child.toolUseId, child)
+  }
+  for (const call of cell.calls) {
+    if (call.name !== 'Write' && call.name !== 'Edit' && call.name !== 'apply_patch' && call.name !== 'NotebookEdit') continue
+    if (!codeModeCallCompleted(call)) continue
+    const child = codeModeChildView(row, call, children.get(call.toolUseId))
+    if (child.status !== 'success') return null
+    const diffs = selectToolDiffs(child.result)
+    if (!diffs.length) {
+      const created = createdLineCount(child)
+      const path = toolCardFilePath(child)
+      if (created === null || !path) return null
+      adds += created
+      counted.add(path)
+      continue
+    }
+    for (const diff of diffs) {
+      // An empty hunk list also represents an unavailable diff.
+      if (!diff.hunks.length) return null
       const counts = countDiff(diff)
       adds += counts.adds
       dels += counts.dels
       counted.add(diff.filePath)
-    }
-    const created = createdLineCount(child)
-    if (created !== null && typeof child.input.file_path === 'string') {
-      adds += created
-      counted.add(child.input.file_path)
     }
   }
   return cell.changedFiles.every(file => counted.has(file.path) || [...counted].some(path =>
@@ -224,7 +238,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
       }
       case 'grep': {
         const pattern = row.input.pattern
-        if (typeof pattern === 'string' && pattern) searches.add(pattern)
+        if (typeof pattern === 'string') searches.add(pattern)
         break
       }
       case 'bash': commands++; break
@@ -287,11 +301,12 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     compact.push(detachedScriptStatus)
   }
   const triedOnly = failedEdits.length > 0 && !parts.length
-  const allWrites = failedEdits.every(call => call.toolFamily === 'write')
+  const failedFamily = failedEdits.every(call => call.toolFamily === 'write') ? 'write'
+    : failedEdits.every(call => call.toolFamily === 'edit') ? 'edit' : null
   const failedAs: FocusedSummary['failedAs'] = failedEdits.length > 0 && failedEdits.length === errorCount &&
     !failedEdits.some(call => isUserRejectionResult(call.result))
-    ? allWrites ? 'write' : 'edit' : null
-  const tried = `tried to ${allWrites ? 'write' : 'edit'}${attempted.size ? ` ${attempted.size} file${attempted.size === 1 ? '' : 's'}` : ''}`
+    ? failedFamily : null
+  const tried = `tried to ${failedFamily ?? 'change'}${attempted.size ? ` ${attempted.size} file${attempted.size === 1 ? '' : 's'}` : ''}`
   const summary = parts.join(', ') || (triedOnly ? tried : refusedAll ? `blocked ${blockedCount} call${blockedCount === 1 ? '' : 's'}`
     : toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned')
   return { readPaths: [...reads], editedPaths: [...editedPaths], failedAs, triedOnly, searchedPatterns: [...searches], commands,

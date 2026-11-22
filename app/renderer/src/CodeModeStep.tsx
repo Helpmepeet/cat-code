@@ -44,20 +44,21 @@ export function CodeModePath({ path, sessionId, cwd, prefix = '' }: {
 
 export function CodeModeStepHeader({ className, expanded, onToggle, family, label, digest, status, phase, review,
   lineLink, fileOpen, pulse }: {
-  className: string; expanded: boolean; onToggle(): void; family?: ToolFamily; label: ReactNode
+  className: string; expanded: boolean; onToggle?(): void; family?: ToolFamily; label: ReactNode
   digest?: ReactNode; status?: string; phase?: string; review?: ReactNode; lineLink?: ReactNode
   fileOpen?: ReactNode; pulse?: boolean
 }) {
   const mark = family && FAMILY_STYLE[family]
+  const Head = onToggle ? 'button' : 'div'
   return <div className={`code-mode-step-header ${className}${lineLink ? ' has-line-link' : ''}${fileOpen ? ' has-file-open' : ''}`}>
-    <button type="button" className="code-mode-member" aria-expanded={expanded} onClick={onToggle}>
-      <CodeModeCaret open={expanded} />
+    <Head className="code-mode-member" {...(onToggle ? { type: 'button' as const, 'aria-expanded': expanded, onClick: onToggle } : {})}>
+      {onToggle ? <CodeModeCaret open={expanded} /> : <span className="code-mode-caret" aria-hidden />}
       {mark ? <span className={`code-mode-member-mark ${mark.color}`} aria-hidden>{mark.mark}</span> : null}
       <span className="code-mode-member-target">{label}</span>
       {digest ? <span className="code-mode-member-digest">{digest}</span> : null}
       {review}
       {phase ? <span className="code-mode-member-status">{phase}</span> : null}
-    </button>
+    </Head>
     {fileOpen}
     <CodeModeDot status={status} pulse={pulse} />
     {lineLink ? <div className="code-mode-step-actions">{lineLink}</div> : null}

@@ -389,6 +389,25 @@ test('the stopped receipt follows whether every changed file is visible in the S
   expect(tree.container.querySelector('.code-mode-group-header')).toBeNull()
 })
 
+test('a completed Script keeps its file receipt while a Write group hides the names', async () => {
+  const paths = ['/repo/a.ts', '/repo/b.ts']
+  const value = row('completed-write-loop', {
+    code: 'writeAll();', changedFiles: paths.map(path => ({ path })),
+    calls: paths.map((file_path, index) => ({
+      name: 'Write', toolUseId: `write-${index}`, input: { file_path }, status: 'completed', line: 1,
+    })),
+  })
+  const tree = await harness.mount(transcript([value]))
+  const receipt = () => tree.container.querySelector('.code-mode-changes summary')?.textContent
+  const group = tree.container.querySelector('.code-mode-group-header button')!
+  expect(receipt()).toBe('2 files changed')
+  await click(group)
+  expect(tree.container.querySelector('.code-mode-group-body')?.textContent).toContain('b.ts')
+  expect(receipt()).toBeUndefined()
+  await click(group)
+  expect(receipt()).toBe('2 files changed')
+})
+
 test('Script patch files open independently and send the selected diff to full output', async () => {
   const fileDiffs = [
     { filePath: '/repo/added.ts', operation: 'add' as const, hunks: [] },
@@ -421,6 +440,45 @@ test('Script patch files open independently and send the selected diff to full o
   expect(full).toBeDefined()
   await click(full!)
   expect(opened).toEqual([1])
+})
+
+test('a one-file Script patch shows the path on its row and keeps the operation in the diff', async () => {
+  const filePath = '/repo/solo.ts'
+  const fileDiff = { filePath, operation: 'delete' as const, hunks: [] }
+  const value = row('single-patch-script', {
+    code: 'apply_patch();', changedFiles: [{ path: filePath }],
+    calls: [{ name: 'apply_patch', toolUseId: 'single-patch', input: { input: `*** Delete File: ${filePath}` }, status: 'completed', line: 1 }],
+  })
+  value.children = [{
+    ...row('single-patch'), parentToolUseId: value.toolUseId, toolName: 'apply_patch', toolFamily: 'edit',
+    result: { content: 'Patch applied', isError: false, diff: null, fileDiffs: [fileDiff] },
+  }]
+  const tree = await harness.mount(transcript([value]))
+  const member = tree.container.querySelector('.code-mode-single')!
+  expect(member.querySelector('[title="/repo/solo.ts"]')).not.toBeNull()
+  await click(member.querySelector('.code-mode-member')!)
+  const body = tree.container.querySelector('.code-mode-member-body')?.textContent
+  expect(body).toContain('Deleted')
+  expect(body).not.toContain('solo.ts')
+})
+
+test('launch-only Skills use a static title with or without a Script parent', async () => {
+  const skill: NestedToolUseRow = {
+    ...row('skill'), toolName: 'Skill', toolFamily: 'skill', input: { skill: ' /notes ' },
+    result: { content: 'Launching skill: notes', isError: false, diff: null },
+  }
+  const script = row('load-skill', {
+    code: 'Skill();', status: 'yielded', changedFiles: [],
+    calls: [{ name: 'Skill', toolUseId: 'skill', input: skill.input, status: 'completed', line: 1 }],
+  })
+  script.children = [{ ...skill, parentToolUseId: script.toolUseId }]
+  const tree = await harness.mount(transcript([skill, script]))
+  expect(tree.container.textContent).not.toContain('Launching skill')
+  const skillHeaders = [...tree.container.querySelectorAll('button[aria-expanded]')]
+    .filter(button => button.textContent?.includes('/notes'))
+  expect(skillHeaders).toHaveLength(0)
+  expect(tree.container.querySelector('.code-mode-single .code-mode-member-target')?.textContent).toContain('/notes')
+  expect(tree.container.querySelector('.code-mode-line')).not.toBeNull()
 })
 
 test('ordinary and MCP audit-shaped results cannot impersonate Script transcript or inspector', async () => {

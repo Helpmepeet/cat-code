@@ -179,7 +179,7 @@ import {
   type FaceAxes,
 } from './agentFace.js'
 import { AgentFace } from './AgentChrome.js'
-import { deriveTarget, derivePeerTargetParts, peerTargetFragment, peerSendNames, toolCardFilePath, displayFilePath, toolSearchCardView, type PeerTargetParts } from './transcriptToolTarget.js'
+import { deriveTarget, derivePeerTargetParts, peerTargetFragment, peerSendNames, singlePatchFile, toolCardFilePath, displayFilePath, toolSearchCardView, type PeerTargetParts } from './transcriptToolTarget.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
 import { AgentPanelContext, AgentRevealContext, containsAgentTool, type AgentRevealRequest } from './transcriptAgentReveal.js'
 import { agentToolSourceOf, agentActivityOf, agentProgressBadge, agentModelOf, agentAccountLabel } from './transcriptAgent.js'
@@ -2861,6 +2861,21 @@ const CodeModeMember = memo(function CodeModeMember({ row, ...presentation }: Co
   return <CompactCodeModeMember row={row} {...presentation} waiting={waiting} />
 })
 
+function isSkillLaunchReceipt(row: ToolUseNestedRow, target: string): boolean {
+  if (row.status !== 'success' || row.toolFamily !== 'skill') return false
+  const trimmed = target.trim()
+  const skill = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed
+  return row.result?.content.trim() === `Launching skill: ${skill}`
+}
+
+/** The one patch path can be omitted from the body when the title identifies it. */
+function patchPathInTitle(row: ToolUseNestedRow, path: string | null, cwd: string | null): string | undefined {
+  const diffs = row.result?.fileDiffs
+  if (!path || diffs?.length !== 1) return undefined
+  const actual = scopedTranscriptFilePath(diffs[0]!.filePath, cwd ?? undefined)
+  return actual === scopedTranscriptFilePath(path, cwd ?? undefined) ? actual : undefined
+}
+
 function PatchFileMembers({ row, diffs, presentation, waiting }: {
   row: ToolUseNestedRow; diffs: ToolDiffProjection[]; presentation: CodeModeMemberPresentation; waiting: boolean
 }) {
@@ -2885,7 +2900,7 @@ function CompactCodeModeMember({ row, status, error, cwd, file, sourceLine, onRe
   const focused = useContext(FocusedNamedCallContext) !== null
   const motion = useContext(TranscriptMotionContext)
   const trouble = codeModeStepHasError(status)
-  const [open, setOpen] = useToolCardExpanded(row.toolUseId, trouble || openResult || (focused && defaults))
+  const [pickedOpen, setOpen] = useToolCardExpanded(row.toolUseId, trouble || openResult || (focused && defaults))
   const location = row.toolFamily === 'edit' ? editLocationLabel(row) : null
   const openFile = usePaneCardOpen(file && (row.toolFamily === 'edit' || row.toolFamily === 'write')
     ? { path: file, sessionId: row.sessionId, cardId: row.id, line: location?.line, sourceCwd: cwd ?? undefined } : undefined)
@@ -2898,13 +2913,16 @@ function CompactCodeModeMember({ row, status, error, cwd, file, sourceLine, onRe
     : row.toolFamily === 'read' ? toolRunDigest('read', row)?.replace(/^Read /, '') : undefined
   const content = row.result?.content ?? ''
   const reviewReason = visibleAutoModeReason(row.autoModeReview)
+  const launchOnly = isSkillLaunchReceipt(row, name)
+  const canOpen = !launchOnly || !!reviewReason
+  const open = canOpen && pickedOpen
   const separateError = error && error !== reviewReason &&
     (error !== content || selectToolDiffs(row.result).length > 0)
   const phase = waiting ? 'Waiting for approval' : codeModeChildIsReviewing(row) ? 'Reviewing' : undefined
   const resolving = open && trouble && motion.results.active.has(row.id)
   return <div>
     {row.codeModeInputOmitted ? <div className="code-mode-input-note">Final input is too large to display</div> : null}
-    <CodeModeStepHeader className="code-mode-single" expanded={open} onToggle={() => setOpen(!open)}
+    <CodeModeStepHeader className="code-mode-single" expanded={open} onToggle={canOpen ? () => setOpen(!open) : undefined}
       family={grouped ? undefined : row.toolFamily} status={status} pulse={status === 'running' && motion.turnLive}
       label={editGroup ? <span className="code-mode-member-main">{location ? <>line {location.line}{location.more}</> : editSnippet(row)}</span>
         : file ? <CodeModePath path={file} cwd={cwd} sessionId={row.sessionId} prefix={pathPrefix} />
@@ -2918,9 +2936,10 @@ function CompactCodeModeMember({ row, status, error, cwd, file, sourceLine, onRe
         onAnimationEnd={resolving ? event => motion.results.onAnimationEnd(row.id, event) : undefined}>
         <AutoModeReviewReason review={row.autoModeReview} />
         {separateError ? <pre className="code-mode-error">{error}</pre> : null}
-        {patchBody ?? (content || !separateError || selectToolDiffs(row.result).length > 0 ? <ToolCardBody
+        {!launchOnly ? patchBody ?? (content || !separateError || selectToolDiffs(row.result).length > 0 ? <ToolCardBody
           row={row} content={content} ack={toolAckForResult(row.result)} omitDuplicateDenial
-        /> : null)}
+          showPath={!patchPathInTitle(row, file, cwd)}
+        /> : null) : null}
         <AutoModeReviewFooter review={row.autoModeReview} />
       </div>
     ) : null}
@@ -2941,6 +2960,8 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   const focused = useContext(TranscriptModeContext).mode === 'focused'
   const namedCallId = useContext(FocusedNamedCallContext)
   const filePathContext = useContext(FilePathMenuContext)
+  const fileScope = useContext(TranscriptFileScopeContext)?.get(row.id)
+  const canUseCurrentCwd = useContext(FileAvailabilityFallbackContext)
   const filePath = toolCardFilePath(row)
   const localUrl = row.toolFamily === 'bash' ? bashLocalhostUrl(row.result) : null
   const localhostOpen = localUrl ? { url: localUrl, sessionId: row.sessionId } : undefined
@@ -3052,11 +3073,10 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
     row.toolFamily === 'edit' || row.toolFamily === 'write'
       ? diffCountBadge(row)
       : undefined
-  const onlyDiff = row.result?.fileDiffs?.length === 1 ? row.result.fileDiffs[0] : undefined
-  // Only a header naming that same file can stand in for the path.
-  const targetPath = onlyDiff && target === displayFilePath(onlyDiff.filePath, filePathContext?.cwd ?? null)
-    ? onlyDiff.filePath : undefined
-  const launchOnly = row.status === 'success' && row.toolFamily === 'skill' && content.trim() === `Launching skill: ${target}`
+  const patchCwd = fileScope ?? (canUseCurrentCwd ? filePathContext?.cwd ?? null : null)
+  const targetPath = row.result?.fileDiffs?.length === 1
+    ? patchPathInTitle(row, filePath ?? singlePatchFile(row), patchCwd) : undefined
+  const launchOnly = isSkillLaunchReceipt(row, target)
   const reviewWords = !!visibleAutoModeReason(row.autoModeReview)
   return (
     <div className="w-full">
@@ -3539,6 +3559,8 @@ function ToolRunCard({
 }) {
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
   const filePathContext = useContext(FilePathMenuContext)
+  const fileScopes = useContext(TranscriptFileScopeContext)
+  const canUseCurrentCwd = useContext(FileAvailabilityFallbackContext)
   const status = deriveToolRunStatus(members)
   // A member the user opened while it was still a LONE card keeps its content on
   // screen through the regroup. Without this the head would be collapsed by
@@ -3559,7 +3581,7 @@ function ToolRunCard({
   // (`attachChildren` spreads, `transcriptProjector.ts:617`) so component memo
   // alone would not stop a collapsed run re-parsing whole files on every frame.
   const digests = members.map(member => toolRunDigest(family, member))
-  const head = toolRunHead(family, members, filePathContext?.cwd ?? null)
+  const head = toolRunHead(family, members, filePathContext?.cwd ?? null, fileScopes, canUseCurrentCwd)
   const memberKeys = useMemo(() => members.map(member => member.id), [members])
   return (
     <ToolCardShell
@@ -3611,6 +3633,8 @@ function toolRunHead(
   family: ToolRunFamily,
   members: ToolRunMember[],
   cwd: string | null,
+  fileScopes: ReadonlyMap<string, string> | null,
+  canUseCurrentCwd: boolean,
 ): {
   target: string
   sub?: string
@@ -3644,7 +3668,9 @@ function toolRunHead(
   }
   if (family === 'read') {
     const paths = members.map(memberReadPath)
-    const fileCount = new Set(paths.map(path => scopedTranscriptFilePath(path, cwd ?? undefined))).size
+    const fallback = canUseCurrentCwd ? cwd ?? undefined : undefined
+    const fileCount = new Set(members.map((member, index) =>
+      scopedTranscriptFilePath(paths[index]!, fileScopes?.get(member.id) ?? fallback))).size
     const target = `${fileCount} ${fileCount === 1 ? 'file' : 'files'}`
     const hoistedPrefix = commonDirPrefix(paths)
     const displayPrefix = displayFilePath(hoistedPrefix, cwd)
@@ -3659,8 +3685,11 @@ function toolRunHead(
         ) : undefined,
     }
   }
-  const patternCount = new Set(members.map(member => deriveTarget(member))).size
-  const target = `${patternCount} ${patternCount === 1 ? 'pattern' : 'patterns'}`
+  const patterns = members.map(member => member.input.pattern).filter(pattern => typeof pattern === 'string')
+  const patternCount = new Set(patterns).size
+  const target = patterns.length === members.length
+    ? `${patternCount} ${patternCount === 1 ? 'pattern' : 'patterns'}`
+    : `${members.length} searches`
   const total = totalGrepDigest(members.map(memberGrepDigest))
   return {
     target,

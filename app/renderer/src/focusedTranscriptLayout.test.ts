@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { NestedTranscriptRow, ToolDiffProjection, ToolFamily } from './transcriptProjector.js'
+import type { NestedToolUseRow, NestedTranscriptRow, ToolDiffProjection, ToolFamily } from './transcriptProjector.js'
+import type { CodeModeCall, CodeModeEnvelope } from './codeMode.js'
 import { deriveFocusedSegments, deriveFocusedTranscript, focusedNamedCall, isFocusedDeliverable, summarizeFocusedWork } from './focusedTranscriptLayout.js'
 
 const base = (id: string) => ({ id, frameId: id, sessionId: 's', messageId: id, blockIndex: 0, parentToolUseId: null, children: [] })
@@ -320,6 +321,35 @@ describe('focused transcript layout', () => {
     expect(summarizeFocusedWork([make(patch('app/x.ts'), 'error', { isError: true, content: 'bad', diff: null }), retry]).editedPaths).toEqual(['/r/app/x.ts'])
     const removed = make({ input: '*** Begin Patch\n*** Delete File: app/old.ts\n*** End Patch' }, 'success', { isError: false, content: '', diff: null, fileDiffs: [{ filePath: '/r/app/old.ts', hunks: [] }] })
     expect(summarizeFocusedWork([removed]).editedPaths).toEqual(['/r/app/old.ts'])
+  })
+
+  test('Script change totals use the final Write and require evidence for each mutation', () => {
+    const path = '/repo/new.ts'
+    const content = `File created successfully at: ${path}`
+    const write: NestedToolUseRow = {
+      ...base('write'), kind: 'tool-use', toolName: 'Write', toolFamily: 'write', toolUseId: 'write',
+      input: { file_path: path, content: 'submitted\n' }, parentToolUseId: 'script',
+      codeMode: { cellId: 'script', generation: 'g' }, status: 'success', agentCompletion: null,
+      result: { content, isError: false, diff: null },
+    }
+    const final: CodeModeCall = {
+      toolUseId: 'write', name: 'Write', status: 'completed', input: { file_path: path, content: 'one\ntwo\nthree\n' },
+      result: { content, isError: false },
+    }
+    const summary = (calls: CodeModeCall[], children = [write]) => {
+      const codeMode: CodeModeEnvelope = {
+        kind: 'code-mode', cellId: 'script', generation: 'g', description: 'Create', code: 'write()', status: 'completed',
+        output: '', changedFiles: [{ path }], calls,
+      }
+      return summarizeFocusedWork([{
+        ...base('script'), kind: 'tool-use', toolName: 'REPL', toolFamily: 'other', toolUseId: 'script',
+        input: {}, status: 'success', agentCompletion: null, children, result: { content: '', isError: false, diff: null, codeMode },
+      }])
+    }
+    expect(summary([final]).additions).toBe(3)
+    expect(summary([final], []).additions).toBe(3)
+    expect(summary([{ ...final, input: {}, inputOmission: { bytes: 70000 } }]).additions).toBe(0)
+    expect(summary([final, { toolUseId: 'missing', name: 'Edit', status: 'completed', input: { file_path: path } }]).additions).toBe(0)
   })
   test('question states stay in their original step rather than becoming deliverables', () => {
     const questions = [{ question: 'Which port?', header: 'Port', options: [{ label: '1', description: 'a' }, { label: '2', description: 'b' }], multiSelect: false }]

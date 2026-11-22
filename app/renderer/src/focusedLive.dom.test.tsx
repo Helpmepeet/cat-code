@@ -228,6 +228,18 @@ test('a streamed Write adds a line only when content follows its terminal newlin
   expect(heading()).toContain('Preparing new.ts +3')
 })
 
+test('a streamed Edit counts the blank line introduced by a trailing newline', async () => {
+  let state = start()
+  const stream = (event: unknown) => { state = message(state, { type: 'stream_event', event }) }
+  stream({ type: 'message_start', message: { id: 'edit-forming' } })
+  stream({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'edit', name: 'Edit', input: {} } })
+  stream({ type: 'content_block_delta', index: 0, delta: {
+    type: 'input_json_delta', partial_json: '{"file_path":"edit.ts","old_string":"old","new_string":"replacement\\n',
+  } })
+  const tree = await harness.mount(view(state))
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Preparing edit.ts +2')
+})
+
 test('streamed tool targets update in place in both the head and rolling calls', async () => {
   for (const rolling of [false, true]) {
     for (const [name, field, chunks] of [

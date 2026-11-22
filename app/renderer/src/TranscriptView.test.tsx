@@ -6372,6 +6372,16 @@ test('the run hoists the shared directory onto the head and shortens its rows', 
   expect(html).not.toContain('cursor-context-menu')
 })
 
+test('read groups compare file identities in the workspace active when the calls ran', () => {
+  const first = runReadRow('r1', 'notes.md')
+  const second = runReadRow('r2', '/new/notes.md')
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={[first, second]} cwd="/new" contextTransitions={[
+    { id: 'old', afterFrameId: null, cwd: '/old', binding: { kind: 'project' } },
+    { id: 'new', afterFrameId: second.frameId, cwd: '/new', binding: { kind: 'project' } },
+  ]} />)
+  expect(visibleText(html)).toContain('2 files')
+})
+
 test('a run whose files share no directory keeps whole paths on its rows', () => {
   const html = renderMany(
     [runReadRow('r1', '/etc/hosts'), runReadRow('r2', '/var/log/app.log')],
@@ -6538,6 +6548,15 @@ test('adjacent searches collapse into ONE card that counts the patterns', () => 
 
   expect(html).toContain('1 pattern')
   expect(occurrences(html, '>Search</span>')).toBe(1)
+})
+
+test('an empty pattern stays one pattern across searches in different directories', () => {
+  const html = renderMany(['/one', '/two'].map(path => toolRow({
+    id: path, toolName: 'Grep', toolFamily: 'grep', input: { pattern: '', path },
+    result: { content: 'Found 1 file\nindex.ts', isError: false, diff: null }, status: 'success',
+  })))
+  expect(visibleText(html)).toContain('1 pattern')
+  expect(visibleText(html)).not.toContain('2 patterns')
 })
 
 test('the search run lists each pattern with what its own mode reported', () => {

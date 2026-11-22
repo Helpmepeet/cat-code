@@ -25,9 +25,12 @@ export function preparingCalls(state: FocusedLiveState | null, sessionId: string
     const patch = tool.json.startsWith('***') ? tool.json : partialField(tool.json, 'patch') || partialField(tool.json, 'input')
     const file = partialField(tool.json, 'file_path') || partialField(tool.json, 'path') || /\*\*\* (?:Update|Add|Delete) File: ([^\n]+)/.exec(patch)?.[1] || ''
     const added = partialField(tool.json, 'new_string') || partialField(tool.json, 'content')
+    const toolFamily = deriveToolFamily(tool.toolName)
+    const additions = patch ? patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length
+      : toolFamily === 'write' ? countWrittenLines(added) : added ? added.split('\n').length : 0
     return { kind: 'tool-use', id: `preparing:${tool.toolUseId}`, sessionId, frameId: tool.messageId, messageId: tool.messageId,
-      blockIndex: tool.blockIndex, parentToolUseId: null, toolUseId: tool.toolUseId, toolName: tool.toolName, toolFamily: deriveToolFamily(tool.toolName),
+      blockIndex: tool.blockIndex, parentToolUseId: null, toolUseId: tool.toolUseId, toolName: tool.toolName, toolFamily,
       input: { ...input, file_path: file }, status: 'pending', result: null, agentCompletion: null, children: [], preparing: true,
-      additions: patch ? patch.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length : countWrittenLines(added) }
+      additions }
   })
 }

@@ -63,7 +63,6 @@ export function codeModeSteps({ parent, calls, lineCount, cwd, scopes, generatio
     }
   }
   const steps: CodeModeStep[] = []
-  const listedPaths = new Set<string>()
   const reasons = new Set<string>()
   const families = new Map<NestedToolUseRow['toolFamily'], number>()
   let lastEditedPath: string | null = null
@@ -103,7 +102,6 @@ export function codeModeSteps({ parent, calls, lineCount, cwd, scopes, generatio
       for (const path of paths) {
         const scoped = scopedTranscriptFilePath(path, sourceCwd ?? undefined)
         step.changedPaths.add(scoped)
-        listedPaths.add(scoped)
       }
     }
     if (codeModeStepHasError(status)) {
@@ -114,5 +112,5 @@ export function codeModeSteps({ parent, calls, lineCount, cwd, scopes, generatio
     }
     families.set(family, (families.get(family) ?? 0) + 1)
   }
-  return { steps, listedPaths, reasons, families }
+  return { steps, reasons, families }
 }
