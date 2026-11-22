@@ -226,15 +226,31 @@ test('an incomplete private key prevents the action without a review or human pr
   expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reason: expect.stringContaining('could not safely redact') }))
 }, 30_000)
 
-test('older conversation is trimmed before the contextual reviewer receives a complete action', async () => {
+test('over-budget review keeps the early operator restriction and marks omitted context', async () => {
   const proof = await run('native-oversize-history')
   expect(proof.requests).toHaveLength(1)
   const { action, conversation } = proof.requests[0].content
   expect(action.input.command).toBe('printf effect >> effects.txt')
+  expect(proof.effect).toBeNull()
+  expect(conversation).toContainEqual(expect.objectContaining({
+    origin: 'operator', text: 'Do not write to effects.txt in this investigation.',
+  }))
+  expect(conversation).toContainEqual(expect.objectContaining({
+    origin: 'other', text: expect.stringMatching(/conversation entries were omitted/i),
+  }))
   expect(conversation.findLast((row: any) => row.origin === 'operator').text).toBe('Run the isolated action and report the result.')
   expect(JSON.stringify(conversation)).not.toContain('OVERSIZE_EARLIER_CONTEXT')
   expect(proof.prompts).toHaveLength(0)
-  expect(proof.effect).toBe('effect')
+}, 30_000)
+
+test('over-budget operator instructions hold the complete action without sending a partial review', async () => {
+  const proof = await run('native-oversize-operator-history')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBeNull()
+  expect(proof.reviewEvents).toContainEqual(expect.objectContaining({
+    outcome: 'blocked', reason: expect.stringMatching(/applicable instructions .* exceed the Auto Mode review limit/i),
+  }))
 }, 30_000)
 
 test('an oversize action alone is denied with guidance to split it', async () => {
@@ -351,6 +367,21 @@ for (const source of ['chat', 'discreet', 'policy', 'workspace']) {
     expect(proof.requests.map((request: any) => request.tool)).toEqual(['Announce'])
     if (source === 'workspace') expect(proof.requests[0].content.workspaceInstructions).toContain('outside this chat')
     expect(proof.postedNotices).toHaveLength(0)
+  }, 30_000)
+}
+
+for (const { scenario, followUp, posts } of [
+  { scenario: 'private-follow-up', followUp: 'Also check the logs.', posts: 0 },
+  { scenario: 'private-reauthorized', followUp: 'You may now post a scope notice about this investigation.', posts: 1 },
+]) {
+  test(`an earlier roster privacy veto reaches review for ${scenario}`, async () => {
+    const proof = await run(`native-scope-notice-${scenario}`)
+    expect(proof.postedNotices).toHaveLength(posts)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(['Announce'])
+    expect(proof.requests[0].content.conversation
+      .filter((row: any) => row.origin === 'operator').map((row: any) => row.text))
+      .toEqual(['Investigate the Chrome crash. Keep this investigation private.', followUp])
+    expect(proof.prompts).toHaveLength(0)
   }, 30_000)
 }
 

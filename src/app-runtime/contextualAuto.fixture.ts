@@ -23,6 +23,8 @@ const credentialSettings = scenario === 'direct-credential-settings'
 const credentialAction = scenario.startsWith('native-credential-')
 const incompleteKey = scenario === 'native-credential-incomplete'
 const oversizeHistory = scenario === 'native-oversize-history'
+const oversizeOperatorHistory = scenario === 'native-oversize-operator-history'
+const earlyRestriction = 'Do not write to effects.txt in this investigation.'
 const oversizeAction = scenario === 'native-oversize-action'
 const compacted = scenario.startsWith('compacted-')
 const peerLocalFollowUp = scenario === 'delegated-local-follow-up-direct'
@@ -53,6 +55,10 @@ const sensitiveWrite = {
 const scriptChildren = scenario === 'native-script-children'
 const browserAction = scenario.startsWith('native-browser')
 const scopeNotice = scenario.startsWith('native-scope-notice')
+const rosterReauthorization = 'You may now post a scope notice about this investigation.'
+const reauthorizeNotice = scenario === 'native-scope-notice-private-reauthorized'
+const privateNoticeFollowUp = scenario === 'native-scope-notice-private-follow-up' || reauthorizeNotice
+const rosterPrivacyVeto = 'Investigate the Chrome crash. Keep this investigation private.'
 const shadowPeerWrite = scenario === 'native-peer-write-shadow'
 const privateNoticeInstructions: Record<string, string> = {
   'native-scope-notice-chat': 'Keep the scope inside this chat.',
@@ -186,7 +192,7 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   : outsideRead ? { name: 'Bash', input: { command: `rg outside_search_marker '${outsideDir}'` } }
   : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: oversizeAction ? 'x'.repeat(300_000) : 'fixture' } }
   : credentialAction ? { ...command, input: { ...command.input, command: 'password=actionSecretFixture123 printf effect >> effects.txt' } }
-  : oversizeHistory || shadowPeerWrite ? command
+  : oversizeHistory || oversizeOperatorHistory || shadowPeerWrite ? command
   : workerRouting ? { name: 'Agent', input: { description: 'Run isolated worker operations', prompt: workerBrief, subagent_type: 'general-purpose' } }
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
@@ -283,8 +289,10 @@ mock.module('../services/api/client.js', () => ({
         : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
         : legacyNotice && tool === 'Edit' && content.assignment?.parent?.some((row: any) =>
           row.origin === 'operator' && row.text === 'Have a helper inspect a.txt. Leave it untouched.') ? 'deny'
+        : tool === 'Announce' && operatorText.includes(rosterPrivacyVeto) ?
+          (operatorText.at(-1) === rosterReauthorization ? 'allow' : 'deny')
         : operatorText.some((text: string) => text === 'Stop. Leave all files untouched.' ||
-          text === queuedReadWithdrawal || text === 'Stop. Do not access the records.' ||
+          text === earlyRestriction || text === queuedReadWithdrawal || text === 'Stop. Do not access the records.' ||
           text === 'Stop the background task. Leave the file untouched.' ||
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
         : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
@@ -446,7 +454,12 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
-  initialMessages: oversizeHistory ? [createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000) })]
+  initialMessages: oversizeHistory ? [
+    createUserMessage({ content: earlyRestriction }),
+    createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
+      origin: { kind: 'coordinator' } }),
+  ] : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]
+    : privateNoticeFollowUp ? [createUserMessage({ content: rosterPrivacyVeto })]
     : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
       ...(scenario === 'compacted-relay-marker' && { summarizedRelayedInput: true }) }),
@@ -666,8 +679,9 @@ if (surface === 'desktop') {
   })
   else if (scenario === 'native-scope-notice-note') await controller.submit('Inspect the private method and tell me what you find.')
   else if (privateNoticeInstructions[scenario]) await controller.submit(privateNoticeInstructions[scenario]!)
+  else if (privateNoticeFollowUp) await controller.submit(reauthorizeNotice ? rosterReauthorization : 'Also check the logs.')
   else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
-    'Investigate the Chrome crash. Keep this investigation private.' : 'Investigate and fix the Chrome crash.')
+    rosterPrivacyVeto : 'Investigate and fix the Chrome crash.')
   else if (cleanup) await controller.submit('yep. up to you')
   else if (shadowPeerWrite) await controller.submit(assignment, {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },

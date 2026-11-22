@@ -22,19 +22,21 @@ export function contextualReviewerProfile(configuredModel: string) {
 function trimConversation(evidence: ContextualEvidence, budget: number): string | undefined {
   const { assignment, conversation } = evidence
   const parent = assignment?.parent ?? []
-  const anchor = parent.findIndex(row => row.id === assignment?.parentAnchor)
-  const newestOperator = conversation.findLast(row => row.origin === 'operator')
+  // Operator rows include verified human answers and corrections. Keep those
+  // intact along with the assignment anchor, or hold the action if they do not fit.
   const removable = [
-    ...parent.filter((row, i) => row.id !== assignment?.parentAnchor &&
-      !(i > anchor && row.origin === 'operator')),
-    ...conversation.filter(row => row !== newestOperator && row !== conversation.at(-1)),
+    ...parent.filter(row => row.origin !== 'operator' && row.id !== assignment?.parentAnchor),
+    ...conversation.filter(row => row.origin !== 'operator'),
   ]
   function contentAfterRemoving(count: number) {
     const removed = new Set(removable.slice(0, count))
     return JSON.stringify({
       ...evidence,
       assignment: assignment?.parent ? { ...assignment, parent: parent.filter(row => !removed.has(row)) } : assignment,
-      conversation: conversation.filter(row => !removed.has(row)),
+      conversation: [
+        { origin: 'other', text: 'Some conversation entries were omitted to fit the Auto Mode review limit.' },
+        ...conversation.filter(row => !removed.has(row)),
+      ],
     })
   }
 

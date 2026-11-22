@@ -303,7 +303,8 @@ export async function createContextualAttempt(
     const operatorText = operatorRows.flatMap(row => row.proposal ? [row.proposal.text, row.text] : [row.text])
     const settings = instructions.flatMap(row =>
       [...(row.allow ?? []), ...(row.soft_deny ?? []), ...(row.hard_deny ?? []), ...(row.environment ?? [])])
-    if (/(?:^|[.!?]\s+)(?:keep (?:this|this (?:task|work|investigation)) private|(?:do not|don't) (?:announce (?:this|this task)|post (?:a |the )?scope notice))[.!]?$/iu.test(operatorText.at(-1) ?? '')) {
+    const privacyVeto = /(?:^|[.!?]\s+)(?:keep (?:this|this (?:task|work|investigation)) private|(?:do not|don't) (?:announce (?:this|this task)|post (?:a |the )?scope notice))[.!]?$/iu
+    if (privacyVeto.test(operatorRows.at(-1)?.text ?? '')) {
       const reason = 'You asked to keep this work off the workspace roster.'
       return { behavior: 'deny', message: reason, decisionReason: { type: 'other', reason } }
     }
@@ -311,7 +312,8 @@ export async function createContextualAttempt(
     // Workspace guides also discuss UI visibility and paths such as app/shared.
     const audienceLimit = /\b(?:discree\w*|privacy|(?:task|work|session) visibility|visibility (?:is |stays )?(?:limited|restricted)|embargo\w*|under wraps|in confidence|(?:your|our|my) eyes only|to yourself|between (?:the )?(?:two of us|you and me|us)|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to|leave|leaves) (?:of )?(?:this|our|the current) (?:chat|conversation|session))\b/iu
     const standingNoticeRule = /\b(?:under wraps|in confidence|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to) (?:of )?(?:this|our|the current) (?:chat|conversation|session)|visibility (?:is |stays )?(?:limited|restricted))\b|(?:do not|don't|never|must not|avoid|ask before)[^.!?\n]{0,100}\b(?:announc\w*|roster|scope notices?)\b|\b(?:announc\w*|roster|scope notices?)\b[^.!?\n]{0,80}\b(?:forbidden|prohibited|requires? approval|private)\b/iu
-    if (hasVerifiedPeerCreator() ||
+    // Keep the earlier veto in review so newer instructions can be weighed against it.
+    if (hasVerifiedPeerCreator() || operatorRows.some(row => privacyVeto.test(row.text)) ||
         [...operatorText, authority.assignment?.text ?? '', ...settings].some(text => audienceLimit.test(text)) ||
         standingNoticeRule.test(workspace)) return undefined
     actionAllowed = true
