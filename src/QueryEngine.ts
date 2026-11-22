@@ -376,6 +376,7 @@ export class QueryEngine {
   constructor(config: QueryEngineConfig) {
     this.config = config
     this.codeModeHost = config.codeModeHost ?? new CodeModeHost()
+    this.codeModeHost.useTurnReceiptCheckpoints()
     const initialMessages = config.initialMessages ?? []
     this.mutableMessages = config.codeModeHost ? initialMessages : restoreCodeModeHistory(initialMessages, config.getAppState().tasks)
     this.interruptedToolLease = this.interruptedTools.attach((message, isCurrent) => new Promise<void>((resolve, reject) => {

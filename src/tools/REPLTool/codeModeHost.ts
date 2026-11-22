@@ -91,6 +91,7 @@ export class CodeModeHost {
   private backgroundCancellations = new Map<string, () => void>()
   private backgroundOwners = new Map<string, CodeModeOwner>()
   private pendingModelMessages = new Map<string, ContextMessage>()
+  private hasTurnReceiptCheckpoints = false
   private backgroundModelTurns = 0
   private backgroundModelWakes = new Map<string, { enqueue?: () => void; discard?: () => void }>()
   private requiredModelMessages = new Map<string, ContextMessage>()
@@ -269,6 +270,11 @@ export class CodeModeHost {
     return Promise.all([...this.backgroundDeliveries.values()]).then(() => {})
   }
 
+  /** Interactive terminal and worker sinks may defer writes until their query exits. */
+  useTurnReceiptCheckpoints(): void {
+    this.hasTurnReceiptCheckpoints = true
+  }
+
   settlingBackgroundPublications(tasks: ReturnType<ToolUseContext['getAppState']>['tasks']): Promise<unknown> | undefined {
     if (!this.backgroundPublications.size) return
     const settling = [...this.backgroundPublications].flatMap(([id, publication]) => {
@@ -372,10 +378,11 @@ export class CodeModeHost {
     }
     const bufferedAudit: Message[] = []
     const acceptedReceipts = new Set<string>()
+    const needsSavedReceipt = this.hasTurnReceiptCheckpoints && !context.agentId
     let selectedReceipt: UserMessage | undefined
     const acceptReceipt = (message: Message) => {
       acceptedReceipts.add(message.uuid)
-      if (!context.agentId && message === selectedReceipt) {
+      if (needsSavedReceipt && message === selectedReceipt) {
         this.pendingModelMessages.set(selectedReceipt.uuid, selectedReceipt)
         if (this.awaitingContextRegistration) this.requireModelMessages([selectedReceipt])
       } else this.pendingModelMessages.delete(message.uuid)
@@ -408,10 +415,11 @@ export class CodeModeHost {
       })
       detachedReceipts.add(notification)
       selectedReceipt = notification
-      if (context.agentId) {
+      if (!needsSavedReceipt) {
         this.pendingModelMessages.set(notification.uuid, notification)
         if (this.awaitingContextRegistration) this.requireModelMessages([notification])
-      } else this.backgroundModelWakes.set(notification.uuid, {})
+      }
+      if (!context.agentId) this.backgroundModelWakes.set(notification.uuid, {})
       return {
         ...value, messages: [...value.messages, notification],
       }
