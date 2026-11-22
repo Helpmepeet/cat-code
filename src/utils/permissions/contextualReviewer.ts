@@ -30,7 +30,9 @@ function trimConversation(evidence: ContextualEvidence, budget: number): string 
   const nonOperator = rows.filter(row => !isOperator(row) && row !== anchor)
   const olderOperators = rows.filter(row => isOperator(row) && !newest.has(row))
   const proposals = olderOperators.filter(row => row.proposal)
-  const removableOperators = olderOperators.filter(row => row !== anchor)
+  const anchorIndex = anchor ? parent.indexOf(anchor) : -1
+  // A parent instruction after the anchor can withdraw it, so never drop one.
+  const removableOperators = olderOperators.filter(row => row !== anchor && parent.indexOf(row) <= anchorIndex)
 
   function contentAfterRemoving(count: number) {
     // Remove lower-priority context before losing any operator text.

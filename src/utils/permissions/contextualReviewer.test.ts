@@ -47,9 +47,26 @@ test('last-resort review trimming keeps the assignment anchor and newest operato
   const creatorUpdate = operator('creator-update', 'Keep marker.txt private.')
   const evidence = packet([operator('old-peer-turn', 'w'.repeat(130_000)), latest], {
     actor: 'peer-session', origin: 'peer', parentAnchor: anchor.id,
-    parent: [anchor, operator('old-parent-turn', 'c'.repeat(170_000)), creatorUpdate],
+    parent: [operator('old-parent-turn', 'c'.repeat(170_000)), anchor, creatorUpdate],
   })
   expect(evidence?.assignment?.parentAnchor).toBe(anchor.id)
   expect(evidence?.assignment?.parent).toEqual([anchor, creatorUpdate])
   expect(evidence?.conversation).toEqual([omitted, expect.objectContaining({ id: 'old-peer-turn' }), latest])
+})
+
+test('last-resort review trimming never separates an approval from its later withdrawal', () => {
+  const approval = operator('approval', 'You may change marker.txt.')
+  const withdrawal = operator('withdrawal', 'Do not change marker.txt after all.')
+  const followUp = operator('follow-up', 'Continue with the documentation.')
+  const longChat = Array.from({ length: 100 }, (_, index) => operator(`peer-${index}`, 'w'.repeat(3_000)))
+  const assignment = {
+    actor: 'peer-session', origin: 'peer' as const, parentAnchor: approval.id,
+    parent: [approval, withdrawal, followUp],
+  }
+  const evidence = packet([...longChat, latest], assignment)
+  expect(evidence?.assignment?.parent).toEqual([approval, withdrawal, followUp])
+  expect(evidence?.conversation).toContainEqual(omitted)
+
+  const tooLarge = operator('withdrawal', 'w'.repeat(260_000))
+  expect(packet([latest], { ...assignment, parent: [approval, tooLarge, followUp] })).toBeUndefined()
 })
