@@ -61,6 +61,7 @@ export class CodeModeDispatch {
   private readonly contextModifiers: ((context: ToolUseContext) => ToolUseContext)[] = []
   permissionBlocked = false
   readonly calls: CodeModeCall[] = []
+  readonly permissionFailures = new Map<CodeModeCall, string>()
 
   constructor(
     private context: ToolUseContext,
@@ -76,11 +77,12 @@ export class CodeModeDispatch {
     this.context.onHumanPermissionWait?.(this.activeCalls.size > 0 && this.activeCalls.size === this.waitingCalls.size)
   }
 
-  private cancelQueuedAfterSkip(): void {
+  private cancelQueuedAfterRefusal(reason: string): void {
     for (const child of this.queued) {
-      if (!mayChangeState(findToolByName(this.context.options.tools, child.name))) continue
+      if (child.status !== 'running' || !mayChangeState(findToolByName(this.context.options.tools, child.name))) continue
       child.status = 'cancelled'
-      child.error = 'Queued action cancelled after the user skipped an earlier action.'
+      child.error = reason
+      this.permissionFailures.set(child, reason)
     }
   }
 
@@ -175,7 +177,7 @@ export class CodeModeDispatch {
       })
     }).catch(error => {
       if (call.status === 'running') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence ? 'blocked' : 'failed'
-      call.error = (error instanceof Error ? error.message : String(error)).slice(0, 2048)
+      call.error = this.permissionFailures.get(call) ?? (error instanceof Error ? error.message : String(error)).slice(0, 2048)
       throw error
     })
     const finish = () => {
@@ -373,13 +375,26 @@ export class CodeModeDispatch {
             const auditMessage = Object.assign({ ...message, isVirtual: true as const }, { codeMode: identity })
             if ('permissionDecision' in message && message.permissionDecision) {
               const { outcome, contextual, humanDisposition } = message.permissionDecision
+              const label = {
+                'rejected-by-user': humanDisposition === 'skip' ? 'Skipped by the user' : 'Declined by the user',
+                'automode-blocked': 'Denied by Auto Mode',
+                'automode-unavailable': 'Auto Mode review failed',
+                'automode-parsing-error': 'Auto Mode review failed',
+                'blocked-by-permissions': 'Blocked by permissions',
+                unanswered: this.context.abortController.signal.aborted ? 'Cancelled' : 'Approval was not received',
+                interrupted: 'Cancelled',
+              }[outcome]
+              const reason = typeof paired.content === 'string' && paired.content.trim()
+              call.error = reason
+                ? `${label}. ${reason.slice(0, 1024)}${reason.length > 1024 ? '…' : ''}` : `${label}.`
+              this.permissionFailures.set(call, call.error)
               if (!this.fence?.startsWith('Approval feedback')) this.permissionBlocked = true
               if (humanDisposition === 'skip') {
-                this.cancelQueuedAfterSkip()
+                this.cancelQueuedAfterRefusal('Queued action cancelled after the user skipped an earlier action.')
                 call.status = 'skipped'
                 result = { ...(result as Record<string, unknown>), permission: 'skipped' }
               } else if (contextual && outcome === 'automode-blocked') {
-                this.cancelQueuedAfterSkip()
+                this.cancelQueuedAfterRefusal('Queued action cancelled after Auto Mode denied an earlier action.')
                 result = { ...(result as Record<string, unknown>), permission: 'denied' }
               } else {
                 this.stop('Child permission decision requires a new model decision')

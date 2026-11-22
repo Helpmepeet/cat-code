@@ -467,7 +467,7 @@ export async function createContextualAttempt(
         stale('The approval no longer matches the current action, assignment or permissions.')
         return false
       }
-      if (mode === 'experimental') {
+      if (mode === 'experimental' && (mcp || tool.name !== 'REPL')) {
         const state = releasedContext.localDenialTracking ?? releasedContext.getAppState().denialTracking
         if (state?.consecutiveDenials) persistDenialState(releasedContext, recordSuccess(state))
       }

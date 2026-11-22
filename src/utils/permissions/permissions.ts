@@ -649,6 +649,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     observation ?? null,
   )
   const attempt = context.contextualAutoAttempt?.id === toolUseID ? context.contextualAutoAttempt : undefined
+  const isScriptWrapper = tool.name === REPL_TOOL_NAME && !tool.isMcp && !tool.mcpInfo
   const reviewContextually = async () => {
     observation?.markRoute('contextual')
     const decision = await attempt!.review()
@@ -675,7 +676,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         observation?.markRoute(notice.behavior === 'allow' ? 'allowlist' : 'guard')
         return notice
       }
-      if (tool.name === REPL_TOOL_NAME && !tool.isMcp && !tool.mcpInfo && attempt.isReviewException &&
+      if (isScriptWrapper && attempt.isReviewException &&
           result.decisionReason?.type !== 'safetyCheck') {
         observation?.markRoute('allowlist')
         return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
@@ -697,12 +698,11 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
   }
 
 
-  // Reset consecutive denials on any allowed tool use in auto mode.
-  // This ensures that a successful tool use (even one auto-allowed by rules)
-  // breaks the consecutive denial streak.
+  // Admitting a Script wrapper only authorizes the interpreter. Let its
+  // successful child actions break a consecutive denial streak.
   if (result.behavior === 'allow') {
     const appState = context.getAppState()
-    if (feature('TRANSCRIPT_CLASSIFIER')) {
+    if (feature('TRANSCRIPT_CLASSIFIER') && !isScriptWrapper) {
       const currentDenialState =
         context.localDenialTracking ?? appState.denialTracking
       if (
@@ -1219,9 +1219,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         }
       }
 
-      // Reset consecutive denials on success
-      const newDenialState = recordSuccess(denialState)
-      persistDenialState(context, newDenialState)
+      if (!isScriptWrapper) persistDenialState(context, recordSuccess(denialState))
 
       return {
         behavior: 'allow',

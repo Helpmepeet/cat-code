@@ -227,7 +227,7 @@ IMPORTANT: Do not generate or guess non-programming URLs. You may navigate to a 
 function getSimpleSystemSection(): string {
   const items = [
     `All text you output outside of tool use is displayed to the user. Output text to communicate with the user. You can use Github-flavored markdown for formatting, and will be rendered in a monospace font using the CommonMark specification.`,
-    `Tools are executed in a user-selected permission mode. When you attempt to call a tool that is not automatically allowed by the user's permission mode or permission settings, the user will be prompted so that they can approve or deny the execution. If the user denies a tool you call, do not re-attempt the exact same tool call. Instead, think about why the user has denied the tool call and adjust your approach.`,
+    `Tools run in the session's permission mode. An action can require human approval or be blocked by permissions, Auto Mode review, or a human decision. If a call is denied, use the reported source and reason to adjust instead of repeating the identical call. Follow the reported retry guidance for an operational failure.`,
     TOOL_OUTPUT_IS_DATA_RULE,
     RUNTIME_METADATA_RULE,
     PROMPT_INJECTION_RULE,
@@ -394,7 +394,7 @@ function getSessionSpecificGuidanceSection(
     hasAskUserQuestionTool
       && feature('NONBLOCKING_ASK_USER_QUESTION') ? NONBLOCKING_QUESTION_MODEL_CONTRACT : null,
     hasAskUserQuestionTool
-      ? `If you do not understand why the user has denied a tool call, use the ${ASK_USER_QUESTION_TOOL_NAME} to ask them.`
+      ? `If a tool result reports that the user denied the call and their reason is unclear, use ${ASK_USER_QUESTION_TOOL_NAME} to ask them.`
       : null,
     getIsNonInteractiveSession()
       ? null
@@ -492,7 +492,7 @@ function getLeanHarnessSection(): string {
       ? `Interpret the task from the user's request. The working directory is a place to work, not evidence that its existing files or a repository are the subject of the request.`
       : null,
     `Text you output outside of tool use is displayed to the user as GitHub-flavored markdown.`,
-    `Tools run behind a user-selected permission mode; a denied call means the user declined it, so adjust instead of retrying it verbatim.`,
+    `Tools run in the session's permission mode. If a call is denied, use the reported source and reason to adjust instead of repeating it verbatim. Follow the reported retry guidance for an operational failure.`,
     TOOL_OUTPUT_IS_DATA_RULE,
     RUNTIME_METADATA_RULE,
     PROMPT_INJECTION_RULE,

@@ -118,7 +118,7 @@ export function getGPTSystemSection(): string {
 
 All text outside tool calls is shown to the user. Use GitHub-flavored Markdown with CommonMark-compatible formatting.
 
-Tools run in a user-selected permission mode. If a tool call is denied by the user, do not retry the identical call. Diagnose why the user denied it and adjust.
+Tools run in the session's permission mode. If a call is denied, use the reported source and reason to adjust instead of repeating the identical call. Follow the reported retry guidance for an operational failure.
 
 ${TOOL_OUTPUT_IS_DATA_RULE}
 
@@ -318,7 +318,7 @@ export function getGPTSessionGuidanceSection(
     hasAskUserQuestionTool
       && feature('NONBLOCKING_ASK_USER_QUESTION') ? NONBLOCKING_QUESTION_MODEL_CONTRACT : null,
     hasAskUserQuestionTool
-      ? `If you do not understand why the user denied a tool call, use ${ASK_USER_QUESTION_TOOL_NAME} to ask.`
+      ? `If a tool result reports that the user denied the call and their reason is unclear, use ${ASK_USER_QUESTION_TOOL_NAME} to ask them.`
       : null,
     getIsNonInteractiveSession()
       ? null

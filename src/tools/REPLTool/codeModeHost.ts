@@ -639,11 +639,15 @@ export class CodeModeHost {
       deadline.dispose()
       const selectedOutput = output.join('\n')
       const failed = result.calls.filter(call => call.status !== 'completed')
+      const permissionDetails = [...dispatch.permissionFailures]
+        .map(([call, reason]) => `${call.name}: ${reason}`).join('\n')
+      const reportedError = permissionDetails && result.error === 'Host request failed' ? undefined : result.error
       const notice = [
         `[Code Mode] ${result.status}; cell ${cellId}; generation ${result.generation}.`,
         ...(selectedOutput.length > 240 * 1024 ? ['Selected output was truncated at the cell delivery limit.'] : []),
         `${result.calls.filter(call => call.status === 'completed').length} child calls completed; ${failed.length} failed, blocked, or cancelled.`,
-        ...(result.error ? [result.error.slice(0, 4096)] : []),
+        ...(reportedError ? [reportedError.slice(0, 4096)] : []),
+        ...(permissionDetails ? [permissionDetails] : []),
         ...(failed.length ? [`Non-successful calls: ${failed.map(call => `${call.name} (${call.status})`).join(', ')}. Earlier effects were not rolled back.`] : []),
         ...(result.changedFiles.length ? [`Structured file-change receipts: ${result.changedFiles.map(file => file.path).join(', ')}. Bash effects are not enumerated here.`] : []),
       ].join('\n')

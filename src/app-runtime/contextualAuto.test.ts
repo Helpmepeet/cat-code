@@ -115,6 +115,17 @@ test('the third consecutive model denial tells the agent to report the blocker i
   }))
 }, 30_000)
 
+test('a third Script child denial across cells reports the blocker and queued cancellation to the model', async () => {
+  const proof = await run('native-denials-script')
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash', 'Bash', 'Bash'])
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBeNull()
+  expect(proof.files.a).toBe('old')
+  const third = proof.modelToolResults['action-2']
+  expect(third).toContain('3 consecutive actions were denied. Stop and report the blocker in chat.')
+  expect(third).toContain('Queued action cancelled after Auto Mode denied an earlier action.')
+}, 30_000)
+
 test('three denials without an interactive approver keep every command held', async () => {
   const proof = await run('native-denials-headless')
   expect(proof.requests).toHaveLength(5)
@@ -245,6 +256,11 @@ for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
       reviewer: expect.objectContaining({ verdict: 'deny' }) }
     expect(proof.reviewEvents).toContainEqual(expect.objectContaining(expected))
     expect(proof.savedReviews).toContainEqual(expect.objectContaining(expected))
+    if (scenario === 'background-withdrawal') {
+      const completed = proof.scripts.at(-1)
+      expect(completed.output).toContain('Bash: Denied by Auto Mode. Isolated review decision.')
+      expect(completed.calls[0].error).toBe('Denied by Auto Mode. Isolated review decision.')
+    }
   }, 30_000)
 }
 
@@ -493,7 +509,8 @@ for (const outcome of ['approve', 'stop']) {
       expect(result.scripts[0].status).toBe('completed')
       expect(result.scripts[0].output).toContain('after approval')
     } else {
-      expect(result.sdkResults.at(-1)?.subtype).toBe('interrupted')
+      expect(result.sdkResults).toContainEqual(expect.objectContaining({ subtype: 'interrupted' }))
+      expect(result.modelToolResults['action-0']).toContain('Code Mode execution cancelled')
     }
   }, 30_000)
 }
@@ -536,6 +553,22 @@ test('a computed Script edit uses the rewritten target for review and leaves it 
   expect(result.protectedEdit).toBe('old')
   expect(result.prompts).toHaveLength(0)
   expect(result.scripts[0].calls.find((call: any) => call.name === 'Edit')?.result.permission).toBe('denied')
+  expect(result.modelToolResults['action-0']).toContain('Edit: Denied by Auto Mode. Isolated review decision.')
+}, 30_000)
+
+test('a throwing Script child reports a failed review to the model', async () => {
+  const proof = await run('script-review-unavailable')
+  expect(proof.requests).toHaveLength(1)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBeNull()
+  expect(proof.modelToolResults['action-0']).toContain('Bash: Auto Mode review failed. Auto Mode could not complete this review.')
+}, 30_000)
+
+test('a throwing Script child reports a human skip to the model', async () => {
+  const proof = await run('skip-throwing')
+  expect(proof.prompts).toHaveLength(1)
+  expect(proof.files.b).toBe('old')
+  expect(proof.modelToolResults['action-0']).toContain('Edit: Skipped by the user.')
 }, 30_000)
 
 test('a hook allow lets a routine peer edit run without review', async () => {

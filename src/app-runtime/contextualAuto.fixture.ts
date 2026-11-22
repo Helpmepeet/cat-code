@@ -8,6 +8,9 @@ const scenario = process.env.CONTEXTUAL_AUTO_TEST_SCENARIO!
 const legacyNotice = scenario.startsWith('legacy-notice-')
 const backgroundWithdrawal = scenario === 'background-withdrawal'
 const repeatedDenials = scenario.startsWith('native-denials-')
+const repeatedScriptDenials = scenario === 'native-denials-script'
+const captureScriptResults = repeatedScriptDenials || scenario === 'hook-edit' ||
+  scenario === 'script-review-unavailable' || scenario === 'skip-throwing' || scenario === 'wait-stop'
 const cleanup = scenario.startsWith('native-cleanup-')
 const keepSetting = scenario === 'native-cleanup-withdrawal'
 const followUp = keepSetting ? 'Keep the old setting in local.mjs until tomorrow.' : 'Also give me a short summary after the checks.'
@@ -147,6 +150,8 @@ const code = scenario === 'skip-queued'
   ? `const results = await Promise.all([${call('a')}, ${call('b')}, ${call('c')}]); output(results.map(x => x.permission || "done"));`
   : scenario === 'skip-fresh'
     ? `await ${call('a')}; const denied = await ${call('b')}; if (denied.permission === "skipped") await ${call('c')}; output("continued");`
+    : scenario === 'skip-throwing' ? `await tools.call(${child('b')});`
+    : repeatedScriptDenials ? `await Promise.all([tools.call(${JSON.stringify(command)}), tools.call(${child('a')})]);`
     : scenario.startsWith('timeout') ? 'for (;;) {}'
     : scenario.startsWith('measure-') ? ({
       'measure-read': 'await tools.call({name:"Read",input:{file_path:"a.txt"}});',
@@ -239,6 +244,7 @@ assert.equal(landing, pages[0]); assert.deepEqual(settings, {});
 writeFileSync('effects.txt', 'checked');`)
 }
 const requests: { tool: string; content: any; system?: unknown; startedAt: number; elapsedMs: number; model: string; provider: string; contextual: boolean }[] = []
+const modelToolResults: Record<string, unknown> = {}
 let modelCalls = 0
 let workerModelCalls = 0
 if (webSearch) {
@@ -302,11 +308,19 @@ mock.module('../services/api/client.js', () => ({
           usage: { input_tokens: 20, output_tokens: 10 } }
       })()
     }
+    if (captureScriptResults) {
+      for (const message of body.messages) {
+        if (!Array.isArray(message.content)) continue
+        for (const block of message.content) {
+          if (block.type === 'tool_result') modelToolResults[block.tool_use_id] = block.content
+        }
+      }
+    }
     const worker = workerRouting && body.messages.some((message: any) => message.role === 'user' &&
       JSON.stringify(message.content).includes(workerBrief))
     const index = worker ? workerModelCalls++ : modelCalls++
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = worker ? index < workerActions.length : twoChecks ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
+    const invocation = worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
     let check
     if (twoChecks && index > 0) {
       const first = { name: 'Bash', input: {
@@ -320,7 +334,7 @@ mock.module('../services/api/client.js', () => ({
         : { name: 'Bash', input: { command: 'CHROME_BIN=/usr/bin/false printf checked >> effects.txt', description: 'Verify the restricted failure path' } }
     }
     const main = worker ? workerActions[index] : check ?? (scenario === 'mcp-browser-used' ? (index === 0
-      ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? command : cleanupCall || (legacyNotice
+      ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? (repeatedScriptDenials ? submitted : command) : cleanupCall || (legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : index === 0 ? submitted
       : questionReply ? command
@@ -662,6 +676,12 @@ if (surface === 'desktop') {
     backgroundVerdict.resolve()
     await backgroundFinished
   }
+  if (scenario === 'wait-stop') {
+    const { getSessionId } = await import('../bootstrap/state.js')
+    const { getInterruptedToolRun } = await import('../services/tools/interruptedToolRun.js')
+    await getInterruptedToolRun(getSessionId()).whenSettled()
+    await controller.submit('Report why the Script stopped.')
+  }
 } else {
   const { QueryEngine } = await import('../QueryEngine.js')
   let engine: InstanceType<typeof QueryEngine>
@@ -754,6 +774,7 @@ const workerDatabase = workerRouting && await Bun.file(join(cwd, 'fixture.db')).
   ? Bun.spawnSync(['sqlite3', 'fixture.db', 'SELECT value FROM fixture'], { cwd }).stdout.toString().trim() : undefined
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
   scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
+  ...(captureScriptResults && { modelToolResults }),
   ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),
   ...(browserAction && { browserCalls }),
   ...(sensitiveWrite && { sensitiveFileExists: await Bun.file(join(cwd, sensitiveWrite)).exists() }),
