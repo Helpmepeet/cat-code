@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test.each(['direct', 'script', 'approval', 'force-send'])('desktop turn interruption respects background agent ownership (%s)', async scenario => {
+test.each(['direct', 'script', 'approval', 'force-send', 'unknown-tool', 'unknown-tool-close'])('desktop turn interruption respects background agent ownership (%s)', async scenario => {
   const home = await realpath(await mkdtemp(join(tmpdir(), 'background-agent-stop-')))
   const workspace = join(home, 'workspace')
   const config = join(home, 'config')
@@ -28,16 +28,19 @@ test.each(['direct', 'script', 'approval', 'force-send'])('desktop turn interrup
       child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
     ]).finally(() => clearTimeout(timeout))
     if (code !== 0) throw new Error(`Background agent stop fixture failed (${code})\n${stderr}\n${stdout}`)
-    const forceSend = scenario === 'force-send'
+    const unknownTool = scenario.startsWith('unknown-tool')
+    const survivesTurn = scenario === 'force-send' || unknownTool
+    const closes = scenario === 'unknown-tool-close'
     expect(JSON.parse(stdout)).toMatchObject({
       statusesBefore: { earlier: 'running', current: 'running' },
-      statusesAfterStop: { earlier: 'running', current: forceSend ? 'running' : 'killed' },
-      finalEarlierStatus: 'completed',
-      finalCurrentStatus: forceSend ? 'completed' : 'killed',
-      currentMarker: forceSend ? 'fixture' : null,
+      statusesAfterStop: { earlier: 'running', current: survivesTurn ? 'running' : 'killed' },
+      finalEarlierStatus: closes ? 'killed' : 'completed',
+      finalCurrentStatus: survivesTurn && !closes ? 'completed' : 'killed',
+      currentMarker: survivesTurn && !closes ? 'fixture' : null,
+      ...(unknownTool && { unknownToolReported: true }),
       ...(scenario === 'approval'
         ? { earlierApprovalSurvived: true, earlierApprovalAccepted: true }
-        : { earlierMarker: 'fixture' }),
+        : { earlierMarker: closes ? null : 'fixture' }),
     })
   } finally {
     await rm(home, { recursive: true, force: true })

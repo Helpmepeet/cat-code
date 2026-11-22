@@ -13,6 +13,8 @@ const scenario = process.argv[2]
 const scriptFirst = scenario === 'script'
 const holdEarlierApproval = scenario === 'approval'
 const forceSend = scenario === 'force-send'
+const unknownTool = scenario === 'unknown-tool' || scenario === 'unknown-tool-close'
+const unknownToolName = 'UnknownFixtureTool'
 const earlierTurn = 'Launch the earlier fixture worker.'
 const currentTurn = 'Launch the current fixture worker.'
 const briefs = { earlier: 'Earlier fixture worker.', current: 'Current fixture worker.' }
@@ -52,7 +54,9 @@ mock.module('../services/api/client.js', () => ({
     const first = !offers.has(binding)
     offers.add(binding)
     const name = request.includes(currentTurn) ? 'current' : 'earlier'
-    const action: Call | undefined = !first ? undefined : worker
+    const action: Call | undefined = !first
+      ? unknownTool && binding === 'current-parent' ? { name: unknownToolName, input: {} } : undefined
+      : worker
       ? { name: 'Bash', input: { command: `printf fixture > ${worker}.txt`, description: `Write the ${worker} fixture marker` } }
       : { name: 'Agent', input: { description: `Launch ${name} worker`, subagent_type: 'general-purpose', prompt: briefs[name], run_in_background: true } }
     const useScript = scriptFirst && (!worker || !body.tools?.some(tool => tool.name === 'Bash'))
@@ -68,8 +72,9 @@ mock.module('../services/api/client.js', () => ({
         await releaseWorkers[worker].promise
       }
       if (!worker && !first && binding === 'current-parent') {
+        await workersWaiting.current.promise
         parentWaiting.resolve()
-        await new Promise<void>(resolve => {
+        if (!unknownTool) await new Promise<void>(resolve => {
           if (signal.aborted) resolve()
           else signal.addEventListener('abort', () => resolve(), { once: true })
         })
@@ -142,9 +147,21 @@ try {
   await Promise.all([workersWaiting.current.promise, parentWaiting.promise])
   const statusesBefore = { earlier: getStatus('earlier'), current: getStatus('current') }
   if (forceSend) controller.abort('Force-send the fixture turn', 'interrupt')
-  else controller.abort('Stop the current fixture turn')
+  else if (!unknownTool) controller.abort('Stop the current fixture turn')
   await turn
   const statusesAfterStop = { earlier: getStatus('earlier'), current: getStatus('current') }
+  const unknownToolReported = session.getMessages?.().some(message => message.type === 'user' &&
+    message.toolUseResult === `Error: No such tool available: ${unknownToolName}`)
+  if (scenario === 'unknown-tool-close') {
+    const { createSidecarCleanup } = await import('../../app/sidecar/sidecarCleanup.js')
+    await createSidecarCleanup({
+      closeSocket: () => controller.dispose(),
+      disposeMcpLifecycle: async () => {},
+      releaseTranscriptLease: async () => {},
+      onDiagnostic: diagnostic => { throw new Error(JSON.stringify(diagnostic)) },
+      exit: () => {},
+    }).exit(0)
+  }
   const pendingId = pendingEarlierApproval?.requestId
   const earlierApprovalSurvived = controller.getPendingPermissionRequests().some(request => request.requestId === pendingId)
   let earlierApprovalAccepted = false
@@ -160,7 +177,7 @@ try {
   console.log(JSON.stringify({ statusesBefore, statusesAfterStop,
     finalEarlierStatus: getStatus('earlier'), finalCurrentStatus: getStatus('current'),
     earlierMarker: await readMarker('earlier'), currentMarker: await readMarker('current'),
-    earlierApprovalSurvived, earlierApprovalAccepted }))
+    earlierApprovalSurvived, earlierApprovalAccepted, unknownToolReported }))
 } finally {
   releaseWorkers.earlier.resolve()
   releaseWorkers.current.resolve()

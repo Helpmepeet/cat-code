@@ -5,9 +5,11 @@ import { setMaxListeners } from 'events'
  */
 const DEFAULT_MAX_LISTENERS = 50
 
-/** Submit-interrupt and session backgrounding transfer work to another execution. */
+/** Decide whether a turn abort should also stop its detached helpers. */
 export function wasTurnStopped(signal: AbortSignal): boolean {
-  return signal.aborted && signal.reason !== 'interrupt' && signal.reason !== 'background'
+  const { reason } = signal
+  return signal.aborted && reason !== 'interrupt' && reason !== 'background' &&
+    !(typeof reason === 'string' && reason.startsWith('unknown_tool:'))
 }
 
 /**
