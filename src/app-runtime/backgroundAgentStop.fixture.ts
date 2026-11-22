@@ -153,14 +153,10 @@ try {
   const unknownToolReported = session.getMessages?.().some(message => message.type === 'user' &&
     message.toolUseResult === `Error: No such tool available: ${unknownToolName}`)
   if (scenario === 'unknown-tool-close') {
-    const { createSidecarCleanup } = await import('../../app/sidecar/sidecarCleanup.js')
-    await createSidecarCleanup({
-      closeSocket: () => controller.dispose(),
-      disposeMcpLifecycle: async () => {},
-      releaseTranscriptLease: async () => {},
-      onDiagnostic: diagnostic => { throw new Error(JSON.stringify(diagnostic)) },
-      exit: () => {},
-    }).exit(0)
+    controller.dispose()
+    const { runCleanupFunctionsSettled } = await import('../utils/cleanupRegistry.js')
+    const cleanup = await runCleanupFunctionsSettled()
+    if (cleanup.rejected) throw new Error('Session cleanup rejected a fixture task')
   }
   const pendingId = pendingEarlierApproval?.requestId
   const earlierApprovalSurvived = controller.getPendingPermissionRequests().some(request => request.requestId === pendingId)
