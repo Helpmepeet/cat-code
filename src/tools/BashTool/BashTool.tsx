@@ -28,6 +28,7 @@ import { isEnvTruthy } from '../../utils/envUtils.js';
 import { ShellError } from '../../utils/errors.js';
 import { fileIdentitiesEqual } from '../../utils/file.js';
 import { truncate } from '../../utils/format.js';
+import { tailFile } from '../../utils/fsOperations.js';
 import { lazySchema } from '../../utils/lazySchema.js';
 import { expandPath } from '../../utils/path.js';
 import {
@@ -299,6 +300,7 @@ const outputSchema = lazySchema(() => z.object({
   dangerouslyDisableSandbox: z.boolean().optional().describe('Flag to indicate if sandbox mode was overridden'),
   returnCodeInterpretation: z.string().optional().describe('Semantic interpretation for non-error exit codes with special meaning'),
   noOutputExpected: z.boolean().optional().describe('Whether the command is expected to produce no output on success'),
+  outputIncomplete: z.literal(true).optional().describe('Whether the command output is partial or unavailable'),
   structuredContent: z.array(z.any()).optional().describe('Structured content blocks'),
   persistedOutputPath: z.string().optional().describe('Path to the persisted full output in tool-results dir (set when output is too large for inline)'),
   persistedOutputSize: z.number().optional().describe('Total size of the output in bytes (set when output is too large for inline)')
@@ -327,15 +329,15 @@ function isAutobackgroundingAllowed(command: string): boolean {
 
 /** Settings shared by shell dispatch and the held-action review. */
 export function getBashExecutionSettings(input: BashToolInput, inline: boolean, isMainThread: boolean) {
-  const background = !inline && !isBackgroundTasksDisabled && input.run_in_background === true
+  const canBackground = !inline && !isBackgroundTasksDisabled
   return {
     timeoutMs: input.timeout || getDefaultTimeoutMs(),
     sandbox: shouldUseSandbox(input),
-    background,
-    canBackground: !inline && !isBackgroundTasksDisabled,
-    automaticBackgroundOnTimeout: !inline && !isBackgroundTasksDisabled && isAutobackgroundingAllowed(input.command),
+    background: canBackground && input.run_in_background === true,
+    canBackground,
+    automaticBackgroundOnTimeout: canBackground && isAutobackgroundingAllowed(input.command),
     automaticBackgroundAfterMs: feature('KAIROS') && getKairosActive() && isMainThread &&
-      !inline && !isBackgroundTasksDisabled && input.run_in_background !== true ? ASSISTANT_BLOCKING_BUDGET_MS : null,
+      canBackground && input.run_in_background !== true ? ASSISTANT_BLOCKING_BUDGET_MS : null,
   }
 }
 
@@ -742,6 +744,7 @@ export const BashTool = buildTool({
     let result: ExecResult;
     const isMainThread = !toolUseContext.agentId;
     const preventCwdChanges = !isMainThread || Boolean(toolUseContext.inlineCommand);
+    const untrimmedOutput = toolUseContext.codeModeUntrimmedBashOutput === true;
     try {
       // Use the new async generator version of runShellCommand
       const commandGenerator = runShellCommand({
@@ -791,14 +794,13 @@ export const BashTool = buildTool({
       trackGitOperations(input.command, result.code, result.stdout);
       const isInterrupt = result.interrupted && abortController.signal.reason === 'interrupt';
 
-      // stderr is interleaved in stdout (merged fd) — result.stdout has both
-      stdoutAccumulator.append((result.stdout || '').trimEnd() + EOL);
+      if (!untrimmedOutput) stdoutAccumulator.append((result.stdout || '').trimEnd() + EOL);
 
       // Interpret the command result using semantic rules
       interpretationResult = interpretCommandResult(result.code, result.stdout || '', '', result.exitAttribution ?? null);
 
       // Check for git index.lock error (stderr is in stdout now)
-      if (result.stdout && result.stdout.includes(".git/index.lock': File exists")) {
+      if (result.stdout?.includes(".git/index.lock': File exists")) {
         logEvent('tengu_git_index_lock_error', {});
       }
       if (interpretationResult.isError && !isInterrupt) {
@@ -814,7 +816,6 @@ export const BashTool = buildTool({
         }
       }
 
-      // Annotate output with sandbox violations if any (stderr is in stdout)
       const outputWithSbFailures = SandboxManager.annotateStderrWithSandboxFailures(input.command, result.stdout || '');
       if (result.preSpawnError) {
         throw new Error(result.preSpawnError);
@@ -854,9 +855,7 @@ export const BashTool = buildTool({
       });
 
       if (interpretationResult.isError && !isInterrupt) {
-        // stderr is merged into stdout (merged fd); outputWithSbFailures
-        // already has the merged preview. Pass '' for stdout to avoid
-        // duplication in getErrorParts() and processBashCommand.
+        // Pass the combined diagnostic once to the error formatter.
         commandError = new ShellError('', outputWithSbFailures, result.code, result.interrupted);
       }
       wasInterrupted = result.interrupted;
@@ -865,7 +864,7 @@ export const BashTool = buildTool({
     }
 
     // Get final string from accumulator
-    const stdout = stdoutAccumulator.toString();
+    const stdout = untrimmedOutput ? result.stdout : stdoutAccumulator.toString();
 
     // Large output: the file on disk has more than getMaxOutputLength() bytes.
     // stdout already contains the first chunk (from getStdout()). Copy the
@@ -901,9 +900,14 @@ export const BashTool = buildTool({
         const failurePreview = !result.interrupted && commandError.stderr === result.stdout
           ? await readTestFailurePreview(input.command, persistedOutputPath, PREVIEW_SIZE_BYTES)
           : undefined;
-        const preview = failurePreview === undefined
-          ? generatePreview(commandError.stderr, PREVIEW_SIZE_BYTES)
-          : { preview: failurePreview, hasMore: true, previewKind: 'test-failures' as const };
+        const tail = toolUseContext.getCodeModeDispatchFence && failurePreview === undefined &&
+          commandError.stderr === result.stdout && persistedOutputSize !== undefined && persistedOutputSize <= MAX_PERSISTED_SIZE
+          ? await tailFile(persistedOutputPath, PREVIEW_SIZE_BYTES).catch(() => undefined)
+          : undefined;
+        const preview = failurePreview !== undefined
+          ? { preview: failurePreview, hasMore: true, previewKind: 'test-failures' as const }
+          : tail?.content ? { preview: tail.content, hasMore: true, previewKind: 'tail' as const }
+          : generatePreview(commandError.stderr, PREVIEW_SIZE_BYTES);
         throw new ShellError('', buildLargeToolResultMessage({
           filepath: persistedOutputPath,
           originalSize: persistedOutputSize ?? 0,
@@ -931,7 +935,7 @@ export const BashTool = buildTool({
         success: result.code === 0
       });
     }
-    let strippedStdout = stripEmptyLines(stdout);
+    let strippedStdout = untrimmedOutput ? stdout : stripEmptyLines(stdout);
 
     // Cat Code hints protocol: CLIs/SDKs gated on CLAUDECODE=1 emit a
     // `<claude-code-hint />` tag to stderr (merged into stdout here). Scan,
@@ -969,6 +973,8 @@ export const BashTool = buildTool({
       isImage,
       returnCodeInterpretation: interpretationResult?.message,
       noOutputExpected: isSilentBashCommand(input.command),
+      ...(result.outputFilePath || stdoutAccumulator.truncated || wasInterrupted || result.backgroundTaskId ||
+        (untrimmedOutput && (stdout !== compressedStdout || stdout.includes('\uFFFD'))) ? { outputIncomplete: true as const } : {}),
       backgroundTaskId: result.backgroundTaskId,
       backgroundedByUser: result.backgroundedByUser,
       assistantAutoBackgrounded: result.assistantAutoBackgrounded,
@@ -1275,7 +1281,7 @@ async function* runShellCommand({
 
       // Register independently of terminal JSX: desktop and headless runtimes
       // need the same live task record even though they render no Ink hint.
-      if (!inlineCommand && shouldRegisterForegroundShellTask({
+      if (settings.canBackground && shouldRegisterForegroundShellTask({
         backgroundTasksDisabled: isBackgroundTasksDisabled,
         backgroundShellId,
         elapsedSeconds,

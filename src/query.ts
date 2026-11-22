@@ -930,7 +930,7 @@ async function* queryLoop(
     const mediaRecoveryEnabled =
       reactiveCompact?.isReactiveCompactEnabled() ?? false
     const codingPrompt = usesScriptForCodingTools(modelTools)
-      ? withScriptFirstToolGuidance(systemPrompt)
+      ? withScriptFirstToolGuidance(systemPrompt, currentProvider === 'openai')
       : systemPrompt
     const requestSystemPrompt = withTemporaryHarnessFeedback(
       scriptAgent ? withScriptAgentGuidance(codingPrompt) : codingPrompt,

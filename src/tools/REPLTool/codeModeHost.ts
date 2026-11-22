@@ -4,7 +4,10 @@ import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { Message, AssistantMessage, UserMessage, AttachmentMessage, SystemMessage } from '../../types/message.js'
 import { createRuntime, type JsonValue, type PersistentRuntime } from './runtime/index.js'
+import { RuntimeRequestError } from './runtime/protocol.js'
 import { CodeModeDispatch, type CodeModeCall } from './codeModeDispatch.js'
+import { buildCodeModeShellCommand } from './codeModeShell.js'
+import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
 import { codeModeChangedFilePaths } from './codeModeChangedFiles.js'
 import { captureCodeModeToolPrincipals } from './codeModeTools.js'
 import { backgroundCodeModeCell, closeCodeModeOwner, type CodeModeOwner, type CodeModeHostCompletion } from './codeModeBackground.js'
@@ -629,7 +632,6 @@ export class CodeModeHost {
     context.abortController.signal.addEventListener('abort', stop, { once: true })
     if (context.abortController.signal.aborted) stop()
     const output: string[] = []
-    let lastBridgeError: string | undefined
     const result: CodeModeResult = {
       kind: 'code-mode', cellId, generation: this.generation, ...input,
       status: 'running', output: '', calls: dispatch.calls, changedFiles: [],
@@ -639,35 +641,35 @@ export class CodeModeHost {
       const call = dispatch.call.bind(dispatch)
       const callTool = context.contextualAutoAttempt?.mode === 'experimental' ? bindToolActivity(call) : call
       const outcome = await this.runtime.run({
-        cellId, source: input.code, signal: controller.signal,
+        cellId, source: input.code, signal: controller.signal, hasBash: dispatch.hasBash,
         onHumanWaitChange: waiting => {
           if (waiting) deadline.pause()
           else deadline.resume()
         },
         onOutput: event => { output.push(typeof event.value === 'string' ? event.value : JSON.stringify(event.value)) },
         dispatch: async (request, signal) => {
-          if (request.cellId !== cellId) throw new Error('Cell identity has ended')
+          if (request.cellId !== cellId) throw new RuntimeRequestError('Cell identity has ended')
           const payload = request.payload
-          if (!payload || Array.isArray(payload) || typeof payload !== 'object') throw new Error('Expected a request object')
-          if (request.kind === 'tool') {
-            if (typeof payload.name !== 'string' || !('input' in payload)) throw new Error('Tool request requires name and input')
+          if (!payload || Array.isArray(payload) || typeof payload !== 'object') throw new RuntimeRequestError('Expected a request object')
+          if (request.kind === 'tool' || request.kind === 'shell') {
             const abortChild = () => stop()
             signal.addEventListener('abort', abortChild, { once: true })
             if (signal.aborted) stop()
             try {
               const line = request.sourceCellId && request.sourceCellId !== cellId ? undefined : request.line
-              return await callTool(payload.name as string, payload.input, line, payload.nothrow === true) as JsonValue
+              if (request.kind === 'shell') {
+                if (!dispatch.hasBash) throw new RuntimeRequestError('sh requires a granted Bash tool')
+                const command = buildCodeModeShellCommand(payload)
+                return await callTool(BASH_TOOL_NAME, { command }, line, true, true)
+              }
+              if (typeof payload.name !== 'string' || !('input' in payload)) throw new RuntimeRequestError('Tool request requires name and input')
+              return await callTool(payload.name, payload.input, line, payload.nothrow === true)
             } finally { signal.removeEventListener('abort', abortChild) }
           }
-          if (dispatch.blockedReason || controller.signal.aborted) throw new Error(dispatch.blockedReason ?? 'Cell has ended')
-          try {
-            if (payload.op === 'describe' && typeof payload.name === 'string') return JSON.parse(JSON.stringify(await dispatch.describe(payload.name))) as JsonValue
-            if (payload.op === 'search' && typeof payload.query === 'string') return JSON.parse(JSON.stringify(await dispatch.search(payload.query, typeof payload.max === 'number' ? payload.max : 5))) as JsonValue
-          } catch (error) {
-            lastBridgeError = error instanceof Error ? error.message : String(error)
-            throw error
-          }
-          throw new Error('Unknown discovery operation')
+          if (dispatch.blockedReason || controller.signal.aborted) throw new RuntimeRequestError(dispatch.blockedReason ?? 'Cell has ended')
+          if (payload.op === 'describe' && typeof payload.name === 'string') return JSON.parse(JSON.stringify(await dispatch.describe(payload.name))) as JsonValue
+          if (payload.op === 'search' && typeof payload.query === 'string') return JSON.parse(JSON.stringify(await dispatch.search(payload.query, typeof payload.max === 'number' ? payload.max : 5))) as JsonValue
+          throw new RuntimeRequestError('Unknown discovery operation')
         },
       })
       // VM termination is not settlement of host effects. Keep consuming original
@@ -681,7 +683,7 @@ export class CodeModeHost {
           ? (controller.signal.aborted ? 'cancelled' : dispatch.permissionBlocked ? 'blocked' : 'yielded')
           : outcome.status === 'ok' ? 'completed' : outcome.status === 'cancelled' ? 'cancelled'
           : outcome.status === 'error' && dispatch.permissionBlocked ? 'blocked' : 'failed'
-        result.error = dispatch.blockedReason ?? (outcome.error === 'Host request failed' ? lastBridgeError ?? outcome.error : outcome.error)
+        result.error = dispatch.blockedReason ?? outcome.error
       }
       if (outcome.status !== 'ok' && outcome.status !== 'error') {
         this.runtime?.dispose()
@@ -693,7 +695,8 @@ export class CodeModeHost {
       stop()
       await dispatch.settle()
       result.status = 'failed'
-      result.error = error instanceof Error ? error.message : String(error)
+      logError(error)
+      result.error = 'Script host failed'
       this.runtime?.dispose()
       this.runtime = undefined
       this.generation = randomUUID()
@@ -706,7 +709,7 @@ export class CodeModeHost {
       const failed = result.calls.filter(call => call.status !== 'completed')
       const permissionDetails = [...dispatch.permissionFailures]
         .map(([call, reason]) => `${call.name}: ${reason}`).join('\n')
-      const reportedError = permissionDetails && result.error === 'Host request failed' ? undefined : result.error
+      const reportedError = [...dispatch.permissionFailures.values()].includes(result.error ?? '') ? undefined : result.error
       const notice = [
         `[Code Mode] ${result.status}; cell ${cellId}; generation ${result.generation}.`,
         ...(selectedOutput.length > 240 * 1024 ? ['Selected output was truncated at the cell delivery limit.'] : []),

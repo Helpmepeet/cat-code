@@ -84,7 +84,7 @@ export type PersistedToolResult = {
   isJson: boolean
   preview: string
   hasMore: boolean
-  previewKind?: 'test-failures'
+  previewKind?: 'test-failures' | 'tail'
 }
 
 // Error result when persistence fails
@@ -192,9 +192,9 @@ export function buildLargeToolResultMessage(
 ): string {
   let message = `${PERSISTED_OUTPUT_TAG}\n`
   message += `Output too large (${formatFileSize(result.originalSize)}). Full output saved to: ${result.filepath}\n\n`
-  message += result.previewKind === 'test-failures'
-    ? 'Preview (test failures):\n'
-    : `Preview (first ${formatFileSize(PREVIEW_SIZE_BYTES)}):\n`
+  const previewLabel = result.previewKind === 'test-failures' ? 'test failures'
+    : `${result.previewKind === 'tail' ? 'last' : 'first'} ${formatFileSize(PREVIEW_SIZE_BYTES)}`
+  message += `Preview (${previewLabel}):\n`
   message += result.preview
   message += result.hasMore ? '\n...\n' : '\n'
   message += PERSISTED_OUTPUT_CLOSING_TAG

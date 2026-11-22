@@ -1,7 +1,7 @@
 import { findToolByName, type Tool, type ToolUseContext, type Tools } from '../../Tool.js'
 import { zodToJsonSchema } from '../../utils/zodToJsonSchema.js'
 import { createHash } from 'node:crypto'
-import { encode } from './runtime/protocol.js'
+import { RuntimeRequestError, encode } from './runtime/protocol.js'
 import { isCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
 import { getBashPrompt } from '../BashTool/prompt.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
@@ -89,9 +89,9 @@ export function codeModeExclusion(tool: Tool, context?: ToolUseContext): string 
 /** Resolve every dispatch against the current executable pool, including aliases. */
 export function resolveCodeModeTool(context: ToolUseContext, name: string): Tool {
   const tool = findToolByName(context.options.tools, name)
-  if (!tool) throw new Error(`Tool is not available in this execution: ${name}`)
+  if (!tool) throw new RuntimeRequestError(`Tool is not available in this execution: ${name}`)
   const reason = codeModeExclusion(tool, context)
-  if (reason) throw new Error(`${tool.name} is direct-only: ${reason}`)
+  if (reason) throw new RuntimeRequestError(`${tool.name} is direct-only: ${reason}`)
   return tool
 }
 
@@ -154,11 +154,11 @@ export async function describeCodeModeTool(context: ToolUseContext, name: string
 }
 
 export async function searchCodeModeTools(context: ToolUseContext, query: string, max = 5) {
-  if (typeof query !== 'string' || query.length > 4096) throw new Error('Search query must be at most 4096 characters')
-  if (!Number.isInteger(max) || max < 1 || max > 20) throw new Error('Search limit must be an integer from 1 to 20')
+  if (typeof query !== 'string' || query.length > 4096) throw new RuntimeRequestError('Search query must be at most 4096 characters')
+  if (!Number.isInteger(max) || max < 1 || max > 20) throw new RuntimeRequestError('Search limit must be an integer from 1 to 20')
   const normalizedQuery = query.trim().toLowerCase()
   const words = [...new Set(normalizedQuery.split(/\s+/).filter(Boolean))]
-  if (words.length > 32) throw new Error('Use at most 32 tool-search terms')
+  if (words.length > 32) throw new RuntimeRequestError('Use at most 32 tool-search terms')
   const eligible = context.options.tools.filter(tool => !codeModeExclusion(tool, context))
   let indexComplete = true
   const ranked = (await Promise.all(eligible.map(async tool => {

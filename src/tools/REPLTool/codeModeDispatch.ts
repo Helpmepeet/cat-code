@@ -7,7 +7,9 @@ import { createAssistantMessage, createUserMessage } from '../../utils/messages.
 import { runToolUse } from '../../services/tools/toolExecution.js'
 import { FileReadTool } from '../FileReadTool/FileReadTool.js'
 import { resolveCodeModeTool, codeModeToolPrincipal, captureCodeModeToolPrincipals, describeCodeModeTool, searchCodeModeTools, MAX_CODE_MODE_TOOL_NAME_CHARS } from './codeModeTools.js'
-import { encode } from './runtime/protocol.js'
+import { RuntimeRequestError, boundRuntimeError, encode, type JsonValue } from './runtime/protocol.js'
+import { BashTool, type Out as BashOutput } from '../BashTool/BashTool.js'
+import { PERSISTED_OUTPUT_TAG } from '../../utils/toolResultStorage.js'
 import { withCodeModeRead, type FileStateCache } from '../../utils/fileStateCache.js'
 import { preflightCodeModeInstructions } from './codeModeInstructions.js'
 import type { Attachment } from '../../utils/attachments.js'
@@ -88,6 +90,7 @@ export class CodeModeDispatch {
 
   stop(reason: string): void { this.fence ??= reason }
   get blockedReason(): string | undefined { return this.fence }
+  get hasBash(): boolean { return findToolByName(this.currentContext.options.tools, BashTool.name) === BashTool }
   get currentContext(): ToolUseContext {
     const refreshed = this.context.options.refreshMcpRuntime?.()
     if (refreshed && (refreshed.tools !== this.context.options.tools ||
@@ -115,7 +118,7 @@ export class CodeModeDispatch {
     if (original !== undefined && original !== principal) {
       this.stop('This tool name now resolves to a different principal. Author a new script for the refreshed pool.')
       this.context.codeModeHost?.fenceForInstructions(this.fence!)
-      throw new Error(this.fence)
+      throw new RuntimeRequestError(this.fence)
     }
     if (original === undefined) this.principals.set(name, principal)
   }
@@ -145,16 +148,16 @@ export class CodeModeDispatch {
    * normal effect boundary can release the lane early; everything else drains
    * those reads before running. No StreamingToolExecutor sibling-abort policy.
    */
-  call(name: string, input: unknown, line?: number, nothrow = false): Promise<unknown> {
-    if (!name || name.length > MAX_CODE_MODE_TOOL_NAME_CHARS) return Promise.reject(new Error('Tool name exceeds the isolated bridge limit'))
+  call(name: string, input: unknown, line?: number, nothrow = false, shellHelper = false): Promise<JsonValue> {
+    if (!name || name.length > MAX_CODE_MODE_TOOL_NAME_CHARS) return Promise.reject(new RuntimeRequestError('Tool name exceeds the isolated bridge limit'))
     if (this.calls.length >= 256) {
       this.stop('Code Mode child-call limit reached')
-      return Promise.reject(new Error(this.fence))
+      return Promise.reject(new RuntimeRequestError(this.fence))
     }
     const inputBytes = Buffer.byteLength(JSON.stringify(input))
     if (inputBytes > 64 * 1024 || this.inputBytes + inputBytes > 128 * 1024) {
       this.stop('Code Mode cumulative child-input limit reached')
-      return Promise.reject(new Error(this.fence))
+      return Promise.reject(new RuntimeRequestError(this.fence))
     }
     this.inputBytes += inputBytes
     const call: CodeModeCall = { toolUseId: `code_${randomUUID()}`, name, input, status: 'running', ...(line === undefined ? {} : { line }) }
@@ -164,20 +167,20 @@ export class CodeModeDispatch {
     const operation = this.tail.then(() => {
       this.queued.delete(call)
       if (call.status === 'cancelled') {
-        const result = { content: call.error, isError: true, permission: 'cancelled' }
+        const result = { content: call.error ?? 'Queued action cancelled', isError: true, permission: 'cancelled' }
         call.result = result
-        if (!nothrow) throw new Error(JSON.stringify(result))
+        if (!nothrow) throw new RuntimeRequestError(result.content)
         return result
       }
       this.activeCalls.add(call)
       this.syncHumanWait()
-      return this.execute(call, nothrow, () => {
+      return this.execute(call, nothrow, shellHelper, () => {
         this.activeReads.add(settled)
         lane.resolve()
       })
     }).catch(error => {
       if (call.status === 'running') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence ? 'blocked' : 'failed'
-      call.error = this.permissionFailures.get(call) ?? (error instanceof Error ? error.message : String(error)).slice(0, 2048)
+      call.error = this.permissionFailures.get(call) ?? (error instanceof RuntimeRequestError ? boundRuntimeError(error.message) : 'Host request failed')
       throw error
     })
     const finish = () => {
@@ -199,18 +202,18 @@ export class CodeModeDispatch {
 
   private assertCurrentPrincipal(name: string, principal: string) {
     if (this.fence || this.context.abortController.signal.aborted) {
-      throw new Error(this.fence ?? 'Code Mode execution cancelled')
+      throw new RuntimeRequestError(this.fence ?? 'Code Mode execution cancelled')
     }
     const current = resolveCodeModeTool(this.currentContext, name)
     if (codeModeToolPrincipal(current, this.context) !== principal) {
       this.stop('Tool principal changed before execution. Author a new script for the refreshed pool.')
       this.context.codeModeHost?.fenceForInstructions(this.fence!)
-      throw new Error(this.fence)
+      throw new RuntimeRequestError(this.fence)
     }
     return current
   }
 
-  private async execute(call: CodeModeCall, nothrow: boolean, releaseReadLane: () => void): Promise<unknown> {
+  private async execute(call: CodeModeCall, nothrow: boolean, shellHelper: boolean, releaseReadLane: () => void): Promise<JsonValue> {
     const { name, input, line, toolUseId } = call
     let canOverlap = false
     while (!this.fence && !this.context.abortController.signal.aborted) {
@@ -221,9 +224,10 @@ export class CodeModeDispatch {
       else break
     }
     if (this.fence || this.context.abortController.signal.aborted) {
-      throw new Error(this.fence ?? 'Code Mode execution cancelled')
+      throw new RuntimeRequestError(this.fence ?? 'Code Mode execution cancelled')
     }
     const tool = resolveCodeModeTool(this.context, name)
+    if (shellHelper && tool !== BashTool) throw new RuntimeRequestError('sh requires a granted Bash tool')
     const dispatchedPrincipal = codeModeToolPrincipal(tool, this.context)
     this.bindPrincipal(name, dispatchedPrincipal)
     if (name !== tool.name) this.bindPrincipal(tool.name, dispatchedPrincipal)
@@ -235,6 +239,7 @@ export class CodeModeDispatch {
     }), { codeMode: identity })
     await this.deliver(assistant)
     let result: unknown
+    let failureText: string | undefined
     let failed = false
     let received = false
     let preparedGlob: unknown
@@ -259,7 +264,7 @@ export class CodeModeDispatch {
           return decision
         },
         {
-          ...this.context, inlineCommand: undefined, preserveToolUseResults: true,
+          ...this.context, inlineCommand: undefined, preserveToolUseResults: true, codeModeUntrimmedBashOutput: shellHelper,
           onHumanPermissionWait: waiting => {
             if (waiting) this.waitingCalls.add(call)
             else this.waitingCalls.delete(call)
@@ -277,6 +282,7 @@ export class CodeModeDispatch {
           onToolFinalInput: async (id, finalName, finalInput, executionContext) => {
             if (id !== toolUseId) return
             const current = this.assertCurrentPrincipal(name, dispatchedPrincipal)
+            if (shellHelper && current !== BashTool) throw new RuntimeRequestError('sh requires a granted Bash tool')
             if (this.activeReads.size &&
                 (!canOverlap || current !== GlobTool || !canOverlapGlob(executionContext, finalName, finalInput))) {
               await Promise.all(this.activeReads)
@@ -294,7 +300,7 @@ export class CodeModeDispatch {
               this.stop('Final executable input activates instructions; author a new script')
               this.context.codeModeHost?.requireModelMessages(instructions)
               for (const message of instructions) await this.following(message)
-              throw new Error(this.fence)
+              throw new RuntimeRequestError(this.fence)
             }
             const finalTool = this.assertCurrentPrincipal(name, dispatchedPrincipal)
             if (canOverlap && finalTool === GlobTool && canOverlapGlob(executionContext, finalName, finalInput)) {
@@ -336,9 +342,15 @@ export class CodeModeDispatch {
                   ? 'This image is sent separately to the model'
                   : 'This content requires direct tool delivery; media bytes are not exposed to the interpreter',
               }))
-            const contentComplete = Buffer.byteLength(JSON.stringify(content)) <= 96 * 1024
+            const contentFits = Buffer.byteLength(JSON.stringify(content)) <= 96 * 1024
+            const persistedPreview = typeof content === 'string' && content.includes(PERSISTED_OUTPUT_TAG)
+            const errorExcerpt = failed && typeof content === 'string' && /\n\.\.\. \[\d+ characters truncated\] \.\.\.\n/.test(content)
+            const bashOutputIncomplete = tool === BashTool && (message.toolUseResult as BashOutput | undefined)?.outputIncomplete === true
+            const contentComplete = contentFits && !persistedPreview && !errorExcerpt && !bashOutputIncomplete &&
+              (typeof content === 'string' || content.every(block => block.type === 'text'))
+            if (failed) failureText = typeof content === 'string' ? content : content.filter(block => block.type === 'text').map(block => block.text).join('\n')
             result = {
-              content: contentComplete ? content : '[Effective content exceeds 96 KiB guest delivery limit; narrow the tool inputs or use direct delivery]',
+              content: contentFits ? content : '[Effective content exceeds 96 KiB guest delivery limit; narrow the tool inputs or use direct delivery]',
               contentComplete, isError: failed,
               contentPolicy: 'text-only; annotations and protocol metadata are not transferred; non-text blocks are explicitly direct-only',
             }
@@ -351,10 +363,11 @@ export class CodeModeDispatch {
             }
             if (!tool.isMcp && !mediaData && (typeof paired.content === 'string' || !(paired.content ?? []).some(block => block.type !== 'text')) && message.toolUseResult !== undefined) {
               const data = projectGuestData(message.toolUseResult, 96 * 1024)
+              const dataIncomplete = bashOutputIncomplete || (failed && (persistedPreview || errorExcerpt))
               result = {
                 ...(result as Record<string, unknown>),
                 ...(data.complete
-                  ? { data: data.value, dataComplete: true }
+                  ? { data: data.value, dataComplete: !dataIncomplete }
                   : { dataComplete: false, dataUnavailable: 'Structured tool data is unsupported or exceeds the 96 KiB guest delivery limit' }),
               }
             }
@@ -442,17 +455,35 @@ export class CodeModeDispatch {
           for (const message of instructions) await this.following(message)
         }
       }
-      if (!received) throw new Error('Child execution ended without a result receipt')
+      if (!received) throw new RuntimeRequestError('Child execution ended without a result receipt')
+      if (shellHelper) {
+        const response = result as Record<string, unknown>
+        const { data, ...rest } = response
+        const bashData = data as BashOutput | undefined
+        if (!failed && bashData?.backgroundTaskId) {
+          result = {
+            ...rest, isError: true, contentComplete: false, dataComplete: false,
+            data: { backgroundTaskId: bashData.backgroundTaskId },
+            content: `Bash is still running with task ID ${bashData.backgroundTaskId}.`,
+          }
+        } else if (!failed && (response.dataComplete !== true || typeof bashData?.stdout !== 'string')) {
+          result = {
+            ...rest, contentComplete: false, dataComplete: false, isError: true,
+            content: ['sh could not deliver complete stdout. Narrow the command output or use Read if Bash retained it.',
+              typeof response.content === 'string' && response.content.includes(PERSISTED_OUTPUT_TAG) ? response.content : '',
+            ].filter(Boolean).join('\n'),
+          }
+        }
+      }
       if (call.status !== 'skipped') call.status = this.context.abortController.signal.aborted ? 'cancelled' : failed ? (this.fence && !overlapping ? 'blocked' : 'failed') : 'completed'
       const resultBytes = Buffer.byteLength(JSON.stringify(result))
       call.result = this.resultBytes + resultBytes <= 128 * 1024
         ? result : { omitted: true, reason: 'Cumulative cell display-result limit', bytes: resultBytes }
       this.resultBytes += Math.min(resultBytes, 128 * 1024)
-      if (failed && !nothrow) throw new Error(JSON.stringify(result).slice(0, 16_384))
-      return result
+      if (failed && !nothrow) throw new RuntimeRequestError(this.permissionFailures.get(call) ?? (failureText || `${call.name} failed`))
+      return result as JsonValue
     } catch (error) {
       if (call.status !== 'skipped') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence && !overlapping ? 'blocked' : 'failed'
-      call.error = error instanceof Error ? error.message : String(error)
       throw error
     }
     }, this.notebookReads)

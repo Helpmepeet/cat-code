@@ -54,6 +54,35 @@ test('no ambient host access or modules', async () => {
     expect((await h.run('await import("node:fs")', 'b')).status).toBe('error')
   } finally { h.runtime.dispose() }
 })
+test('unexpected host exceptions stay private in guest catch and cell errors', async () => {
+  const runtime = createRuntime()
+  const outputs: RuntimeOutput[] = []
+  const run = (cellId: string, source: string) => runtime.run({
+    cellId, source, signal: new AbortController().signal, onOutput: value => outputs.push(value),
+    dispatch: async () => { throw new Error('private host detail') },
+  })
+  try {
+    expect((await run('catch', 'try { await tools.call({}); } catch (error) { output(error.message); }')).status).toBe('ok')
+    expect(outputs.map(output => output.value)).toEqual(['Host request failed'])
+    expect(await run('throw', 'await tools.call({});')).toMatchObject({ status: 'error', error: 'Host request failed' })
+  } finally { runtime.dispose() }
+})
+test('a retained sh tag cannot dispatch from a cell without Bash', async () => {
+  const runtime = createRuntime()
+  const outputs: RuntimeOutput[] = []
+  const requests: RuntimeRequest[] = []
+  const run = (cellId: string, hasBash: boolean, source: string) => runtime.run({
+    cellId, hasBash, source, signal: new AbortController().signal,
+    onOutput: value => outputs.push(value),
+    dispatch: async request => { requests.push(request); return null },
+  })
+  try {
+    expect((await run('granted', true, 'const retainedTag = sh; output(typeof sh);')).status).toBe('ok')
+    expect((await run('revoked', false, 'const result = await retainedTag`printf inert`; output([typeof sh, result]);')).status).toBe('ok')
+    expect(requests).toEqual([])
+    expect(outputs.map(output => output.value)).toEqual(['function', ['undefined', { isError: true, content: expect.stringContaining('requires a granted Bash tool') }]])
+  } finally { runtime.dispose() }
+})
 test('unawaited requests drain before next admission', async () => {
   const h = harness()
   try {

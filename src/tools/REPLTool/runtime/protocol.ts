@@ -14,12 +14,13 @@ export const DEFAULT_LIMITS: RuntimeLimits = {
   wallTimeMs: 10 * 60_000, sourceBytes: 128 * 1024, messageBytes: 256 * 1024,
   outputBytes: 256 * 1024, pendingRequests: 16, totalRequests: 256,
 }
-export interface RuntimeRequest { cellId: string; kind: 'tool' | 'discover'; payload: JsonValue; line?: number; sourceCellId?: string }
+export interface RuntimeRequest { cellId: string; kind: 'tool' | 'discover' | 'shell'; payload: JsonValue; line?: number; sourceCellId?: string }
 export interface RuntimeOutput { cellId: string; kind: 'console' | 'selected'; value: JsonValue; line?: number; sourceCellId?: string }
 export interface RuntimeOutcome { cellId: string; status: 'ok' | 'error' | 'cancelled' | 'limit' | 'disposed'; error?: string }
 export interface RuntimeCell {
   cellId: string
   source: string
+  hasBash?: boolean
   signal: AbortSignal
   dispatch: (request: RuntimeRequest, signal: AbortSignal) => Promise<JsonValue>
   onOutput?: (output: RuntimeOutput) => void
@@ -37,6 +38,16 @@ export interface PersistentRuntime {
   run(cell: RuntimeCell): Promise<RuntimeOutcome>
   setHumanWait(cellId: string, waiting: boolean): void
   dispose(): void
+}
+
+/** Only authored messages and effective tool results may cross to the guest. */
+export class RuntimeRequestError extends Error {}
+
+export function boundRuntimeError(message: string): string {
+  const limit = 2048
+  if (message.length <= limit) return message
+  const marker = '\n[Error text omitted]\n'
+  return message.slice(0, 256) + marker + message.slice(-(limit - 256 - marker.length))
 }
 
 // Validate descriptors before serialization: do not invoke getters or toJSON in host data.

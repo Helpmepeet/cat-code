@@ -35,7 +35,7 @@ function instrument(source: string): string {
 // Bridge objects carry no admission. Only the drained runtime generation has an
 // active host owner; unresolved continuations prevent another cell's admission.
 // No guest program is replayed.
-export function transform(source: string): string {
+export function transform(source: string, hasBash = false): string {
   source = instrument(source)
   const ast = parse(source, { ecmaVersion: 'latest', allowAwaitOutsideFunction: true })
   const edits: { start: number; end: number; text: string }[] = []
@@ -59,11 +59,16 @@ export function transform(source: string): string {
       hoisted.set(node.id.name, factory)
       edits.push({ start: node.start, end: node.end, text: `function ${factory}(){return ${source.slice(node.start, node.end)};}` })
     } else if (node.type === 'ClassDeclaration' && node.id) {
-      edits.push({ start: node.start, end: node.end, text: `globalThis[${JSON.stringify(node.id.name)}] = ${source.slice(node.start, node.end)};` })
+      edits.push({ start: node.start, end: node.end, text: `${notebookBinding(node.id.name)} = ${source.slice(node.start, node.end)};` })
     }
   }
   for (const edit of edits.sort((a, b) => b.start - a.start)) source = source.slice(0, edit.start) + edit.text + source.slice(edit.end)
-  const declarations = [...hoisted].map(([name, factory]) => `globalThis[${JSON.stringify(name)}]=${factory}();`).join('')
+  const declarations = [...hoisted].map(([name, factory]) => `${notebookBinding(name)}=${factory}();`).join('')
   if (declarations) source = source.slice(0, directiveEnd) + ';' + declarations + source.slice(directiveEnd)
-  return `(async function({tools,output,console}){${source}\n})(__cellBindings())`
+  return `(async function({tools,output,console,sh}){${source}\n})(__cellBindings(${hasBash}))`
+}
+
+function notebookBinding(name: string): string {
+  // Guest declarations of sh shadow the builtin for this cell.
+  return name === 'sh' ? 'sh' : `globalThis[${JSON.stringify(name)}]`
 }

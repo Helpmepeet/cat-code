@@ -1,5 +1,5 @@
 import { activeDeadline } from './activeDeadline'
-import { DEFAULT_LIMITS, encode, type PersistentRuntime, type RuntimeCell, type RuntimeLimits, type RuntimeOptions, type RuntimeOutcome } from './protocol'
+import { DEFAULT_LIMITS, RuntimeRequestError, boundRuntimeError, encode, type PersistentRuntime, type RuntimeCell, type RuntimeLimits, type RuntimeOptions, type RuntimeOutcome } from './protocol'
 export type * from './protocol'
 
 /** One instance per session/worker. Runs serialize; independent instances may run concurrently.
@@ -60,7 +60,7 @@ export function createRuntime(options: RuntimeOptions = {}): PersistentRuntime {
       } else if (data.type === 'done') {
         if (owner.pending) throw new Error('Runtime completed with pending requests')
         owner.controller.abort()
-        owner.finish({ cellId: owner.cell.cellId, status: data.error ? 'error' : 'ok', ...(data.error ? { error: String(data.error).slice(0, 2048) } : {}) })
+        owner.finish({ cellId: owner.cell.cellId, status: data.error ? 'error' : 'ok', ...(data.error ? { error: boundRuntimeError(String(data.error)) } : {}) })
         active = undefined
       } else if (data.type === 'output' || data.type === 'request') {
         if (typeof data.text !== 'string' || new TextEncoder().encode(data.text).length > limits.messageBytes) throw new Error('Message byte limit')
@@ -78,7 +78,9 @@ export function createRuntime(options: RuntimeOptions = {}): PersistentRuntime {
           try {
             const value = await owner.cell.dispatch({ cellId: owner.cell.cellId, kind: data.kind, payload, line, sourceCellId }, owner.controller.signal)
             response = { text: encode(value, limits.messageBytes) }
-          } catch { response = { error: 'Host request failed' } }
+          } catch (error) {
+            response = { error: error instanceof RuntimeRequestError ? boundRuntimeError(error.message) : 'Host request failed' }
+          }
           owner.pending--
           if (!dead && active === owner && !owner.controller.signal.aborted) worker.postMessage({ type: 'response', id: data.id, ...response })
         }
@@ -107,7 +109,7 @@ export function createRuntime(options: RuntimeOptions = {}): PersistentRuntime {
         deadline.resume()
         cell.signal.addEventListener('abort', abort, { once: true })
         void ready.then(() => {
-          if (!dead && active === owner) worker.postMessage({ type: 'run', cellId: cell.cellId, source: cell.source })
+          if (!dead && active === owner) worker.postMessage({ type: 'run', cellId: cell.cellId, source: cell.source, hasBash: cell.hasBash === true })
         }).catch(() => stop('error', 'Runtime unavailable'))
       })
     },

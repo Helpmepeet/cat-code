@@ -203,6 +203,8 @@ export type ToolUseContext = {
   onCodeModeAudit?: (message: Message) => void
   /** Rechecked after scheduler admission; queued guest work cannot cross a barrier. */
   getCodeModeDispatchFence?: () => string | undefined
+  /** Keep whitespace in the Script sh helper's Bash output. */
+  codeModeUntrimmedBashOutput?: boolean
   /** Worker-owned transient display route; durability remains with its receipt owner. */
   publishCodeModeActivity?: (message: Message) => void | Promise<void>
   /** Instruction epoch actually supplied to this model request, never tool input. */

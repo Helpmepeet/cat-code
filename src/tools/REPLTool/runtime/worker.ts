@@ -1,6 +1,6 @@
 import { newQuickJSWASMModule, type QuickJSDeferredPromise, type QuickJSHandle } from 'quickjs-emscripten'
 import variant from '@jitl/quickjs-singlefile-cjs-release-sync'
-import { encode, type RuntimeLimits } from './protocol'
+import { boundRuntimeError, encode, type RuntimeLimits } from './protocol'
 import { transform } from './transform'
 
 const scope = globalThis as unknown as { postMessage(v: unknown): void; onmessage: (e: MessageEvent) => void }
@@ -9,6 +9,7 @@ let runtime: ReturnType<Awaited<typeof modulePromise>['newRuntime']>
 let ctx: ReturnType<typeof runtime.newContext>
 let limits: RuntimeLimits
 let current: string | undefined
+let hasBash = false
 let deadline = 0
 let waitRevision: number | undefined
 let waitStarted: number | undefined
@@ -116,7 +117,8 @@ async function initialize(l: RuntimeLimits) {
         send({ type: 'output', cellId: current, kind, text, line, sourceCellId })
         return ctx.undefined
       }
-      if (kind !== 'tool' && kind !== 'discover') throw new Error('Unknown bridge request')
+      if (kind === 'shell' && !hasBash) throw new Error('sh requires a granted Bash tool')
+      if (kind !== 'tool' && kind !== 'discover' && kind !== 'shell') throw new Error('Unknown bridge request')
       if (++requests > limits.totalRequests || pending.size >= limits.pendingRequests) throw new Error('Request limit')
       const id = ++nextRequest
       const promise = ctx.newPromise()
@@ -174,9 +176,25 @@ async function initialize(l: RuntimeLimits) {
       }
     };
     delete globalThis.__bridge;
-    Object.defineProperty(globalThis, '__cellBindings', { value: () => {
-      const call = (kind, value) => { validate(value); return bridge(kind, stringify(value), new ErrorType().stack); };
+    const call = (kind, value) => {
+      validate(value);
+      return bridge(kind, stringify(value), new ErrorType().stack);
+    };
+    const shellTag = async (strings, ...values) => {
+      let request;
+      try {
+        request = { literals: strings?.raw, values };
+        validate(request);
+      } catch {
+        return { isError: true, content: 'Use sh as a tagged template with strings, finite numbers, or nonempty arrays of those values.' };
+      }
+      try { return await call('shell', request); } catch (error) {
+        return { isError: true, content: typeof error?.message === 'string' ? error.message : 'Shell request failed' };
+      }
+    };
+    define(globalThis, '__cellBindings', { value: hasBash => {
       return {
+        sh: hasBash ? shellTag : undefined,
         tools: Object.freeze({ call: value => call('tool', value), discover: value => call('discover', value) }),
         output: value => call('selected', value),
         console: Object.freeze({ log: (...args) => call('console', args), warn: (...args) => call('console', args), error: (...args) => call('console', args) })
@@ -191,7 +209,8 @@ scope.onmessage = async ({ data }) => {
     if (data.type === 'run') {
       let source: string
       try {
-        source = transform(data.source)
+        hasBash = data.hasBash === true
+        source = transform(data.source, hasBash)
       } catch (error) {
         // Parsing and profile validation run before guest state can change.
         send({ type: 'done', cellId: data.cellId, error: String(error).slice(0, 2048) })
@@ -214,7 +233,7 @@ scope.onmessage = async ({ data }) => {
       } else {
         const handle = ctx.unwrapResult(result)
         void ctx.resolvePromise(handle).then(resolved => {
-          if (resolved.error) { failure = String(ctx.dump(resolved.error)?.message ?? 'Guest exception').slice(0, 2048); resolved.error.dispose() }
+          if (resolved.error) { failure = boundRuntimeError(String(ctx.dump(resolved.error)?.message ?? 'Guest exception')); resolved.error.dispose() }
           else ctx.unwrapResult(resolved).dispose()
           settled = true; pump()
         })

@@ -53,7 +53,7 @@ import {
 } from '../corePolicy.js'
 import type { OutputStyleConfig } from '../outputStyles.js'
 import type { GPTPromptFamily } from '../promptStyle.js'
-import { DIRECT_SCRIPT_TOOL_GUIDANCE } from './scriptToolGuidance.js'
+import { DIRECT_GPT_BATCHING, DIRECT_SCRIPT_TOOL_GUIDANCE } from './scriptToolGuidance.js'
 
 // Inlined to avoid the circular dependency: prompts.ts → gpt.ts → prompts.ts
 function prependBullets(items: Array<string | string[]>): string[] {
@@ -249,7 +249,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     taskToolName
       ? `When task tracking helps, use ${taskToolName}.`
       : null,
-    `Issue independent tool calls together in one turn. Never run file mutations concurrently when their paths overlap or may alias; sequence them and reread before the next mutation. When a call depends on an earlier result, wait for that result; do not guess the dependent value.`,
+    `${DIRECT_GPT_BATCHING} Never run file mutations concurrently when their paths overlap or may alias; sequence them and reread before the next mutation. When a call depends on an earlier result, wait for that result; do not guess the dependent value.`,
   ].filter(item => item !== null)
 
   return [`# Using Your Tools`, ...prependBullets(items)].join('\n')
