@@ -416,8 +416,8 @@ export function getDenyRuleForTool(
   if (directRule) return directRule
 
   // ResumeAgent is another subagent execution surface. A blanket Agent deny
-  // must close the whole subagent boundary, while Agent(type) remains scoped to
-  // fresh spawns because ResumeAgent resolves the type only after target lookup.
+  // must close the whole subagent boundary. ResumeAgent checks Agent(type)
+  // against the recorded role after resolving the target.
   if (tool.name === RESUME_AGENT_TOOL_NAME) {
     return (
       rules.find(

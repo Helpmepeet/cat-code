@@ -41,6 +41,7 @@ import {
   resumeAgentBackground,
   TranscriptNotFoundError,
 } from './resumeAgent.js'
+import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
 import { FORK_AGENT } from './forkSubagent.js'
 
 function deferred<T>() {
@@ -73,6 +74,7 @@ describe('resumeAgentBackground', () => {
     await writeAgentTranscript('agent-resume')
     await writeAgentMetadata(asAgentId('agent-resume'), {
       agentType: 'general-purpose',
+      originalToolNames: [],
       description: 'Continue current objective',
     })
 
@@ -136,6 +138,7 @@ describe('resumeAgentBackground', () => {
   test('keeps exact parent MCP inputs when resuming a fork', async () => {
     await writeAgentMetadata(asAgentId('agent-resume'), {
       agentType: FORK_AGENT.agentType,
+      originalToolNames: ['parent-tool'],
       description: 'Continue current objective',
     })
     const parentTools = [{ name: 'parent-tool' }]
@@ -182,8 +185,9 @@ describe('resumeAgentBackground', () => {
       toolUseContext: context,
     })
 
+    await runAsyncAgentLifecycle.mock.results[0]!.value
     expect(snapshotReads).toBe(0)
-    expect(childContext?.options.tools).toBe(parentTools)
+    expect(childContext?.options.tools).toEqual(parentTools)
     expect(childContext?.options.commands).toEqual(parentCommands)
     expect(childContext?.options.mcpClients).toEqual(parentClients)
     expect(childContext?.options.mcpResources).toEqual(parentResources)
@@ -191,7 +195,7 @@ describe('resumeAgentBackground', () => {
 
   test('restores the persisted Opus route instead of adopting its Codex parent', async () => {
     await writeAgentMetadata(asAgentId('agent-resume'), {
-      agentType: 'general-purpose', model: 'claude-opus-5-5', provider: 'firstParty',
+      agentType: 'general-purpose', originalToolNames: [], model: 'claude-opus-5-5', provider: 'firstParty',
     })
     const context = createToolUseContext() as ToolUseContext
     context.options.mainLoopModel = 'gpt-6.1-sol'
@@ -426,6 +430,7 @@ describe('resumeAgentBackground', () => {
     await writeAgentMetadata(asAgentId('agent-resume'), {
       agentType: 'general-purpose',
       description: 'Continue current objective',
+      originalToolNames: [],
       assignedCwd: resumedCwd,
     })
 
@@ -468,6 +473,7 @@ describe('resumeAgentBackground', () => {
     await writeAgentMetadata(asAgentId('agent-resume'), {
       agentType: 'general-purpose',
       description: 'Continue current objective',
+      originalToolNames: [],
       worktreePath: resumedWorktree,
     })
 
@@ -545,11 +551,13 @@ function createToolUseContext(additionalWorkingDirectories: string[] = []) {
     mcp: { tools: [] },
     tasks: {},
     agent: undefined,
-    agentDefinitions: { activeAgents: [] },
+    agentDefinitions: { activeAgents: [GENERAL_PURPOSE_AGENT] },
   }
 
   return {
     toolUseId: 'toolu-resume',
+    abortController: new AbortController(),
+    messages: [],
     contentReplacementState: {},
     renderedSystemPrompt: undefined,
     setAppState: (updater: (prev: typeof state) => typeof state) => {
@@ -557,7 +565,7 @@ function createToolUseContext(additionalWorkingDirectories: string[] = []) {
     },
     getAppState: () => state,
     options: {
-      agentDefinitions: { activeAgents: [] },
+      agentDefinitions: state.agentDefinitions,
       tools: [],
       mcpClients: [],
       mainLoopModel: 'gpt-5.6-luna',

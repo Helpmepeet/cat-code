@@ -460,6 +460,8 @@ function getAgentMetadataPathForSession(
 
 export type AgentMetadata = {
   agentType: string
+  /** Callable tool names at launch. Older workers have no recorded ceiling. */
+  originalToolNames?: string[]
   /** Dispatch route; older files resume using their transcript's actual model. */
   model?: string
   provider?: import('./model/providers.js').APIProvider

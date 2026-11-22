@@ -107,8 +107,6 @@ test.each(['clean', 'dirty', 'ordinary'])(
     const agentId = (result.data as any).agentId
     expect(JSON.stringify(result)).toContain('status: blocked')
     await flushSessionStorage()
-    // Wait for runAgent's fire-and-forget metadata write before reading it.
-    await new Promise(resolve => setTimeout(resolve, 20))
     const metadata = await readAgentMetadata(asAgentId(agentId))
     const launchedCwd = directories[0]!
     expect(launchedCwd === repo).toBe(mode === 'ordinary')

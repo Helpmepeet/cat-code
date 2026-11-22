@@ -31,7 +31,7 @@ function isLiveAssistant(message: AssistantMessage): boolean {
 
 function conversationEvidence(
   messages: readonly Message[],
-  excluded?: ReadonlySet<string>,
+  worker?: Pick<ContextualWorkerAssignment, 'excluded' | 'history'>,
   includeWorkerRequests = false,
 ): ConversationEntry[] {
   const proposals = new Map<string, ReturnType<typeof readAssistantProposal>>()
@@ -39,7 +39,7 @@ function conversationEvidence(
   const evidence: ConversationEntry[] = []
   const permissionHistory = positionPermissionDecisionContexts(messages)
   for (const message of messages) {
-    if (excluded?.has(message.uuid)) continue
+    if (worker?.excluded.has(message.uuid)) continue
     if (message.type === 'assistant') {
       if (!message.isVirtual && !message.codeMode) {
         const proposal = readAssistantProposal(message)
@@ -104,6 +104,12 @@ function conversationEvidence(
     if (!isOperatorOrigin(source) || user?.isMeta ||
         (queued && ((queued.commandMode !== undefined && queued.commandMode !== 'prompt') ||
           ('isMeta' in queued && queued.isMeta)))) continue
+    // Previous launch and resume briefs are stored as user-role messages.
+    // Without a recorded author, that role does not establish operator authority.
+    if (!source && worker?.history?.has(message.uuid)) {
+      evidence.push({ origin: 'other', id: message.uuid, actor: 'worker history', text: content })
+      continue
+    }
     const reply = parsePriorAssistantContext(user?.priorAssistantContext ??
       (queued && 'priorAssistantContext' in queued ? queued.priorAssistantContext : undefined))
     const prior = reply ? proposals.get(reply.messageUuid) : undefined
@@ -179,6 +185,8 @@ export type ContextualWorkerAssignment = {
   text: string
   sender: string
   excluded: ReadonlySet<string>
+  history?: ReadonlySet<string>
+  parentWorker?: Pick<ContextualWorkerAssignment, 'excluded' | 'history'>
   parentMessages: () => readonly Message[]
   anchor?: string
   parentSignal: AbortSignal
@@ -300,19 +308,21 @@ export function workerAssignment(
   parent: ToolUseContext,
   initialMessages: readonly Message[],
   text: string,
+  history?: ReadonlySet<string>,
 ): ContextualWorkerAssignment {
   const parentMessages = () => parent.getCurrentAutoModeMessages?.() ?? parent.messages
-  const evidence = conversationEvidence(parent.messages, parent.contextualWorkerAssignment?.excluded)
+  const parentWorker = parent.contextualWorkerAssignment
+  const evidence = conversationEvidence(parent.messages, parentWorker)
   const anchor = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
   const sender = parent.agentId ?? (evidence.some(record => record.origin === 'peer') ? 'peer-session' : 'main')
   return { text, sender, excluded: new Set(initialMessages.map(message => message.uuid)),
-    parentMessages, anchor, parentSignal: parent.abortController.signal }
+    history, parentWorker, parentMessages, anchor, parentSignal: parent.abortController.signal }
 }
 
 export function readContextualAuthority(context: ToolUseContext, peerParent?: PeerParentEvidence) {
   const worker = context.contextualWorkerAssignment
   const messages = context.getCurrentAutoModeMessages?.() ?? context.messages
-  const conversation = conversationEvidence(messages, worker?.excluded, true)
+  const conversation = conversationEvidence(messages, worker, true)
   const peer = conversation.find(record => record.origin === 'peer')
   const peerSession = Boolean(context.peerCreatorAppSessionId || peer || peerParent ||
     messages.some(message => message.type === 'user' && message.summarizedRelayedInput === true))
@@ -321,7 +331,7 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
     if (entry.origin === 'assistant' && !entry.actor) entry.actor = actor
   }
   const parentMessages = worker?.parentMessages() ?? (peerParent?.isCurrent() ? peerParent.messages : undefined)
-  const parentEvidence = parentMessages ? conversationEvidence(parentMessages) : undefined
+  const parentEvidence = parentMessages ? conversationEvidence(parentMessages, worker?.parentWorker) : undefined
   // The launch captures the anchor before crossing into the assistant-authored
   // worker brief. A stale or compacted-away grant cannot establish authority.
   const anchor = worker?.anchor ?? peerParent?.reference.userMessageId

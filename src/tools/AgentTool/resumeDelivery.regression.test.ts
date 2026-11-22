@@ -77,6 +77,7 @@ test('a delivered SendMessage instruction remains available on the next ResumeAg
   const setAppState = (update: any) => { state = update(state) }
   const context: any = {
     toolUseId: 'toolu-review-resume',
+    messages: [],
     getAppState: () => state,
     setAppState,
     setAppStateForTasks: setAppState,
@@ -115,7 +116,7 @@ test('a delivered SendMessage instruction remains available on the next ResumeAg
     ], agentId)
     await storage.flushSessionStorage()
     await storage.writeAgentMetadata(asAgentId(agentId), {
-      agentType: fixtureAgent.agentType, agentName: 'review-worker', description: 'fixture',
+      agentType: fixtureAgent.agentType, originalToolNames: [], agentName: 'review-worker', description: 'fixture',
     })
     enqueuePendingNotification({
       value: priorOutcome,

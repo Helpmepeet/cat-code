@@ -26,6 +26,7 @@ import {
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { createAgentId } from '../../utils/uuid.js'
 import * as agentToolUtils from '../AgentTool/agentToolUtils.js'
+import { GENERAL_PURPOSE_AGENT } from '../AgentTool/built-in/generalPurposeAgent.js'
 import { FORK_AGENT } from '../AgentTool/forkSubagent.js'
 import * as resumeAgentModule from '../AgentTool/resumeAgent.js'
 import * as resolveAgentTargetModule from '../AgentTool/resolveAgentTarget.js'
@@ -159,7 +160,7 @@ function createToolUseContext(initialState?: Record<string, unknown>) {
     tasks: {},
     agentNameRegistry: new Map(),
     agent: undefined,
-    agentDefinitions: { activeAgents: [] },
+    agentDefinitions: { activeAgents: [GENERAL_PURPOSE_AGENT] },
     ...initialState,
   }
 
@@ -172,7 +173,7 @@ function createToolUseContext(initialState?: Record<string, unknown>) {
     },
     getAppState: () => state,
     options: {
-      agentDefinitions: { activeAgents: [] },
+      agentDefinitions: state.agentDefinitions,
       tools: [],
       mcpClients: [],
       mcpResources: {},
@@ -454,6 +455,7 @@ describe('ResumeAgentTool', () => {
     await writeAgentMetadata(asAgentId(agentId), {
       agentType: 'general-purpose',
       description: 'Race worker',
+      originalToolNames: [],
     })
     const { context, getState } = createToolUseContext({
       agentNameRegistry: new Map([['worker-one', agentId]]),
@@ -504,6 +506,7 @@ describe('ResumeAgentTool', () => {
     await writeAgentMetadata(asAgentId(agentId), {
       agentType: 'general-purpose',
       description: 'Race worker',
+      originalToolNames: [],
     })
     const { context, getState } = createToolUseContext({
       agentNameRegistry: new Map([['worker-one', agentId]]),
@@ -579,6 +582,7 @@ describe('ResumeAgentTool', () => {
     await writeAgentMetadata(asAgentId(agentId), {
       agentType: 'general-purpose',
       description: 'Evicted worker',
+      originalToolNames: [],
     })
     const { context, getState } = createToolUseContext()
 
@@ -616,6 +620,7 @@ describe('ResumeAgentTool', () => {
     await writeAgentMetadata(asAgentId(agentId), {
       agentType: 'general-purpose',
       description: 'Context worker',
+      originalToolNames: [],
     })
     const { context } = createToolUseContext()
 
@@ -646,6 +651,7 @@ describe('ResumeAgentTool', () => {
     await writeAgentMetadata(asAgentId(agentId), {
       agentType: 'general-purpose',
       description: 'Pending worker',
+      originalToolNames: [],
     })
     const { context, getState } = createToolUseContext({
       agentNameRegistry: new Map([['worker-one', agentId]]),

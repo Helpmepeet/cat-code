@@ -42,15 +42,15 @@ import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { getParentSessionId } from '../../utils/teammate.js'
 import { reconstructForSubagentResume } from '../../utils/toolResultStorage.js'
 import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js'
+import { getDenyRuleForAgent, getDenyRuleForTool } from '../../utils/permissions/permissions.js'
 import { runAsyncAgentLifecycle } from './agentToolUtils.js'
 import {
   acquireAgentLifecycleOwnership,
   releaseAgentLifecycleOwnership,
   type AgentLifecycleOwnership,
 } from './agentLifecycleOwnership.js'
-import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
+import { AGENT_TOOL_NAME } from './constants.js'
 import { FORK_AGENT, isForkSubagentEnabled } from './forkSubagent.js'
-import type { AgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { runAgent } from './runAgent.js'
 
@@ -81,6 +81,20 @@ type ResumeAgentBackgroundArgs = {
   canUseTool: CanUseToolFn
   invokingRequestId?: string
   sourceSessionId?: string
+}
+
+function checkResumeRole(agentId: string, agentType: string, context: ToolUseContext): void {
+  const permission = context.getAppState().toolPermissionContext
+  const namedRule = getDenyRuleForAgent(permission, AGENT_TOOL_NAME, agentType)
+  const denyRule = namedRule ?? getDenyRuleForTool(permission, { name: AGENT_TOOL_NAME })
+  if (denyRule) {
+    const rule = namedRule ? `${AGENT_TOOL_NAME}(${agentType})` : AGENT_TOOL_NAME
+    throw new Error(`Cannot resume agent ${agentId}: agent type '${agentType}' is denied by permission rule '${rule}' from ${denyRule.source}.`)
+  }
+  const { allowedAgentTypes } = context.options.agentDefinitions
+  if (allowedAgentTypes && !allowedAgentTypes.includes(agentType)) {
+    throw new Error(`Cannot resume agent ${agentId}: agent type '${agentType}' is outside the allowed agent types.`)
+  }
 }
 
 export async function resumeAgentBackground(
@@ -200,25 +214,26 @@ async function resumeAgentBackgroundLocked(
         },
       )
     : undefined
+  const agentType = meta?.agentType
+  if (typeof agentType !== 'string' || !agentType) {
+    throw new Error(`Cannot resume agent ${agentId}: the original agent type was not recorded. Launch a new helper.`)
+  }
+  checkResumeRole(agentId, agentType, toolUseContext)
+  const isResumedFork = agentType === FORK_AGENT.agentType
+  const selectedAgent = isResumedFork ? FORK_AGENT : toolUseContext.options.agentDefinitions.activeAgents.find(
+    agent => agent.agentType === agentType,
+  )
+  if (!selectedAgent) {
+    throw new Error(`Cannot resume agent ${agentId}: agent type '${agentType}' is no longer available. Launch a new helper.`)
+  }
+  const originalToolNames = meta?.originalToolNames
+  if (!Array.isArray(originalToolNames) || originalToolNames.some(name => typeof name !== 'string' || !name)) {
+    throw new Error(`Cannot resume agent ${agentId}: the original tool list was not recorded. Launch a new helper.`)
+  }
   if (resumedWorktreePath) {
     // Bump mtime so stale-worktree cleanup doesn't delete a just-resumed worktree (#22355)
     const now = new Date()
     await fsp.utimes(resumedWorktreePath, now, now)
-  }
-
-  // Skip filterDeniedAgents re-gating — original spawn already passed permission checks
-  let selectedAgent: AgentDefinition
-  let isResumedFork = false
-  if (meta?.agentType === FORK_AGENT.agentType) {
-    selectedAgent = FORK_AGENT
-    isResumedFork = true
-  } else if (meta?.agentType) {
-    const found = toolUseContext.options.agentDefinitions.activeAgents.find(
-      a => a.agentType === meta.agentType,
-    )
-    selectedAgent = found ?? GENERAL_PURPOSE_AGENT
-  } else {
-    selectedAgent = GENERAL_PURPOSE_AGENT
   }
 
   const uiDescription = meta?.description ?? '(resumed)'
@@ -309,6 +324,7 @@ async function resumeAgentBackgroundLocked(
     ...(resumedMessages.length > 0
       ? { seededMessagesForPersistence: resumedMessages }
       : {}),
+    resume: { brief: prompt, originalToolNames },
     toolUseContext,
     canUseTool,
     isAsync: true,
@@ -318,7 +334,7 @@ async function resumeAgentBackgroundLocked(
     ),
     model: undefined,
     modelRoute,
-    // Fork resume: pass parent's system prompt (cache-identical prefix).
+    // Fork resume: reuse the parent's system prompt under the original tool ceiling.
     // Non-fork: undefined → runAgent recomputes under wrapWithCwd so
     // getCwd() sees resumedWorktreePath.
     override: isResumedFork
@@ -359,6 +375,7 @@ async function resumeAgentBackgroundLocked(
   if (isLocalAgentTask(freshTask) && freshTask.status === 'running') {
     throw new AgentResumeInProgressError(agentId)
   }
+  checkResumeRole(agentId, agentType, toolUseContext)
 
   const spawnedAt = new Date().toISOString()
   const agentTranscriptPath = getAgentTranscriptPath(asAgentId(agentId))

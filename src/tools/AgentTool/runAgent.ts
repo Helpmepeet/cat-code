@@ -414,6 +414,7 @@ async function* runAgentInCleanupScope({
   worktreePath,
   cwd,
   seededMessagesForPersistence,
+  resume,
   description,
   agentName,
   transcriptSubdir,
@@ -508,6 +509,7 @@ async function* runAgentInCleanupScope({
   /** Seeded messages already present in transcript persistence, used to avoid
    * duplicate sidechain writes when resuming. */
   seededMessagesForPersistence?: Message[]
+  resume?: { brief: string; originalToolNames: readonly string[] }
   /** Original task description from AgentTool input. Persisted to metadata
    * so a resumed agent's notification can show the original description. */
   description?: string
@@ -764,6 +766,11 @@ async function* runAgentInCleanupScope({
     const { alignProviderFileEditTool } = await import('../../tools.js')
     availableTools = alignProviderFileEditTool(availableTools, appState.toolPermissionContext, resolvedAgentProvider)
   }
+  const originalToolNames = resume && new Set(resume.originalToolNames)
+  const restrictToOriginalTools = (tools: Tools): Tools => originalToolNames
+    ? tools.filter(tool => originalToolNames.has(tool.name))
+    : tools
+  availableTools = restrictToOriginalTools(availableTools)
   const resolvedTools = useExactTools
     ? availableTools
     : resolveAgentTools(
@@ -996,7 +1003,7 @@ async function* runAgentInCleanupScope({
   // Initialize agent-specific MCP servers (additive to parent's servers)
   const {
     clients: mergedMcpClients,
-    tools: agentMcpTools,
+    tools: rawAgentMcpTools,
     cleanup: mcpCleanup,
   } = await initializeAgentMcpServers(
     agentDefinition,
@@ -1010,6 +1017,7 @@ async function* runAgentInCleanupScope({
         )
       : undefined,
   )
+  const agentMcpTools = restrictToOriginalTools(rawAgentMcpTools)
 
   // Merge agent MCP tools with resolved agent tools, deduplicating by name.
   // resolvedTools is already deduplicated (see resolveAgentTools), so skip
@@ -1031,7 +1039,7 @@ async function* runAgentInCleanupScope({
     }
     const refreshedTools = resolveAgentTools(
       agentDefinition,
-      [...parentBaseTools, ...snapshot.tools],
+      restrictToOriginalTools([...parentBaseTools, ...snapshot.tools]),
       isAsync,
       agentToolEnvironment,
     ).resolvedTools
@@ -1108,11 +1116,14 @@ async function* runAgentInCleanupScope({
 
   agentToolUseContext.getCurrentAutoModeMessages = undefined
   agentToolUseContext.contextualWorkerAssignment = workerAssignment(
-    toolUseContext, initialMessages, promptMessages.flatMap(message =>
+    toolUseContext,
+    resume ? initialMessages.filter(message => !seededMessageUuids.has(message.uuid)) : initialMessages,
+    resume?.brief ?? promptMessages.flatMap(message =>
       message.type !== 'user' ? [] : typeof message.message.content === 'string'
         ? [message.message.content]
         : message.message.content.flatMap(block => block.type === 'text' ? [block.text] : []),
     ).join('\n'),
+    resume ? seededMessageUuids : undefined,
   )
 
   // A prior worker run can finish before a delivery outcome addressed to this
@@ -1182,10 +1193,11 @@ async function* runAgentInCleanupScope({
     }
   }
   publishSteps(persistedInitialMessages)
-  void readAgentMetadata(agentId)
+  await readAgentMetadata(agentId)
     .catch(() => null)
     .then(previous => writeAgentMetadata(agentId, {
       agentType: agentDefinition.agentType,
+      originalToolNames: resume ? [...resume.originalToolNames] : allTools.map(tool => tool.name),
       model: resolvedAgentModel,
       provider: resolvedAgentProvider,
       agentName: workerName,
