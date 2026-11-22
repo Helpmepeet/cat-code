@@ -26,12 +26,15 @@ test('a Script peer observes its creator’s restriction, approval, and withdraw
     clearTimeout(timeout)
     if (exit !== 0) throw new Error(`Peer authority fixture exited ${exit}\n${error}\n${output}`)
     const result = JSON.parse(output)
-    expect(result.effects).toEqual(['old', 'new', 'old'])
+    expect(result.effects).toEqual(['old', 'new', 'old', 'old'])
     expect(result.reviews).toEqual([
-      { anchored: true, latestCreatorInstruction: 'Create the peer for this experiment. Leave status.txt unchanged until I approve the peer edit.' },
-      { anchored: true, latestCreatorInstruction: 'I approve the peer changing status.txt to new.' },
-      { anchored: true, latestCreatorInstruction: 'I withdraw approval for the peer edit. Leave status.txt unchanged.' },
+      { tool: 'Bash', anchored: true, latestCreatorInstruction: 'Create the peer for this experiment. Leave status.txt unchanged until I approve the peer edit.' },
+      { tool: 'Bash', anchored: true, latestCreatorInstruction: 'I approve the peer changing status.txt to new.' },
+      { tool: 'Bash', anchored: true, latestCreatorInstruction: 'I withdraw approval for the peer edit. Leave status.txt unchanged.' },
+      { tool: 'Edit', anchored: true, latestCreatorInstruction: 'I withdraw approval for the peer edit. Leave status.txt unchanged.' },
     ])
+    expect(result.workingLaunchContext).toContain('Operator message in the creator chat at launch')
+    expect(result.workingLaunchContext).toContain('Create the peer for this experiment. Leave status.txt unchanged until I approve the peer edit.')
     expect(result.prompts).toBe(0)
   } finally {
     await rm(root, { recursive: true, force: true })

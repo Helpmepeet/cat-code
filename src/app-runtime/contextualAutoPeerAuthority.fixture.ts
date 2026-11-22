@@ -18,12 +18,14 @@ const file = join(cwd, 'status.txt')
 const openingBrief = 'Update status.txt to new.'
 const editScript = `await tools.call({name:"Read",input:{file_path:"status.txt"}});
 await tools.call({name:"Edit",input:{file_path:"status.txt",old_string:"old",new_string:"new"}});`
+const bashScript = `await tools.call({name:"Bash",input:{command:"printf new > status.txt",work_lifetime:"finite",run_in_background:false}});`
 let nextAction: { name: string; input: Record<string, string> } | undefined = {
   name: 'CreatePeer', input: { prompt: openingBrief },
 }
 let calls = 0
 const host: { delivery?: PeerDeliverMessage; result?: HostResultMessage } = {}
-const reviews: { anchored: boolean; latestCreatorInstruction: string | undefined }[] = []
+const reviews: { tool: string; anchored: boolean; latestCreatorInstruction: string | undefined }[] = []
+let workingLaunchContext: string | undefined
 
 mock.module('../services/api/client.js', () => ({
   CLIENT_REQUEST_ID_HEADER: 'x-client-request-id',
@@ -32,7 +34,8 @@ mock.module('../services/api/client.js', () => ({
     if (!body.stream) {
       const packet = JSON.parse(body.messages.at(-1)!.content) as import('../utils/permissions/contextualReviewPrompt.js').ContextualEvidence
       const latestCreatorInstruction = packet.assignment?.parent?.findLast(entry => entry.origin === 'operator')?.text
-      if (packet.action.tool === 'Edit') reviews.push({
+      if (packet.action.tool === 'Bash' || packet.action.tool === 'Edit') reviews.push({
+        tool: packet.action.tool,
         anchored: packet.assignment?.parentAnchor === launchUserMessageId,
         latestCreatorInstruction,
       })
@@ -42,6 +45,7 @@ mock.module('../services/api/client.js', () => ({
         stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 20, output_tokens: 10 } })
     }
     const action = nextAction
+    if (action?.name === 'REPL') workingLaunchContext ??= JSON.stringify(body.messages)
     nextAction = undefined
     const id = `response-${++calls}`
     const stream = Object.assign((async function* () {
@@ -71,6 +75,7 @@ const { activateTranscriptLease } = await import('../utils/transcriptLease.js')
 const { createUserMessage } = await import('../utils/messages.js')
 const { FileReadTool } = await import('../tools/FileReadTool/FileReadTool.js')
 const { FileEditTool } = await import('../tools/FileEditTool/FileEditTool.js')
+const { BashTool } = await import('../tools/BashTool/BashTool.js')
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { createCreatePeerTool } = await import('../../app/sidecar/createPeerTool.js')
 const { createPeerRequestPlane } = await import('../../app/main/peerRequestPlane.js')
@@ -145,15 +150,20 @@ async function addCreatorInstruction(text: string) {
 await activateTranscriptLease(peerEngineId)
 switchSession(peerEngineId, null, { fresh: true })
 await resetSessionFilePointer()
-const peer = controllerFor([REPLTool, FileReadTool, FileEditTool], creatorAppId)
+const peer = controllerFor([REPLTool, FileReadTool, FileEditTool, BashTool], creatorAppId)
 const origin = { kind: 'peer' as const, name: delivery.from, appSessionId: delivery.fromSessionId }
 const effects: string[] = []
 for (const [index, instruction] of [null, approval, withdrawal].entries()) {
   if (instruction) await addCreatorInstruction(instruction)
   await writeFile(file, 'old')
-  nextAction = { name: 'REPL', input: { code: editScript, description: 'Update fixture status' } }
-  await peer.submit(openingBrief, { origin: index === 0 ? { ...origin, creationPrompt: true, assignment: delivery.assignment } : origin })
+  nextAction = { name: 'REPL', input: { code: bashScript, description: 'Update fixture status' } }
+  await peer.submit(index === 0 ? delivery.text : openingBrief, {
+    origin: index === 0 ? { ...origin, creationPrompt: true, assignment: delivery.assignment } : origin,
+  })
   effects.push(await readFile(file, 'utf8'))
 }
-console.log(JSON.stringify({ effects, reviews, prompts }))
+nextAction = { name: 'REPL', input: { code: editScript, description: 'Update fixture status with Edit' } }
+await peer.submit(openingBrief, { origin })
+effects.push(await readFile(file, 'utf8'))
+console.log(JSON.stringify({ effects, reviews, prompts, workingLaunchContext }))
 process.exit(0)

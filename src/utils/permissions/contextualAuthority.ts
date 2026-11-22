@@ -195,10 +195,11 @@ export type ContextualWorkerAssignment = {
 
 export type ContextualWorkerParentBinding = Pick<ContextualWorkerAssignment, 'anchor' | 'sender'>
 
-export function findContextualAssignmentAnchor(context: ToolUseContext): string | undefined {
+export function findContextualAssignmentMessage(context: ToolUseContext): { id: string; text: string } | undefined {
   if (context.agentId !== undefined) return undefined
   const evidence = conversationEvidence(context.messages)
-  return evidence.findLast(record => record.origin === 'operator' && record.id)?.id
+  const entry = evidence.findLast(record => record.origin === 'operator' && record.id)
+  return entry?.id ? { id: entry.id, text: entry.text } : undefined
 }
 
 type PeerParentEvidence = {

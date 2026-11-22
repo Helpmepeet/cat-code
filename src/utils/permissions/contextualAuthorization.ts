@@ -15,7 +15,6 @@ import { isFilePatchToolName, FILE_PATCH_TOOL_NAME } from '../../tools/FilePatch
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
 import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
 import type { getSkillGrantsForReview } from '../../tools/SkillTool/SkillTool.js'
-import { WEB_SEARCH_TOOL_NAME } from '../../tools/WebSearchTool/prompt.js'
 import { getBashExecutionSettings, type BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { codeModeToolPrincipal } from '../../tools/REPLTool/codeModeTools.js'
 import { workspaceInstructionsForReview } from '../claudemd.js'
@@ -200,14 +199,8 @@ export async function createContextualAttempt(
       (mcp || tool.name !== 'REPL') && !isReviewException()
   }
 
-  function hasVerifiedPeerCreator(): boolean {
-    return Boolean(peerParent && authority.assignment?.parent)
-  }
-
   function needsDelegatedScopeReview(): boolean {
     if (!delegatedStateChange()) return false
-    // The peer's working model cannot see the creator's operator messages.
-    if (hasVerifiedPeerCreator() && (mcp || tool.name !== WEB_SEARCH_TOOL_NAME)) return true
     const { parent, parentAnchor } = authority.assignment ?? {}
     const anchor = parent?.findIndex(row => row.id === parentAnchor) ?? -1
     if (anchor >= 0 && parent?.some((row, index) => index > anchor && row.origin === 'operator')) return true
@@ -314,7 +307,7 @@ export async function createContextualAttempt(
     const audienceLimit = /\b(?:discree\w*|privacy|(?:task|work|session) visibility|visibility (?:is |stays )?(?:limited|restricted)|embargo\w*|under wraps|in confidence|(?:your|our|my) eyes only|to yourself|between (?:the )?(?:two of us|you and me|us)|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to|leave|leaves) (?:of )?(?:this|our|the current) (?:chat|conversation|session))\b/iu
     const standingNoticeRule = /\b(?:under wraps|in confidence|(?:this|our|the current) (?:chat|conversation|session) only|(?:inside|within|outside|beyond|limited to) (?:of )?(?:this|our|the current) (?:chat|conversation|session)|visibility (?:is |stays )?(?:limited|restricted))\b|(?:do not|don't|never|must not|avoid|ask before)[^.!?\n]{0,100}\b(?:announc\w*|roster|scope notices?)\b|\b(?:announc\w*|roster|scope notices?)\b[^.!?\n]{0,80}\b(?:forbidden|prohibited|requires? approval|private)\b/iu
     // Keep the earlier veto in review so newer instructions can be weighed against it.
-    if (hasVerifiedPeerCreator() || operatorRows.some(row => privacyVeto.test(row.text)) ||
+    if (operatorRows.some(row => privacyVeto.test(row.text)) ||
         [...operatorText, authority.assignment?.text ?? '', ...settings].some(text => audienceLimit.test(text)) ||
         standingNoticeRule.test(workspace)) return undefined
     actionAllowed = true

@@ -20,7 +20,7 @@
 // differ are two type identities, which makes `tsc` exhaust its heap rather
 // than report an error. See the same note in `listPeersTool.ts` for the full
 // reason.
-import { findContextualAssignmentAnchor } from '../../src/utils/permissions/contextualAuthority.js'
+import { findContextualAssignmentMessage } from '../../src/utils/permissions/contextualAuthority.js'
 import { z } from '../../node_modules/zod/v4'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../src/Tool.js'
 import { lazySchema } from '../../src/utils/lazySchema.js'
@@ -225,10 +225,13 @@ export function createCreatePeerTool(
       const effort =
         input.effort ?? inheritedEffort(context.getAppState().effortValue)
 
-      const assignmentUserMessageId = findContextualAssignmentAnchor(context)
+      const assignment = findContextualAssignmentMessage(context)
+      const withLaunchContext = assignment
+        ? `${input.prompt}\n\nOperator message in the creator chat at launch (context for this assignment):\n${JSON.stringify(assignment.text)}`
+        : input.prompt
       const outcome = await requestHost('peer.create', {
-        ...(assignmentUserMessageId && { assignmentUserMessageId }),
-        prompt: input.prompt,
+        ...(assignment && { assignmentUserMessageId: assignment.id }),
+        prompt: utf8Bytes(withLaunchContext) <= MAX_PEER_TEXT_BYTES ? withLaunchContext : input.prompt,
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),
       })

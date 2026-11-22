@@ -50,11 +50,10 @@ async function run(scenario: string) {
 for (const state of ['matching', 'script', 'other-child', 'conflicting', 'no-anchor', 'no-creator', 'queued']) {
   test(`legacy notice and workspace edit respect the ${state} parent state`, async () => {
     const proof = await run(`legacy-notice-${state}`)
-    const verifiedParent = state === 'matching' || state === 'script'
     expect(proof.postedNotices).toHaveLength(state === 'queued' ? 0 : 1)
     expect(proof.prompts).toHaveLength(0)
-    expect(proof.files.a).toBe(state === 'queued' || verifiedParent ? 'old' : 'new')
-    expect(proof.requests.map((row: any) => row.tool)).toEqual(verifiedParent ? ['Announce', 'Edit'] : [])
+    expect(proof.files.a).toBe(state === 'queued' ? 'old' : 'new')
+    expect(proof.requests).toHaveLength(0)
   }, 30_000)
 }
 

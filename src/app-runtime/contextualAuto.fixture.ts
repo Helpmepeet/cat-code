@@ -288,8 +288,6 @@ mock.module('../services/api/client.js', () => ({
       const operatorText = contextual ? content.conversation.filter((entry: any) => entry.origin === 'operator').map((entry: any) => entry.text) : []
       const verdict = twoChecks || credentialSettings ? 'allow' : repeatedDenials || shadowPeerWrite || scenario === 'direct-denied' ? 'deny'
         : cleanup ? (tool === 'Edit' && operatorText.includes('Keep the old setting in local.mjs until tomorrow.') ? 'deny' : 'allow')
-        : legacyNotice && tool === 'Edit' && content.assignment?.parent?.some((row: any) =>
-          row.origin === 'operator' && row.text === 'Have a helper inspect a.txt. Leave it untouched.') ? 'deny'
         : tool === 'Announce' && operatorText.includes(rosterPrivacyVeto) ?
           (operatorText.at(-1) === rosterReauthorization ? 'allow' : 'deny')
         : operatorText.some((text: string) => text === 'Stop. Leave all files untouched.' ||
