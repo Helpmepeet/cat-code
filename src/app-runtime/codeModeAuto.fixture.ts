@@ -134,7 +134,7 @@ controller.subscribe(event => {
   if (event.type === 'permission.requested') {
     permissions.push(event.request)
     controller.respondToPermissionRequest(event.request.requestId, directHookAsk
-      ? { behavior: 'allow' }
+      ? { behavior: 'allow', updatedInput: event.request.request.input }
       : { behavior: 'deny', message: 'Isolated explicit refusal', decisionClassification: 'user_reject' })
   }
 })
