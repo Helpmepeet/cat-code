@@ -30,7 +30,7 @@ const NO_CALLS: readonly CodeModeCall[] = []
 export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, renderCall, waitingForApproval = false }: { row: NestedToolUseRow; renderChild: (row: NestedToolUseRow['children'][number]) => ReactNode; renderCall?: (row: NestedToolUseRow) => ReactNode; waitingForApproval?: boolean }) {
   const cell = codeModeLiveView(row)
   const selection = useCodeModeSelection(row.sessionId, row.toolUseId)
-  const style = useContext(ToolCardStyleContext)
+  const { style } = useContext(ToolCardStyleContext)
   const headerless = useContext(FocusedNamedCallContext) === row.toolUseId
   const { expanded: defaults } = useContext(ToolsExpandedContext)
   const hasCallErrors = useMemo(() => cell?.calls.some(call => !!call.error || ['failed', 'error', 'blocked', 'cancelled'].includes(call.status)) ?? false, [cell])

@@ -16,6 +16,7 @@ import { TranscriptModeContext } from './transcriptMode.js'
 import { createToolCardExpansionStore } from './toolCardExpansion.js'
 import { findToolOutputRow } from './toolOutputRow.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
+import { ToolCardStyleContext } from './toolCardStyle.js'
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await act(async () => { await harness.nextFrame() }); await harness.unmountAll() })
@@ -30,6 +31,16 @@ async function openSource(scope: ParentNode) {
   const head = scope.querySelector('.code-mode-script .code-mode-fold-head')!
   if (head.getAttribute('aria-expanded') === 'false') await click(head)
 }
+test('the Script transcript card follows the Lines and Cards preference', async () => {
+  const value = row('card-style')
+  const view = (style: 'lines' | 'cards') => <ToolCardStyleContext.Provider value={{ style, setStyle: () => {} }}>
+    {transcript([value])}
+  </ToolCardStyleContext.Provider>
+  const tree = await harness.mount(view('lines'))
+  expect(tree.container.querySelector('.code-mode')?.getAttribute('data-card-style')).toBe('lines')
+  await tree.render(view('cards'))
+  expect(tree.container.querySelector('.code-mode')?.getAttribute('data-card-style')).toBe('cards')
+})
 test('Script cells show call rows rather than code and keep Output closed until opened', async () => {
   const value = row('shape-b', { code: 'await Read();\nawait Bash();', calls: [
     { toolUseId: 'r', name: 'Read', input: { file_path: '/a' }, status: 'completed', line: 1 },
