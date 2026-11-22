@@ -79,7 +79,7 @@ import {
 } from '../../src/utils/messageQueueManager.js'
 import { CROSS_SESSION_MESSAGE_TAG } from '../../src/constants/xml.js'
 import { setCommandLifecycleListener } from '../../src/utils/commandLifecycle.js'
-import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
+import { isAgentOutcomeOrigin, queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { toSDKMessageOriginProp } from '../../src/utils/messages/mappers.js'
 import { permissionRuleValueFromString } from '../../src/utils/permissions/permissionRuleParser.js'
 import { appClientMessageSchema } from '../../src/app-runtime/appSessionProtocol.js'
@@ -1060,8 +1060,9 @@ export class SidecarServer {
         '[sidecar] command-lifecycle listener taken over by a second SidecarServer in this process; the previous session will not commit its staged messages',
       )
     }
-    setCommandLifecycleListener((uuid, state, timestamp) => {
+    setCommandLifecycleListener((uuid, state, timestamp, agentOutcome) => {
       if (state !== 'started') return
+      if (agentOutcome) this.broadcastPromptMessage(agentOutcome.prompt, uuid, undefined, agentOutcome.origin, timestamp)
       this.announcePeerDelivery(uuid)
       this.commitStagedPrompt(uuid, timestamp)
     })
@@ -2634,9 +2635,9 @@ export class SidecarServer {
       // the row this turn persists is the durable record of WHICH peer message
       // was consumed — the same identity the busy path's `queued_command`
       // attachment already carried, and the one `seedConsumedPeerMessages`
-      // reads back after a restart. Peer only: a worker result's transcript
-      // identity is nobody's dedupe key and is left as it was.
-      ...(origin.kind === 'peer' && command.uuid !== undefined
+      // reads back after a restart. Worker reports also keep the queue identity
+      // shared with the busy path.
+      ...((origin.kind === 'peer' || isAgentOutcomeOrigin(origin)) && command.uuid !== undefined
         ? { uuid: command.uuid }
         : {}),
       // HOST-REQUEST-PLANE §4 step 4 — `false` is right for a worker RESULT,

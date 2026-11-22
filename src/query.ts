@@ -164,7 +164,7 @@ import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
 import { createCuaDriverRun, type CuaDriverRun } from './utils/cuaDriver/run.js'
 import { emitTaskTerminatedSdk } from './utils/sdkEventQueue.js'
-import { parseTaskNotificationDetails } from './utils/taskNotification.js'
+import { isAgentOutcomeOrigin, parseTaskNotificationDetails, queuedCommandOrigin } from './utils/taskNotification.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -2532,10 +2532,13 @@ async function* queryLoop(
     // work. A send-now interruption during that window still owns the queued
     // prompt: leave it queued for the sidecar's between-turn submission, and
     // do not publish a transcript attachment that was never sent to a model.
-    if (!toolUseContext.abortController.signal.aborted) {
-      for (const attachment of preparedQueuedAttachments) {
-        yield attachment
-        toolResults.push(attachment)
+    const acceptedQueuedAttachments = new Map<string, AttachmentMessage>()
+    for (const attachment of preparedQueuedAttachments) {
+      if (toolUseContext.abortController.signal.aborted) break
+      yield attachment
+      toolResults.push(attachment)
+      if (attachment.attachment.type === 'queued_command' && attachment.attachment.source_uuid) {
+        acceptedQueuedAttachments.set(attachment.attachment.source_uuid, attachment)
       }
     }
 
@@ -2579,22 +2582,24 @@ async function* queryLoop(
 
     // Remove only commands that were actually consumed as attachments.
     // Prompt and task-notification commands are converted to attachments above.
-    const consumedCommands = toolUseContext.abortController.signal.aborted
-      ? []
-      : queuedCommandsSnapshot.filter(
-          cmd => cmd.mode === 'prompt' || cmd.mode === 'task-notification',
-        )
+    const consumedCommands = queuedCommandsSnapshot.filter(cmd =>
+      (cmd.mode === 'prompt' || cmd.mode === 'task-notification') &&
+      (!toolUseContext.abortController.signal.aborted ||
+        (cmd.uuid && acceptedQueuedAttachments.has(cmd.uuid) && isAgentOutcomeOrigin(queuedCommandOrigin(cmd)))),
+    )
     if (consumedCommands.length > 0) {
       for (const cmd of consumedCommands) {
         if (cmd.uuid) {
           consumedCommandUuids.push(cmd.uuid)
           // Use the attachment's persisted time, not the later time at which
           // its yield resumes after the transcript durability barrier.
-          const attachment = preparedQueuedAttachments.find(
-            message => message.attachment.type === 'queued_command' &&
-              message.attachment.source_uuid === cmd.uuid,
-          )
-          notifyCommandLifecycle(cmd.uuid, 'started', attachment?.timestamp)
+          const attachment = acceptedQueuedAttachments.get(cmd.uuid)
+          const data = attachment?.attachment
+          const origin = queuedCommandOrigin(data)
+          const agentOutcome = !currentAgentId && data?.type === 'queued_command' &&
+            typeof data.prompt === 'string' && isAgentOutcomeOrigin(origin)
+            ? { prompt: data.prompt, origin } : undefined
+          notifyCommandLifecycle(cmd.uuid, 'started', attachment?.timestamp, agentOutcome)
         }
         if (cmd.mode === 'task-notification' && typeof cmd.value === 'string') {
           const details = parseTaskNotificationDetails(cmd.value)

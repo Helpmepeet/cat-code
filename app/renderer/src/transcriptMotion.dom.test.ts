@@ -55,6 +55,19 @@ const view = (
   accountsUsagePending = false,
   turnLive = false,
 ) => createElement(TranscriptRowsView, { rows: rows(state), restorePhase, accountsUsagePending, turnLive })
+
+test('a worker that needs input keeps its name and separate outcome in the finish row', async () => {
+  let state = projectServerFrame(createTranscriptState(), ready)
+  state = project(state, {
+    type: 'user', uuid: a, parent_tool_use_id: null, session_id: 'engine-motion',
+    message: { role: 'user', content: 'Task notification' },
+    origin: { kind: 'task-notification', status: 'completed', summary: 'Agent @Ada Byron needs input: Which version?' },
+  })
+  const tree = await harness.mount(view(state))
+  expect(tree.container.querySelector('.task-notification-name')?.textContent).toBe('Ada Byron')
+  expect(tree.container.querySelector('.task-notification-word')?.textContent).toBe('needs input:')
+  expect(tree.container.querySelector('.task-notification-reason')?.textContent).toBe('Which version?')
+})
 test('a split-commit regroup alone does not animate result bodies; the pending member resolving does', async () => {
   let state = projectServerFrame(createTranscriptState(), ready)
   state = project(state, assistant(b, 'read-1', 'Read', { file_path: '/repo/one.ts' }))

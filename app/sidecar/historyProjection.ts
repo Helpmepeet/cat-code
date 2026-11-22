@@ -7,7 +7,7 @@ import {
   isInternalNoResponseSentinel,
 } from '../../src/utils/messages.js'
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
-import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
+import { isAgentOutcomeOrigin, queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { RECOVERY_WARNING } from '../../src/utils/transcriptTailRecovery.js'
 import { restoreCodeModeHistory } from '../../src/tools/REPLTool/codeModeRestoration.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
@@ -43,8 +43,7 @@ function isHumanPrompt(content: unknown): content is string | ContentBlockParam[
 
 /**
  * Busy turns persist drained input only as attachments, which the SDK mapper
- * drops. Rebuild human and peer display rows here without changing model state.
- * Internal notifications and meta prompts must remain model-only.
+ * drops. Rebuild visible display rows here without changing model state.
  */
 function restoreQueuedMessageRow(message: Message): Message {
   if (message.type !== 'attachment') return message
@@ -55,9 +54,7 @@ function restoreQueuedMessageRow(message: Message): Message {
   // Same resolver the engine and QueryEngine use, so one drained command reads
   // as one provenance everywhere rather than three lookalike derivations.
   const origin = queuedCommandOrigin(attachment)
-  if (origin?.kind === 'peer') {
-    // Preserve the existing peer contract: peer sends carry strings, including
-    // meta-marked task-notification commands, rather than composer blocks.
+  if (origin?.kind === 'peer' || isAgentOutcomeOrigin(origin)) {
     if (typeof attachment.prompt !== 'string') return message
   } else if (
     (origin !== undefined && origin.kind !== 'human') ||

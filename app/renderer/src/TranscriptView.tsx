@@ -6471,10 +6471,10 @@ function TaskNotificationBox({ row }: { row: TaskNotificationRow }) {
   const { summary, result, usage } = row
   if (summary === null) return null
   // Names may contain spaces. Quoted descriptions are not worker identities.
-  const match = /^Agent (?:@(.+?)|"(.+?)") (completed|failed:(?: ([\s\S]*))?|was stopped)$/.exec(summary)
+  const match = /^Agent (?:@(.+?)|"(.+?)") (completed|was stopped|needs input|failed:|needs input:)(?: ([\s\S]*))?$/.exec(summary)
   const name = match?.[1] ?? null
   const label = name ?? match?.[2] ?? null
-  const word = match?.[3].startsWith('failed:') ? 'failed:' : match?.[3] ?? null
+  const word = match?.[3] ?? null
   const reason = match?.[4]
   const notificationFace = faces.faceFor(null, name)
   const stats = agentCompletionStats(usage)

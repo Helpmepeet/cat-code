@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { randomUUID } from 'node:crypto'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { Permutations } from 'src/types/utils.js'
 import { getSessionId } from '../bootstrap/state.js'
@@ -23,7 +24,7 @@ import {
   recordQueueOperation,
 } from './sessionStorage.js'
 import { createSignal } from './signal.js'
-import { taskNotificationOriginFromText } from './taskNotification.js'
+import { isAgentOutcomeOrigin, taskNotificationOriginFromText } from './taskNotification.js'
 import { abandonForegroundDeferredAttempt } from '../services/deferredContinuationRunner.js'
 
 export type SetAppState = (f: (prev: AppState) => AppState) => void
@@ -244,12 +245,15 @@ export function enqueuePendingNotification(command: QueuedCommand): void {
     typeof command.value === 'string'
       ? taskNotificationOriginFromText(command.value)
       : undefined
-  commandQueue.push({
+  const origin = command.origin ?? inferredOrigin
+  const notification = {
     ...command,
-    origin: command.origin ?? inferredOrigin,
+    origin,
+    ...(command.uuid === undefined && isAgentOutcomeOrigin(origin) ? { uuid: randomUUID() } : {}),
     priority: command.priority ?? 'later',
-  })
-  logOperation('enqueue', command)
+  } satisfies QueuedCommand
+  commandQueue.push(notification)
+  logOperation('enqueue', notification)
   notifySubscribers()
 }
 

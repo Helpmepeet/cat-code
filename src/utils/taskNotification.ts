@@ -228,3 +228,10 @@ export function queuedCommandOrigin(command: unknown): MessageOrigin | undefined
     }
   )
 }
+
+export function isAgentOutcomeOrigin(origin: MessageOrigin | undefined): origin is Extract<MessageOrigin, { kind: 'task-notification' }> {
+  return origin?.kind === 'task-notification' && !!origin.taskId && !!origin.toolUseId &&
+    (origin.status === 'completed' || origin.status === 'failed' || origin.status === 'killed') &&
+    // Older worker reports identified themselves by their structured summary, not taskType.
+    (origin.taskType === 'local_agent' || (origin.taskType === undefined && /^Agent (?:@|").+/.test(origin.summary ?? '')))
+}

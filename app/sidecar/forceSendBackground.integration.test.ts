@@ -46,6 +46,8 @@ const { SidecarServer } = await import('./sidecarServer.js')
 const { encodeFrame, FrameDecoder } = await import('../shared/framing.js')
 const { PROTOCOL_VERSION } = await import('../shared/protocol.js')
 const { MAX_OUTBOUND_FRAME_BYTES } = await import('../shared/limits.js')
+const { projectResumedHistory } = await import('./historyProjection.js')
+const { createTranscriptState, projectServerFrames, selectNestedTranscriptRows } = await import('../renderer/src/transcriptProjector.js')
 const originalSession = bootstrap.getSessionId()
 const originalProject = bootstrap.getSessionProjectDir()
 const originalProvider = bootstrap.getSessionProvider()
@@ -210,8 +212,56 @@ function harness(tools: Tool[] = [AgentTool, BashTool], askBash = false) {
     expect(head?.uuid).toBeString()
     send({ type: 'prompt.force', requestId: randomUUID(), promptId: head!.uuid! } as never)
   }
-  return { controller, send, force, frames, getAppState, getTasks, setAppState }
+  return { controller, send, force, frames, getAppState, getTasks, setAppState, sessionId }
 }
+
+test('a busy desktop turn displays the same worker finish live and on reopen', async () => {
+  const finishWorker = deferred()
+  const workerStarted = deferred()
+  let mainCalls = 0
+  const providerInputs: (readonly unknown[])[] = []
+  const h = harness()
+  providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ options, messages }) {
+    if (options.agentId) {
+      workerStarted.resolve()
+      await finishWorker.promise
+      yield assistant([{ type: 'text', text: 'mid-turn worker answer' }])
+      return
+    }
+    providerInputs.push([...messages])
+    if (++mainCalls === 1) {
+      yield assistant([{ type: 'tool_use', id: 'busy-worker', name: 'Agent', input: {
+        description: 'Busy worker', prompt: 'Give the test answer.', subagent_type: 'general-purpose', run_in_background: true,
+      } }])
+    } else if (mainCalls === 2) {
+      await workerStarted.promise
+      finishWorker.resolve()
+      await waitFor(() => getCommandQueueSnapshot().some(command => command.origin?.kind === 'task-notification'), 'Worker did not report its result')
+      yield assistant([{ type: 'tool_use', id: 'parent-work', name: 'Bash', input: { command: 'printf parent-work' } }])
+    } else {
+      yield assistant([{ type: 'text', text: 'parent final answer' }])
+    }
+  })
+  try {
+    h.send({ type: 'app.submit', requestId: 'start', prompt: 'run the worker while busy' })
+    await waitFor(() => h.getTasks().some(task => task.type === 'local_agent'), 'Worker did not start')
+    const id = h.getTasks().find(task => task.type === 'local_agent')!.id
+    await expectDeliveredTaskReports(h, providerInputs, [{ id, result: 'mid-turn worker answer' }])
+    expect(mainCalls).toBe(3)
+    const history = await (await import('../../src/utils/sessionStorage.js')).loadTranscriptFile(getTranscriptPath())
+    const reopened = projectResumedHistory([...history.messages.values()])
+    const live = h.frames.flatMap(frame => frame.kind === 'event' && frame.event.type === 'message' ? [frame.event.message] : [])
+    const finishReports = (messages: typeof live) => messages.filter(message =>
+      message.type === 'user' && message.origin?.kind === 'task-notification' && message.origin.toolUseId === 'busy-worker')
+    expect(finishReports(live)).toHaveLength(1)
+    expect(JSON.parse(JSON.stringify(finishReports(reopened)))).toEqual(finishReports(live))
+    const render = (frames: ServerFrame[]) => selectNestedTranscriptRows(projectServerFrames(createTranscriptState(), frames), h.sessionId)
+    const liveRows = render(h.frames)
+    const finish = liveRows.findIndex(row => row.kind === 'task-notification' && row.toolUseId === 'busy-worker')
+    expect(finish).toBeGreaterThanOrEqual(0)
+    expect(liveRows.slice(finish + 1).some(row => row.kind === 'assistant-text' && row.content === 'parent final answer')).toBe(true)
+  } finally { finishWorker.resolve() }
+})
 
 test.each([false, true])('force-send preserves three foreground agents and their results (streaming=%s)', async streaming => {
   streamingEnabled = streaming

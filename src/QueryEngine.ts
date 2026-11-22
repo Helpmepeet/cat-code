@@ -137,7 +137,7 @@ import {
   toSDKRetryError,
   toSDKMessages,
 } from './utils/messages/mappers.js'
-import { queuedCommandOrigin } from './utils/taskNotification.js'
+import { isAgentOutcomeOrigin, queuedCommandOrigin } from './utils/taskNotification.js'
 import {
   buildSystemInitMessage,
   sdkCompatToolName,
@@ -1510,8 +1510,10 @@ export class QueryEngine {
             messages.push(message)
             const attachment = message.attachment && typeof message.attachment === 'object' &&
               !Array.isArray(message.attachment) ? message.attachment as Record<string, unknown> : null
-            if (attachment?.type === 'queued_command' && attachment.commandMode === 'prompt' &&
-              !attachment.origin && !attachment.isMeta) {
+            if (attachment?.type === 'queued_command' && (
+              (attachment.commandMode === 'prompt' && !attachment.origin && !attachment.isMeta) ||
+              isAgentOutcomeOrigin(queuedCommandOrigin(attachment))
+            )) {
               // query resumes consumption/acknowledgement after this yield,
               // then may enter the next provider request. Fence that boundary.
               if (typeof message.uuid !== 'string') throw new Error('Queued user attachment has no message identity')
