@@ -243,14 +243,18 @@ test('over-budget review keeps the early operator restriction and marks omitted 
   expect(proof.prompts).toHaveLength(0)
 }, 30_000)
 
-test('over-budget operator instructions hold the complete action without sending a partial review', async () => {
+test('over-budget operator history still reaches review with the newest instruction and an omission marker', async () => {
   const proof = await run('native-oversize-operator-history')
-  expect(proof.requests).toHaveLength(0)
-  expect(proof.prompts).toHaveLength(0)
-  expect(proof.effect).toBeNull()
-  expect(proof.reviewEvents).toContainEqual(expect.objectContaining({
-    outcome: 'blocked', reason: expect.stringMatching(/applicable instructions .* exceed the Auto Mode review limit/i),
+  expect(proof.requests).toHaveLength(1)
+  const { action, conversation } = proof.requests[0].content
+  expect(action.input.command).toBe('printf effect >> effects.txt')
+  expect(conversation.findLast((row: any) => row.origin === 'operator').text).toBe('Run the isolated action and report the result.')
+  expect(conversation).toContainEqual(expect.objectContaining({
+    origin: 'other', text: expect.stringMatching(/conversation entries were omitted/i),
   }))
+  expect(JSON.stringify(conversation)).not.toContain('OVERSIZE_OPERATOR_CONTEXT')
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
 }, 30_000)
 
 test('an oversize action alone is denied with guidance to split it', async () => {

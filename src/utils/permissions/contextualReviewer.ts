@@ -22,26 +22,39 @@ export function contextualReviewerProfile(configuredModel: string) {
 function trimConversation(evidence: ContextualEvidence, budget: number): string | undefined {
   const { assignment, conversation } = evidence
   const parent = assignment?.parent ?? []
-  // Operator rows include verified human answers and corrections. Keep those
-  // intact along with the assignment anchor, or hold the action if they do not fit.
-  const removable = [
-    ...parent.filter(row => row.origin !== 'operator' && row.id !== assignment?.parentAnchor),
-    ...conversation.filter(row => row.origin !== 'operator'),
-  ]
+  type Row = ContextualEvidence['conversation'][number]
+  const isOperator = (row: Row) => row.origin === 'operator'
+  const newest = new Set([parent.findLast(isOperator), conversation.findLast(isOperator)])
+  const anchor = assignment?.parentAnchor ? parent.find(row => row.id === assignment.parentAnchor) : undefined
+  const rows = [...parent, ...conversation]
+  const nonOperator = rows.filter(row => !isOperator(row) && row !== anchor)
+  const olderOperators = rows.filter(row => isOperator(row) && !newest.has(row))
+  const proposals = olderOperators.filter(row => row.proposal)
+  const removableOperators = olderOperators.filter(row => row !== anchor)
+
   function contentAfterRemoving(count: number) {
-    const removed = new Set(removable.slice(0, count))
+    // Remove lower-priority context before losing any operator text.
+    const afterNonOperator = Math.max(0, count - nonOperator.length)
+    const removed = new Set([
+      ...nonOperator.slice(0, count),
+      ...removableOperators.slice(0, Math.max(0, afterNonOperator - proposals.length)),
+    ])
+    const stripped = new Set(proposals.slice(0, afterNonOperator))
+    const retain = (entries: readonly Row[]) => entries
+      .filter(row => !removed.has(row))
+      .map(row => stripped.has(row) ? { ...row, proposal: undefined } : row)
     return JSON.stringify({
       ...evidence,
-      assignment: assignment?.parent ? { ...assignment, parent: parent.filter(row => !removed.has(row)) } : assignment,
+      assignment: assignment?.parent ? { ...assignment, parent: retain(parent) } : assignment,
       conversation: [
         { origin: 'other', text: 'Some conversation entries were omitted to fit the Auto Mode review limit.' },
-        ...conversation.filter(row => !removed.has(row)),
+        ...retain(conversation),
       ],
     })
   }
 
   let start = 1
-  let end = removable.length
+  let end = nonOperator.length + proposals.length + removableOperators.length
   let result: string | undefined
   while (start <= end) {
     const count = Math.floor((start + end) / 2)
