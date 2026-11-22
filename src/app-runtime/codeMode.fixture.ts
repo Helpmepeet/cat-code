@@ -293,7 +293,7 @@ mock.module('../services/api/client.js', () => ({
     modelBodies.push(JSON.parse(JSON.stringify(body)))
     const index = requests++
     const script = shellExample ? index === 0
-      ? body.tools.find((tool: { name: string }) => tool.name === 'REPL')?.description?.match(/Example:\n(const found = [\s\S]*?)\nWrite patches/)?.[1] ?? (() => { throw new Error('Missing rendered REPL example') })()
+      ? body.tools.find((tool: { name: string }) => tool.name === 'REPL')?.description?.match(/Example:\n(const defs = [\s\S]*?)\nWrite patches/)?.[1] ?? (() => { throw new Error('Missing rendered REPL example') })()
       : undefined : isCodeFirstReopen ? undefined : scenario === 'code-first'
       ? index === 0 ? scripts[0] : undefined
       : scriptNotebook || ['skill-same-turn', 'skill-queued'].includes(scenario)

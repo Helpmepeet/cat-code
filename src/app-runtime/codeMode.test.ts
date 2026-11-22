@@ -136,12 +136,15 @@ for (const variant of ['pass', 'fail', 'none', 'spaces', '70', 'overflow', 'warn
       const result = scriptResultInRequest(evidence.modelBodies[1].messages, 'cell-0')
       const script = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
       expect(script.status).toBe('completed')
-      expect(script.calls.map((call: any) => call.name)).toEqual(variant === 'none' || variant === 'overflow' ? ['Bash'] : ['Bash', 'Bash'])
-      expect(script.calls[0].input.command).toBe("rg -l 'loadConfig\\(' src -g '*.test.ts'")
+      expect(script.calls.map((call: any) => call.name)).toEqual(variant === 'none' || variant === 'overflow' ? ['Bash', 'Bash'] : ['Bash', 'Bash', 'Bash'])
+      expect(script.calls[0].input.command).toBe("rg -l 'function loadConfig' src")
+      expect(script.calls[1].input.command).toBe("rg -l 'loadConfig\\(' src -g '*.test.ts'")
       if (variant === 'overflow') {
         expect(result).toContain('sh could not deliver complete stdout')
-        expect(script.calls[0].result.dataComplete).toBe(false)
-      } else if (variant !== 'none') {
+        expect(script.calls[1].result.dataComplete).toBe(false)
+      } else if (variant === 'none') {
+        expect(JSON.parse(result.split('\n\n[Code Mode]')[0]!).files).toBe('none found')
+      } else {
         const selected = JSON.parse(result.split('\n\n[Code Mode]')[0]!)
         expect(selected.files.split('\n')).toHaveLength(variant === '70' ? 70 : variant === 'warning' ? 2 : 1)
         if (variant === 'spaces') expect(selected.files).toBe('src/contains spaces.test.ts')
@@ -149,7 +152,7 @@ for (const variant of ['pass', 'fail', 'none', 'spaces', '70', 'overflow', 'warn
         if (variant === 'fail') expect(selected.tests).toContain('example-failure-detail')
         else if (variant === 'timeout') {
           expect(selected.tests).toContain('still running')
-          const taskId = script.calls[1].result.data?.backgroundTaskId
+          const taskId = script.calls[2].result.data?.backgroundTaskId
           expect(taskId).toBeString()
           expect(selected.tests).toContain(taskId)
           expect(evidence.firstTurnTasks[taskId]).toMatchObject({ type: 'local_bash', isBackgrounded: true })
