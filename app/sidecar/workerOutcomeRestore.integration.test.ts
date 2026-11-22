@@ -188,7 +188,7 @@ for (const boundary of ['cleanup', 'failure-cleanup', 'api-error-cleanup', 'kill
         },
         metadata: { prompt: 'fixture', agentType: 'implementor', resolvedAgentModel: 'claude-sonnet-4-6', isBuiltInAgent: true, isAsync: true, startTime: Date.now() },
         description: 'Fixture', agentIdForCleanup: 'worker', enableSummarization: false,
-        toolUseContext: { toolUseId, options: { tools: [FileReadTool], mainLoopProvider: 'anthropic' }, getAppState: () => state, setAppState } as never,
+        toolUseContext: { toolUseId, abortController: new AbortController(), options: { tools: [FileReadTool], mainLoopProvider: 'anthropic' }, getAppState: () => state, setAppState } as never,
         rootSetAppState: setAppState, parentTranscriptPath: path, parentSessionId: sessionId,
         getWorktreeResult: async () => {
           if (boundary !== 'review-pending') { reached(); await gate }
