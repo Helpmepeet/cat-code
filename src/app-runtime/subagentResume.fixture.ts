@@ -119,6 +119,7 @@ try {
   } else if (scenario === 'legacy') {
     const { originalToolNames: _originalToolNames, ...metadata } = saved.metadata
     await writeAgentMetadata(saved.agentId, metadata)
+    agents[0] = { ...agents[0]!, tools: ['Read', 'Bash'] }
   }
   await Array.fromAsync(session.submitMessage('Resume the same helper with a new assignment.'))
   const resumeResult = session.getMessages().findLast(message => message.type === 'user' &&

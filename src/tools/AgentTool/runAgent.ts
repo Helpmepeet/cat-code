@@ -511,7 +511,7 @@ async function* runAgentInCleanupScope({
   /** Seeded messages already present in transcript persistence, used to avoid
    * duplicate sidechain writes when resuming. */
   seededMessagesForPersistence?: Message[]
-  resume?: { brief: string; originalToolNames: readonly string[] }
+  resume?: { brief: string; originalToolNames?: readonly string[] }
   /** Original task description from AgentTool input. Persisted to metadata
    * so a resumed agent's notification can show the original description. */
   description?: string
@@ -768,7 +768,7 @@ async function* runAgentInCleanupScope({
     const { alignProviderFileEditTool } = await import('../../tools.js')
     availableTools = alignProviderFileEditTool(availableTools, appState.toolPermissionContext, resolvedAgentProvider)
   }
-  const originalToolNames = resume && new Set(resume.originalToolNames)
+  const originalToolNames = resume?.originalToolNames && new Set(resume.originalToolNames)
   const restrictToOriginalTools = (tools: Tools): Tools => originalToolNames
     ? tools.filter(tool => originalToolNames.has(tool.name))
     : tools
@@ -1200,7 +1200,7 @@ async function* runAgentInCleanupScope({
     .catch(() => null)
     .then(previous => writeAgentMetadata(agentId, {
       agentType: agentDefinition.agentType,
-      originalToolNames: resume ? [...resume.originalToolNames] : allTools.map(tool => tool.name),
+      originalToolNames: resume?.originalToolNames ? [...resume.originalToolNames] : allTools.map(tool => tool.name),
       model: resolvedAgentModel,
       provider: resolvedAgentProvider,
       agentName: workerName,

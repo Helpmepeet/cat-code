@@ -227,8 +227,9 @@ async function resumeAgentBackgroundLocked(
     throw new Error(`Cannot resume agent ${agentId}: agent type '${agentType}' is no longer available. Launch a new helper.`)
   }
   const originalToolNames = meta?.originalToolNames
-  if (!Array.isArray(originalToolNames) || originalToolNames.some(name => typeof name !== 'string' || !name)) {
-    throw new Error(`Cannot resume agent ${agentId}: the original tool list was not recorded. Launch a new helper.`)
+  if (originalToolNames !== undefined &&
+      (!Array.isArray(originalToolNames) || originalToolNames.some(name => typeof name !== 'string' || !name))) {
+    throw new Error(`Cannot resume agent ${agentId}: the recorded tool list is invalid. Launch a new helper.`)
   }
   if (resumedWorktreePath) {
     // Bump mtime so stale-worktree cleanup doesn't delete a just-resumed worktree (#22355)

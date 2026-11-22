@@ -41,12 +41,18 @@ async function run(scenario: string) {
 test.each([
   ['denied', /fixture-worker.*denied.*Agent\(fixture-worker\)/],
   ['missing', /fixture-worker.*no longer available/],
-  ['legacy', /the original tool list was not recorded/],
 ] as const)('ResumeAgent refuses a %s worker before a new worker request', async (scenario, reason) => {
   const evidence = await run(scenario)
   expect(evidence.result.success).toBe(false)
   expect(evidence.result.message).toMatch(reason)
   expect(evidence.workerTools).toHaveLength(1)
+}, 20_000)
+
+test('ResumeAgent gives a legacy worker the available tools of its current role', async () => {
+  const evidence = await run('legacy')
+  expect(evidence.result.success).toBe(true)
+  expect(evidence.workerTools[0]).not.toContain('Read')
+  expect(evidence.workerTools[1]?.toSorted()).toEqual(['Bash', 'Read'])
 }, 20_000)
 
 test('ResumeAgent keeps the original tool ceiling when the current role widens', async () => {
