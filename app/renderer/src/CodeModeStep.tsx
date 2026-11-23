@@ -50,17 +50,19 @@ export function CodeModeStepHeader({ className, expanded, onToggle, family, labe
 }) {
   const mark = family && FAMILY_STYLE[family]
   const Head = onToggle ? 'button' : 'div'
-  return <div className={`code-mode-step-header ${className}${lineLink ? ' has-line-link' : ''}${fileOpen ? ' has-file-open' : ''}`}>
+  // The line link appears over the counts, which hide on hover, so it ends where
+  // the toggle ends. The review mark stays outside it, reachable for its tooltip.
+  return <div className={`code-mode-step-header ${className}${lineLink ? ' has-line-link' : ''}`}>
     <Head className="code-mode-member" {...(onToggle ? { type: 'button' as const, 'aria-expanded': expanded, onClick: onToggle } : {})}>
       {onToggle ? <CodeModeCaret open={expanded} /> : <span className="code-mode-caret" aria-hidden />}
       {mark ? <span className={`code-mode-member-mark ${mark.color}`} aria-hidden>{mark.mark}</span> : null}
       <span className="code-mode-member-target">{label}</span>
       {digest ? <span className="code-mode-member-digest">{digest}</span> : null}
-      {review}
-      {phase ? <span className="code-mode-member-status">{phase}</span> : null}
     </Head>
+    {lineLink ? <div className="code-mode-step-actions">{lineLink}</div> : null}
+    {review}
+    {phase ? <span className="code-mode-member-status">{phase}</span> : null}
     {fileOpen}
     <CodeModeDot status={status} pulse={pulse} />
-    {lineLink ? <div className="code-mode-step-actions">{lineLink}</div> : null}
   </div>
 }

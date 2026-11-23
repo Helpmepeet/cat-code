@@ -54,7 +54,8 @@
 .code-mode-add { color: var(--tone-good); }
 .code-mode-del { color: var(--tone-danger); }
 .code-mode-step-actions { position: absolute; inset-inline-end: 16px; inset-block-start: 3px; display: flex; }
-.code-mode-step-header.has-file-open .code-mode-step-actions { inset-inline-end: 54px; }
+.code-mode-step-header > .code-mode-step-actions { position: relative; inset: auto; flex: none; align-self: stretch; width: 0; margin-inline-start: -10px; }
+.code-mode-step-header > .code-mode-step-actions .code-mode-line { position: absolute; inset-inline-end: 0; inset-block-start: 3px; }
 .code-mode-rich-member .code-mode-step-actions { inset-block-start: 4px; }
 .code-mode[data-card-style="cards"] .code-mode-rich-member .code-mode-step-actions { inset-inline-end: 30px; inset-block-start: 10px; }
 .code-mode-line { height: 16px; padding-inline: 4px; border-radius: 3px; font: 11px/16px var(--font-mono); color: var(--script-ink); opacity: 0; }
