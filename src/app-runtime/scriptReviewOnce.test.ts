@@ -51,6 +51,58 @@ const queue = (first: string, second: string) => `await Promise.all([${bash(firs
 const queued = queue('printf effect >> effects.txt', 'printf queued >> effects.txt')
 const coverNote = 'Yes covers the rest of this Script without another model review.'
 
+const skillCall = 'tools.call({name:"Skill",input:{skill:"fixture-auto-skill"},nothrow:true})'
+const skillShellRefusal = 'Embedded Skill shell commands are unavailable in Auto Mode Scripts.'
+
+test('a Script Skill cannot send embedded shell to a separate reviewer', async () => {
+  const proof = await run('native-skill', {
+    ...cells('await ' + skillCall + ';'),
+    CONTEXTUAL_AUTO_TEST_SKILL_SHELL: 'inline',
+  })
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBeNull()
+  expect(proof.scripts[0].calls[0].error).toContain(skillShellRefusal)
+  expect(proof.scripts[0].status).toBe('blocked')
+}, 30_000)
+
+test('a covering allow and a Skill author rule cannot release embedded shell or queued effects', async () => {
+  const source = write + 'await Promise.all([' + skillCall + ',' + bash('printf queued >> effects.txt') + ']);'
+  const proof = await run('native-skill-inline', {
+    ...cells(source),
+    CONTEXTUAL_AUTO_TEST_SKILL_SHELL: 'block',
+  })
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
+  expect(proof.scripts[0].calls[1].error).toContain(skillShellRefusal)
+  expect(proof.scripts[0].status).toBe('blocked')
+}, 30_000)
+
+test('ordinary Skill text still reaches the model from a contextual Auto Script', async () => {
+  const proof = await run('native-skill', cells('await ' + skillCall + ';'))
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.scripts[0].calls[0].status).toBe('completed')
+  expect(JSON.stringify(proof.transcript)).toContain('AUTO_SKILL_INSTRUCTIONS_LOADED')
+}, 30_000)
+
+for (const [name, env] of [
+  ['a direct contextual Auto Skill', {}],
+  ['a legacy Auto Script Skill', {
+    ...cells('await ' + skillCall + ';'),
+    CLAUDE_CODE_CONTEXTUAL_AUTO_MODE: 'legacy',
+  }],
+] as const) {
+  test(name + ' still expands embedded shell', async () => {
+    const proof = await run('native-skill-inline', {
+      ...env,
+      CONTEXTUAL_AUTO_TEST_SKILL_SHELL: 'inline',
+    })
+    expect(proof.effect).toBe('fixture')
+    expect(JSON.stringify(proof.transcript)).toContain('AUTO_SKILL_INSTRUCTIONS_LOADED')
+  }, 30_000)
+}
+
 for (const [model, route] of [['claude-sonnet-5-5', 'firstParty'], ['gpt-6.2-sol', 'openai']]) {
   test(`${route} task route reviews eleven log inspections once and executes each read`, async () => {
     const reads = Array.from({ length: 11 }, (_, index) => {

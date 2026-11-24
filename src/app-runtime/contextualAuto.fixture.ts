@@ -46,6 +46,7 @@ const skillAsk = scenario === 'native-skill-ask'
 const skillFork = scenario === 'native-skill-fork'
 const skillChanged = scenario === 'native-skill-changed'
 const skillGrants = skillFork || skillChanged || scenario === 'native-skill-inline'
+const skillShell = process.env.CONTEXTUAL_AUTO_TEST_SKILL_SHELL
 const outsideRead = scenario.startsWith('native-outside-read-')
 const sensitiveWrite = {
   'native-write-git-hook': '.git/hooks/pre-commit',
@@ -168,6 +169,8 @@ if (loadSkill) {
     ...(skillGrants ? ['allowed-tools: ["Bash(printf fixture:*)"]'] : []),
     ...(skillFork ? ['context: fork', 'agent: fixture-skilled-worker'] : []),
     '---', 'AUTO_SKILL_INSTRUCTIONS_LOADED',
+    ...(skillShell === 'inline' ? ['!`printf fixture >> effects.txt`'] : []),
+    ...(skillShell === 'block' ? ['```!', 'printf fixture >> effects.txt', '```'] : []),
   ].join('\n'))
 }
 const action = (name: string) => ({ name: 'Edit', input: { file_path: join(cwd, name + '.txt'), old_string: 'old', new_string: 'new' } })

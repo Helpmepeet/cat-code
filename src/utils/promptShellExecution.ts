@@ -88,9 +88,19 @@ export async function executeShellCommandsInPrompt(
   // (```!) doesn't require !` in the text, so it's always scanned.
   const blockMatches = text.matchAll(BLOCK_PATTERN)
   const inlineMatches = text.includes('!`') ? text.matchAll(INLINE_PATTERN) : []
+  const matches = [...blockMatches, ...inlineMatches]
+
+  const { contextualAutoAttempt, contextualScriptGrant } = context
+  if (contextualScriptGrant && contextualAutoAttempt?.mode === 'experimental' &&
+      contextualAutoAttempt.id === context.toolUseId && matches.some(match => match[1]?.trim())) {
+    // Interpolation calls the shell outside Script's child authorization path.
+    const reason = 'Embedded Skill shell commands are unavailable in Auto Mode Scripts. Invoke the Skill directly.'
+    contextualScriptGrant.releaseRefusal ??= reason
+    throw new MalformedCommandError(reason)
+  }
 
   await Promise.all(
-    [...blockMatches, ...inlineMatches].map(async match => {
+    matches.map(async match => {
       const command = match[1]?.trim()
       if (command) {
         try {
