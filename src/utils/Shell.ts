@@ -359,6 +359,17 @@ export async function exec(
       : {}),
   }
 
+  // Preparation can await after the earlier abort check. Keep this check
+  // beside spawn so Stop can still prevent the process from starting.
+  if (abortSignal.aborted) {
+    taskOutput.clear()
+    if (outputHandle) {
+      await outputHandle.close().catch(() => {})
+      await taskOutput.deleteOutputFile()
+    }
+    return createAbortedCommand()
+  }
+
   try {
     const childProcess = spawn(spawnBinary, shellArgs, {
       env: workerScoped ? applyWorkerEnvAllowlist(composedEnv) : composedEnv,
