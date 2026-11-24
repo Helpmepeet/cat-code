@@ -248,6 +248,8 @@ export async function createContextualAttempt(
   let actionAllowed = false
   let requiresHuman = false
   let humanAllowed = false
+  // Set when the script review itself asked, so the person's Yes covers the cell.
+  let cellAsk = false
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
   let reviewFailure: 'unavailable' | 'invalid_response' | undefined
@@ -483,7 +485,11 @@ export async function createContextualAttempt(
     }
     const { decision, rationale } = result.verdict
     const reason = containsCredentialMaterial(rationale) ? 'Auto Mode reviewed the proposed action.' : rationale
-    if (decision === 'ask') return ask(reason)
+    if (decision === 'ask') {
+      if (!scriptGrant) return ask(reason)
+      cellAsk = true
+      return ask(`${reason} Yes runs the rest of this script without another review.`)
+    }
     const decisionReason = { type: 'classifier' as const, classifier: 'auto-mode', reason }
     if (decision === 'deny') {
       const state = recordDenial(context.localDenialTracking ?? context.getAppState().denialTracking ?? createDenialTrackingState())
@@ -516,9 +522,14 @@ export async function createContextualAttempt(
       renewReview()
       return reviewHeldAction()
     },
-    requireHuman(reason: string) { return ask(reason) },
+    requireHuman(reason: string) {
+      cellAsk = false
+      return ask(reason)
+    },
     recordHuman(candidate: Input, replyContext: ToolUseContext) {
-      if (requiresHuman && unchangedAction(candidate, replyContext)) humanAllowed = true
+      if (!requiresHuman || !unchangedAction(candidate, replyContext)) return
+      humanAllowed = true
+      if (cellAsk && scriptGrant) scriptGrant.granted = { authority: structuredClone(authority), policy, instructions }
     },
     isCurrent: current,
     release(candidate: Input, releasedContext: ToolUseContext): boolean {

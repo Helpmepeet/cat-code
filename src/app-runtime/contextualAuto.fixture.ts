@@ -98,6 +98,8 @@ const peerAction = scenario === 'main-peer-create'
   : scenario === 'main-peer-send'
     ? { name: 'SendToPeer', input: { peers: ['Worker'], text: 'Update the file.' } }
     : undefined
+// Review-once ask: Script child reviews ask and the person answers Yes.
+const scriptAskApproved = process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_ASK === 'approve'
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated fixture required')
 Object.assign(globalThis, { MACRO: { VERSION: 'contextual-auto-test' } })
 globalThis.fetch = Object.assign(async () => { throw new Error('Unexpected network request') }, { preconnect: globalThis.fetch.preconnect })
@@ -296,6 +298,7 @@ mock.module('../services/api/client.js', () => ({
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
         : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
         : tool === 'REPL' ? 'allow'
+        : scriptAskApproved ? 'ask'
         : scenario.includes('withdrawn') || staleParent || rewrittenEdit || questionReply || mainEdit || peerAction || directPatch || sensitiveWrite ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
@@ -649,7 +652,7 @@ controller.subscribe(event => {
       const { enqueue } = await import('../utils/messageQueueManager.js')
       enqueue({ mode: 'prompt', value: 'Leave the file untouched. Only inspect it.' })
     }
-    if (repeatedDenials || scenario === 'wait-approve' || scenario === 'wait-correction' || scenario === 'direct-allow' || scenario === 'direct-mutated' || scenario === 'direct-unavailable' || scenario === 'direct-invalid') {
+    if (repeatedDenials || scriptAskApproved || scenario === 'wait-approve' || scenario === 'wait-correction' || scenario === 'direct-allow' || scenario === 'direct-mutated' || scenario === 'direct-unavailable' || scenario === 'direct-invalid') {
       const response = { behavior: 'allow' as const, updatedInput: scenario === 'direct-mutated' ? { ...request.input, run_in_background: true } : request.input }
       controller.respondToPermissionRequest(requestId, response)
       controller.respondToPermissionRequest(requestId, response)

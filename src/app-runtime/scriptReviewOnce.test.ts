@@ -8,7 +8,7 @@ import { resolveSidecarLaunch } from '../../app/main/mainDecisions.js'
 // one Script whose two Bash children each need a contextual review.
 const fixture = new URL('./contextualAuto.fixture.ts', import.meta.url).pathname
 
-async function run(scenario: string, reviewOnce: boolean) {
+async function run(scenario: string, reviewOnce: boolean, extraEnv: Record<string, string> = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cat-script-review-once-')))
   try {
     await Promise.all([mkdir(join(root, 'config')), mkdir(join(root, 'workspace'))])
@@ -26,7 +26,7 @@ async function run(scenario: string, reviewOnce: boolean) {
         NODE_ENV: 'test', TEST_ENABLE_SESSION_PERSISTENCE: '1',
         CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna', CATCODE_SIDECAR_SESSION_ID: 'desktop-session',
         ...(reviewOnce && { CLAUDE_CODE_CONTEXTUAL_SCRIPT_REVIEW: 'once' }),
-        CONTEXTUAL_AUTO_TEST_ROOT: root, CONTEXTUAL_AUTO_TEST_SCENARIO: scenario,
+        CONTEXTUAL_AUTO_TEST_ROOT: root, CONTEXTUAL_AUTO_TEST_SCENARIO: scenario, ...extraEnv,
       },
     })
     const timeout = setTimeout(() => child.kill(), 25_000)
@@ -50,6 +50,24 @@ test('with review-once, one review covers both Bash children of a Script', async
 test('without review-once, each Bash child is still reviewed', async () => {
   const proof = await run('native-script-children', false)
   expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash', 'Bash'])
+  expect(proof.effect).toBe('effecteffect')
+}, 30_000)
+
+const coverNote = 'Yes runs the rest of this script without another review.'
+
+test('with review-once, a Yes to the script review covers the rest of the Script', async () => {
+  const proof = await run('native-script-children', true, { CONTEXTUAL_AUTO_TEST_SCRIPT_ASK: 'approve' })
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
+  expect(proof.prompts).toHaveLength(1)
+  expect(JSON.stringify(proof.prompts[0])).toContain(coverNote)
+  expect(proof.effect).toBe('effecteffect')
+}, 30_000)
+
+test('without review-once, each asking child prompts on its own', async () => {
+  const proof = await run('native-script-children', false, { CONTEXTUAL_AUTO_TEST_SCRIPT_ASK: 'approve' })
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash', 'Bash'])
+  expect(proof.prompts).toHaveLength(2)
+  expect(JSON.stringify(proof.prompts)).not.toContain(coverNote)
   expect(proof.effect).toBe('effecteffect')
 }, 30_000)
 
