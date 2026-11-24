@@ -337,6 +337,24 @@ export function isDangerousRemovalPath(resolvedPath: string): boolean {
     return true
   }
 
+  return isCriticalRemovalDirectory(forwardSlashed)
+}
+
+/**
+ * The removal targets Auto mode refuses outright: root, home, direct children
+ * of root, and Windows drive roots and their direct children. A trailing `/*`
+ * counts only when its directory is one of these, so clearing a project
+ * folder's contents stays an ordinary reviewable removal.
+ */
+export function isCriticalRemovalPath(resolvedPath: string): boolean {
+  const forwardSlashed = resolvedPath.replace(/[\\/]+/g, '/')
+  const directory = forwardSlashed.endsWith('/*')
+    ? forwardSlashed.slice(0, -2) || '/'
+    : forwardSlashed
+  return isCriticalRemovalDirectory(directory)
+}
+
+function isCriticalRemovalDirectory(forwardSlashed: string): boolean {
   const normalizedPath =
     forwardSlashed === '/' ? forwardSlashed : forwardSlashed.replace(/\/$/, '')
 
@@ -359,11 +377,7 @@ export function isDangerousRemovalPath(resolvedPath: string): boolean {
     return true
   }
 
-  if (WINDOWS_DRIVE_CHILD_REGEX.test(normalizedPath)) {
-    return true
-  }
-
-  return false
+  return WINDOWS_DRIVE_CHILD_REGEX.test(normalizedPath)
 }
 
 /**

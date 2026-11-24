@@ -1,3 +1,4 @@
+import { feature } from 'bun:bundle'
 import { opendirSync } from 'node:fs'
 import { homedir } from 'os'
 import { isAbsolute, resolve } from 'path'
@@ -19,12 +20,19 @@ import {
   expandTilde,
   type FileOperationType,
   formatDirectoryList,
+  isCriticalRemovalPath,
   isDangerousRemovalPath,
   validatePath,
 } from '../../utils/permissions/pathValidation.js'
 import type { BashTool } from './BashTool.js'
 import { stripSafeWrappers } from './bashPermissions.js'
 import { sedCommandIsAllowedByAllowlist } from './sedValidation.js'
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+const autoModeStateModule = feature('TRANSCRIPT_CLASSIFIER')
+  ? (require('../../utils/permissions/autoModeState.js') as typeof import('../../utils/permissions/autoModeState.js'))
+  : null
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 export type PathCommand =
   | 'cd'
@@ -68,15 +76,21 @@ export type PathCommand =
  * Checks if an rm/rmdir command targets dangerous paths that should always
  * require explicit user approval, even if allowlist rules exist.
  * This prevents catastrophic data loss from commands like `rm -rf /`.
+ * In Auto a reviewer could release that approval, so critical targets are
+ * refused there instead.
  */
 function checkDangerousRemovalPaths(
   command: 'rm' | 'rmdir',
   args: string[],
   cwd: string,
+  context: ToolPermissionContext,
 ): PermissionResult {
   // Extract paths using the existing path extractor
   const extractor = PATH_EXTRACTORS[command]
   const paths = extractor(args)
+  const refuseCritical = context.mode === 'auto' ||
+    (context.mode === 'plan' && (autoModeStateModule?.isAutoModeActive() ?? false))
+  let dangerous: PermissionResult | undefined
 
   for (const path of paths) {
     // Expand tilde and resolve to absolute path
@@ -87,9 +101,20 @@ function checkDangerousRemovalPaths(
       ? cleanPath
       : resolve(cwd, cleanPath)
 
-    // Check if this is a dangerous path (using the non-symlink-resolved path)
-    if (isDangerousRemovalPath(absolutePath)) {
+    if (refuseCritical && isCriticalRemovalPath(absolutePath)) {
       return {
+        behavior: 'deny',
+        message: `${command} on '${absolutePath}' was refused: it would remove a root, home, or top-level system directory, which Auto mode never runs. Remove the specific files or project folders you need instead.`,
+        decisionReason: {
+          type: 'other',
+          reason: `Auto mode refuses ${command} on critical path: ${absolutePath}`,
+        },
+      }
+    }
+
+    // Check if this is a dangerous path (using the non-symlink-resolved path)
+    if (!dangerous && isDangerousRemovalPath(absolutePath)) {
+      dangerous = {
         behavior: 'ask',
         message: `Dangerous ${command} operation detected: '${absolutePath}'\n\nThis command would remove a critical system directory. This requires explicit approval and cannot be auto-allowed by permission rules.`,
         decisionReason: {
@@ -102,8 +127,9 @@ function checkDangerousRemovalPaths(
     }
   }
 
-  // No dangerous paths found
-  return {
+  // Report the first dangerous path only after every path was checked for a
+  // critical target.
+  return dangerous ?? {
     behavior: 'passthrough',
     message: `No dangerous removals detected for ${command} command`,
   }
@@ -923,7 +949,7 @@ export function createPathChecker(
     // were rejected, but respects explicit deny rules. Dangerous patterns get a specific
     // error message that overrides generic glob pattern rejection messages.
     if (command === 'rm' || command === 'rmdir') {
-      const dangerousPathResult = checkDangerousRemovalPaths(command, args, cwd)
+      const dangerousPathResult = checkDangerousRemovalPaths(command, args, cwd, context)
       if (dangerousPathResult.behavior !== 'passthrough') {
         return dangerousPathResult
       }
