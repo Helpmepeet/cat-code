@@ -1,19 +1,18 @@
 import { createContext } from 'react'
-import { AUTO_MODE_NO_EXPLANATION, AUTO_MODE_REJECTION_PREFIX, type AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
+import { AUTO_MODE_REJECTION_PREFIX, type AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
 import { duration } from './focusedLive.js'
 
 export const AutoModeReviewContext = createContext<AutoModeReview | undefined>(undefined)
 export type ReviewSummary = { outcome: AutoModeReview['outcome']; count: number; text: string }
 
 export const AUTO_MODE_DECISION_LABELS = {
-  allowed: 'Allowed by Auto mode',
   blocked: 'Blocked by Auto mode',
   asking: 'Auto mode requested your decision',
   inconclusive: 'Auto mode review ended without a decision',
 } as const
 
 export function visibleAutoModeReason(review?: AutoModeReview): string | undefined {
-  if (review?.outcome === 'reviewing' || (review?.outcome === 'allowed' && review.reason === AUTO_MODE_NO_EXPLANATION)) return undefined
+  if (review?.outcome === 'allowed' || review?.outcome === 'reviewing') return undefined
   return review?.reason || undefined
 }
 

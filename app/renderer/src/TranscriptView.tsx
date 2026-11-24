@@ -40,7 +40,7 @@ import { extractInlineCommandFences, type InlineCommandRun, type InlineCommandSo
 import { InlineCommandContext } from './inlineCommandState.js'
 import { ComputerPaneContext } from './computerPaneContext.js'
 import './computerPane.css'
-import { AutoModeReviewFooter, AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
+import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { EmailToolResult } from './EmailToolResult.js'
 import { CodeModeCard, CodeModeLineLink, type CodeModeMemberPresentation } from './CodeModeCard.js'
 import { CodeModePath, CodeModeStepHeader } from './CodeModeStep.js'
@@ -2413,16 +2413,14 @@ function ToolCardShell({
           {sub ? (
             <div className={TOOL_CARD_SUB_CLASS[style]}>{sub}</div>
           ) : null}
-          {reviewOnly && style === 'cards' && review?.outcome === 'allowed' ? null : <div
+          <div
             className={`${TOOL_CARD_BODY_INNER_CLASS[style]}${animateExpandedBody ? ' animate-arrive' : ''}`}
             ref={animateExpandedBody && entranceKey ? results.refFor(entranceKey, 'animate-arrive') : undefined}
             onAnimationEnd={entranceKey ? event => results.onAnimationEnd(entranceKey, event) : undefined}
           >
             <AutoModeReviewReason review={review} />
             {children}
-            {style === 'lines' ? <AutoModeReviewFooter review={review} /> : null}
-          </div>}
-          {style === 'cards' ? <AutoModeReviewFooter review={review} fullWidth /> : null}
+          </div>
         </div>
       ) : null}
     </div>
@@ -2940,7 +2938,6 @@ function CompactCodeModeMember({ row, status, error, cwd, file, sourceLine, onRe
           row={row} content={content} ack={toolAckForResult(row.result)} omitDuplicateDenial
           showPath={!patchPathInTitle(row, file, cwd)}
         /> : null) : null}
-        <AutoModeReviewFooter review={row.autoModeReview} />
       </div>
     ) : null}
   </div>
@@ -3878,7 +3875,6 @@ const ToolRunRow = memo(function ToolRunRow({
             ack={toolAckForResult(row.result)}
             omitDuplicateDenial
           />
-          <AutoModeReviewFooter review={row.autoModeReview} />
         </div>
       ) : null}
     </div>
@@ -4371,7 +4367,6 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         {completion !== null ? (
           <AgentCompletionBody completion={completion} />
         ) : null}
-        {cardStyle === 'lines' ? <AutoModeReviewFooter review={row.autoModeReview} /> : null}
       </div>
     )
   // A resumed run opens when its completion supplies the answer, and an errored
@@ -4497,7 +4492,6 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
       {(expanded || openPanel !== null) && body !== null ? (
         <div className={TOOL_CARD_BODY_CLASS[cardStyle]}>
           <div className={TOOL_CARD_BODY_INNER_CLASS[cardStyle]}>{body}</div>
-          {cardStyle === 'cards' ? <AutoModeReviewFooter review={row.autoModeReview} fullWidth /> : null}
         </div>
       ) : null}
     </div>

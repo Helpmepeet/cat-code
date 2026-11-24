@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
-import { AUTO_MODE_DECISION_LABELS, summarizeAutoModeReviews, visibleAutoModeReason, type ReviewSummary } from './autoModeReview.js'
+import { AUTO_MODE_DECISION_LABELS, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
 import './autoModeReview.css'
 
 function useReviewTooltip<T extends HTMLElement>(visible: boolean, text: string | undefined, hide: () => void) {
@@ -117,28 +117,4 @@ export function AutoModeReviewReason({ review }: { review?: AutoModeReview }) {
     <ReviewVerdict outcome={review.outcome} />
     <div className="auto-mode-review-value">{review.reason}</div>
   </div>
-}
-
-function AllowedReviewFooter({ reason, fullWidth }: { reason: string; fullWidth: boolean }) {
-  const [expanded, setExpanded] = useState(false)
-  const value = useRef<HTMLSpanElement>(null)
-  return <button
-    type="button"
-    className={`auto-mode-review-footer${fullWidth ? ' auto-mode-review-footer-full' : ''}`}
-    aria-expanded={expanded}
-    onClick={() => {
-      if (expanded) setExpanded(false)
-      else if (value.current && value.current.scrollWidth > value.current.clientWidth) setExpanded(true)
-    }}
-  >
-    <ReviewVerdict outcome="allowed" />
-    <span className="auto-mode-review-value" ref={value}>{reason}</span>
-  </button>
-}
-
-export function AutoModeReviewFooter({ review, fullWidth = false }: { review?: AutoModeReview; fullWidth?: boolean }) {
-  const reason = visibleAutoModeReason(review)
-  return review?.outcome === 'allowed' && reason
-    ? <AllowedReviewFooter key={review.attemptId} reason={reason} fullWidth={fullWidth} />
-    : null
 }

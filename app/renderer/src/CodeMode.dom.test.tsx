@@ -535,10 +535,12 @@ test('a one-file Script patch shows the path on its row and keeps the operation 
   expect(body).not.toContain('solo.ts')
 })
 
-test('launch-only Skills use a static title with or without a Script parent', async () => {
+test('approved launch-only Skills use a static title with or without a Script parent', async () => {
+  const approvalReason = 'The user asked to load this skill.'
   const skill: NestedToolUseRow = {
     ...row('skill'), toolName: 'Skill', toolFamily: 'skill', input: { skill: ' /notes ' },
     result: { content: 'Launching skill: notes', isError: false, diff: null },
+    autoModeReview: { type: 'tool.review', toolUseId: 'skill', attemptId: 'skill-review', outcome: 'allowed', startedAt: 1000, completedAt: 2000, reason: approvalReason },
   }
   const script = row('load-skill', {
     code: 'Skill();', status: 'yielded', changedFiles: [],
@@ -550,6 +552,8 @@ test('launch-only Skills use a static title with or without a Script parent', as
   const skillHeaders = [...tree.container.querySelectorAll('button[aria-expanded]')]
     .filter(button => button.textContent?.includes('/notes'))
   expect(skillHeaders).toHaveLength(0)
+  expect(tree.container.querySelectorAll('[data-outcome="allowed"][aria-label="Reviewed for 1s"]')).toHaveLength(2)
+  expect(tree.container.textContent).not.toContain(approvalReason)
   expect(tree.container.querySelector('.code-mode-single .code-mode-member-target')?.textContent).toContain('/notes')
   expect(tree.container.querySelector('.code-mode-line')).not.toBeNull()
 })

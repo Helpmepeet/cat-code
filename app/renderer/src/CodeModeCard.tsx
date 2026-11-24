@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useMemo, useReducer, useState, type ReactNode } from 'react'
-import { AutoModeReviewFooter, AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
+import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { summarizeAutoModeReviews, visibleAutoModeReason } from './autoModeReview.js'
 import { BoundedChildList } from './BoundedChildList.js'
 import { CodeModeOutput } from './CodeModeOutput.js'
@@ -285,7 +285,6 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
           return <div className="code-mode-file">{displayFilePath(file.path, cwd)}{file.additions !== undefined ? ` +${file.additions}` : ''}{file.deletions !== undefined ? ` −${file.deletions}` : ''}</div>
         }} />
       </details> : null}
-      <AutoModeReviewFooter review={row.autoModeReview} />
       {code || showOutput ? <div className="code-mode-footer">
         {code ? <button type="button" className="code-mode-fold-head code-mode-script" aria-expanded={sourceOpen} onClick={() => openPanel(sourceOpen ? null : 'source')}>
           <CodeModeCaret open={sourceOpen} />Source <span className="code-mode-output-count">{lines.length}</span>
