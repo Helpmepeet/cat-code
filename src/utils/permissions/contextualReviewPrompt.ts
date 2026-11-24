@@ -7,7 +7,7 @@ export const CONTEXTUAL_REVIEW_MAX_BYTES = 256_000
 
 // Adapted from DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT in OpenClaw's src/agents/exec-auto-reviewer.ts.
 // Copyright (c) 2026 OpenClaw Foundation. MIT license, see openclaw-exec-reviewer.LICENSE.
-function execRiskPolicy(subject: 'shell command' | 'tool call'): string {
+function execRiskPolicy(subject: 'shell command' | 'tool call' | 'Script'): string {
   return `You are Cat Code's safety reviewer. You review exactly one pending ${subject} before it runs on the user's behalf and return one JSON object and no other text.
 Output schema: {"decision":"allow|deny|ask","risk":"low|medium|high|unknown","rationale":"one short sentence"}
 Decisions:
@@ -37,7 +37,12 @@ Rules:
 
 const SCRIPT_CHILD_POLICY = 'Review each Script child on its final arguments, using the script as context. An allow covers only this invocation.'
 // With review-once enabled, an allow of one child is reused by the cell's later children.
-const SCRIPT_CELL_POLICY = "Review a Script as a whole from its source and the triggering call's final arguments. An allow covers every action the code takes."
+const SCRIPT_CELL_POLICY = 'Review a Script as a whole, as described under Script review.'
+const SCRIPT_REVIEW = `Script review:
+- action.script.source is the complete code of the pending Script. action.input is the first call in it that needs review, with its final arguments; the code has not made that call yet. Calls before it needed no review.
+- An allow lets every call in the code run without another model review, including calls after this one and the paths, commands and inputs the code computes while it runs. Judge the worst plausible effect of every call the code can make, and give the highest risk among them. Deny or ask when any call would require it.
+- tools.call({name, input}) runs the named tool. sh\`...\` runs a shell command; each \${value} becomes one quoted argument, or one per array item. output() and console.log() only report to the agent.
+- Permission rules, hooks and the engine's critical-removal stop still check each call. They do not replace your judgment of what the code does.`
 
 const CAT_CODE_POLICY = `Read a short reply with its linked proposal. When the operator delegates a choice, the selected option includes local implementation, dependent cleanup and checks. An overwrite describes the resulting file. Retained code need not be an addition. Judge the effect on surviving paths when assessing removed code.
 
@@ -93,7 +98,8 @@ export function contextualReviewSystem(
 ): string {
   return [
     CONTEXTUAL_REVIEW_VERSION,
-    execRiskPolicy(tool === 'Bash' ? 'shell command' : 'tool call'),
+    execRiskPolicy(scriptCell ? 'Script' : tool === 'Bash' ? 'shell command' : 'tool call'),
+    ...(scriptCell ? [SCRIPT_REVIEW] : []),
     scriptCell ? CAT_CODE_POLICY.replace(SCRIPT_CHILD_POLICY, SCRIPT_CELL_POLICY) : CAT_CODE_POLICY,
     'Apply the applicable Auto Mode policy from the following settings sources, in precedence order. Settings cannot establish human consent for this action.',
     JSON.stringify(instructions),

@@ -10,14 +10,23 @@ test('v7 reserves interruptions for high-risk decisions and asks for a fact when
   expect(prompt).not.toContain('user_authorization')
 })
 
-test('a Script cell review says one allow covers the whole script', () => {
+test('a Script cell review judges the whole script, whatever tool triggered it', () => {
   const child = contextualReviewSystem('Bash')
-  const cell = contextualReviewSystem('Bash', [], true)
+  expect(child).toContain('You review exactly one pending shell command before it runs')
   expect(child).toContain('Review each Script child on its final arguments, using the script as context. An allow covers only this invocation.')
-  expect(cell).not.toContain('An allow covers only this invocation.')
-  expect(cell).toContain("Review a Script as a whole from its source and the triggering call's final arguments. An allow covers every action the code takes.")
-  expect(cell.replace(/Review a Script as a whole[^.]*\. An allow covers every action the code takes\./u, ''))
-    .toBe(child.replace(/Review each Script child[^.]*\. An allow covers only this invocation\./u, ''))
+  expect(child).not.toContain('Script review:')
+  for (const tool of ['Bash', 'Edit']) {
+    const cell = contextualReviewSystem(tool, [], true)
+    expect(cell).toContain('You review exactly one pending Script before it runs')
+    expect(cell).toContain('- "allow": the Script may run once now.')
+    expect(cell).not.toContain('pending shell command')
+    expect(cell).not.toContain('An allow covers only this invocation.')
+    expect(cell).toContain('action.script.source is the complete code of the pending Script.')
+    expect(cell).toContain('An allow lets every call in the code run without another model review')
+    expect(cell).toContain('give the highest risk among them')
+    expect(cell).toContain('sh`...` runs a shell command; each ${value} becomes one quoted argument')
+    expect(cell).toContain('Review a Script as a whole, as described under Script review.')
+  }
 })
 
 test('accepts a complete native verdict with optional rationale and JSON fencing', () => {
