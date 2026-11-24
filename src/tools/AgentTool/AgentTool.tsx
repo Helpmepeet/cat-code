@@ -38,7 +38,8 @@ import { lazySchema } from '../../utils/lazySchema.js';
 import { createUserMessage, extractTextContent, isSyntheticMessage, normalizeMessages } from '../../utils/messages.js';
 import { AGENT_TOOL_MODEL_OPTIONS, resolveAgentModel } from '../../utils/model/agent.js';
 import type { EffortLevel } from '../../utils/effort.js';
-import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js';
+import { pathInAllowedWorkingPath, pathInWorkingPath } from '../../utils/permissions/filesystem.js';
+import { verifyBorrowedWorktree } from '../../utils/borrowedWorktree.js';
 import { permissionModeSchema } from '../../utils/permissions/PermissionMode.js';
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
 import { filterDeniedAgents, getDenyRuleForAgent } from '../../utils/permissions/permissions.js';
@@ -980,8 +981,13 @@ export const AgentTool = buildTool({
       };
     }
 
-    const parentWorktreePath = effectiveIsolation === 'worktree'
-      ? undefined : getCurrentWorktreeSession()?.worktreePath
+    const activeWorktree = getCurrentWorktreeSession()
+    if (activeWorktree?.borrowed) {
+      if (effectiveIsolation === 'worktree') throw new Error('Use an ordinary worker to work in this existing checkout.')
+      await verifyBorrowedWorktree(activeWorktree.borrowed)
+    }
+    const parentWorktree = effectiveIsolation === 'worktree' ? undefined : activeWorktree
+    const parentWorktreePath = parentWorktree?.worktreePath
     let validatedCwd: string | undefined = cwd ?? parentWorktreePath
     if (validatedCwd !== undefined) {
       if (effectiveIsolation === 'worktree') {
@@ -1003,6 +1009,9 @@ export const AgentTool = buildTool({
         throw new Error(
           `Cannot use cwd ${resolvedCwd}: it is outside allowed working directories.`,
         )
+      }
+      if (parentWorktree?.borrowed && !pathInWorkingPath(await fsp.realpath(resolvedCwd), parentWorktree.borrowed.checkout)) {
+        throw new Error('The worker must stay in the entered worktree.')
       }
       validatedCwd = resolvedCwd
     }
@@ -1216,6 +1225,7 @@ export const AgentTool = buildTool({
       }),
       cwd: validatedCwd,
       parentWorktreePath,
+      parentWorktreeIdentity: parentWorktree?.borrowed,
       worktreePath: worktreeInfo?.worktreePath,
       description,
       agentName,

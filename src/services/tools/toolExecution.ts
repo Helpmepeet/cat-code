@@ -1429,6 +1429,7 @@ async function checkPermissionsAndCallTool(
 
   let trustedSedEdit: import('../../tools/BashTool/sedEditCapability.js').TrustedSedEdit | undefined
   let userApprovalFeedback: string | undefined
+  let finalInputApprovedByUser = false
   if (permissionDecision.behavior === 'allow') {
     const finalInput = await authorizeFinalToolInput(
       tool,
@@ -1456,6 +1457,7 @@ async function checkPermissionsAndCallTool(
       toolUseContext = finalInput.context
       trustedSedEdit = finalInput.trustedSedEdit
       userApprovalFeedback = finalInput.userApprovalFeedback
+      finalInputApprovedByUser = finalInput.humanApprovedFinalInput
       if (toolUseContext.inlineCommand &&
         (tool.name !== BASH_TOOL_NAME ||
           trustedSedEdit !== undefined ||
@@ -1841,6 +1843,7 @@ async function checkPermissionsAndCallTool(
       ...((!tool.isMcp && (tool.name === AGENT_TOOL_NAME || tool.name === 'ResumeAgent')) ? { onCodeModeAudit: undefined, getCodeModeDispatchFence: undefined, publishCodeModeActivity: undefined } : {}),
       toolUseId: toolUseID,
       userModified: permissionDecision.userModified ?? false,
+      finalInputApprovedByUser,
     }
     executionContextForCleanup = executionContext
     if (trustedSedEdit) {

@@ -284,8 +284,8 @@ export function ResumeConversation({
       }));
       restoreSessionMetadata(restoreResult);
       if (!forkSession) {
-        const adopt = () => {
-          restoreWorktreeForResume(result_3.worktreeSession);
+        const adopt = async () => {
+          await restoreWorktreeForResume(result_3.worktreeSession);
           if (result_3.sessionId) {
             adoptResumedSessionFile();
           }
@@ -293,7 +293,7 @@ export function ResumeConversation({
         if (result_3.sessionId) {
           await withDeferredContinuationResumeAuthority(result_3.sessionId, adopt);
         } else {
-          adopt();
+          await adopt();
         }
         await adoptInterruptedTurnForResume(result_3);
       }

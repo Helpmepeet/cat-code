@@ -61,6 +61,8 @@ import {
 } from './interruptedTurn.js'
 import { copyPlanForResume } from './plans.js'
 import { processSessionStartHooks } from './sessionStart.js'
+import { verifyBorrowedWorktree } from './borrowedWorktree.js'
+import { runWithCwdOverride } from './cwd.js'
 import { getSessionAccountRouteBlock } from '../services/api/sessionAccountRouting.js'
 import {
   checkResumeConsistency,
@@ -776,6 +778,11 @@ export async function loadConversationForResume(
     if (sessionId) markWorkspaceResumeAttachments(messages!, sessionId)
     restoreSkillStateFromMessages(messages!)
 
+    const borrowed = log?.worktreeSession?.borrowed
+    if (borrowed) {
+      if (borrowed.checkout !== log?.worktreeSession?.worktreePath) throw new Error('Invalid saved worktree binding.')
+      await verifyBorrowedWorktree(borrowed)
+    }
     const recoveryPath = sourceJsonlFile ?? log?.fullPath ?? (sessionId ? getTranscriptPathForSession(sessionId) : undefined)
     const tailRecovery = sessionId && recoveryPath ? readTailRecoveryState(recoveryPath, sessionId) : null
     const interruptedTurnPolicy = tailRecovery?.reviewRequired ? 'ignore' : options?.interruptedTurn ?? 'consume'
@@ -797,7 +804,10 @@ export async function loadConversationForResume(
     // Process session start hooks for resume
     // Account recovery needs the management server, not authenticated hooks.
     const accountRouteBlocked = getSessionAccountRouteBlock('anthropic') || getSessionAccountRouteBlock('openai')
-    const hookMessages = recoveryReviewRequired || accountRouteBlocked ? [] : await processSessionStartHooks('resume', { sessionId })
+    const runResumeHooks = () => processSessionStartHooks('resume', { sessionId })
+    const hookMessages = recoveryReviewRequired || accountRouteBlocked ? [] : await (
+      borrowed ? runWithCwdOverride(borrowed.checkout, runResumeHooks) : runResumeHooks()
+    )
 
     // Append hook messages to the conversation
     messages.push(...hookMessages)

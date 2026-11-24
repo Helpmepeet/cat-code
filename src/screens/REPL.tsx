@@ -2114,7 +2114,7 @@ export function REPL({
       // fork materializes its own file via recordTranscript on REPL mount.
       if (entrypoint !== 'fork') {
         exitRestoredWorktree();
-        restoreWorktreeForResume(log.worktreeSession);
+        await restoreWorktreeForResume(log.worktreeSession);
         adoptResumedSessionFile();
         void restoreRemoteAgentTasks({
           abortController: new AbortController(),
@@ -4285,7 +4285,8 @@ export function REPL({
       setIsExiting(false);
       return;
     }
-    const showWorktree = getCurrentWorktreeSession() !== null;
+    const worktree = getCurrentWorktreeSession();
+    const showWorktree = worktree !== null && !worktree.borrowed;
     if (showWorktree) {
       setExitFlow(<ExitFlow showWorktree onDone={() => {}} onCancel={() => {
         setExitFlow(null);

@@ -111,6 +111,7 @@ export type FinalToolInputResult =
       context: ToolUseContext
       decision: PermissionDecision
       trustedSedEdit?: TrustedSedEdit
+      humanApprovedFinalInput: boolean
       userApprovalFeedback?: string
     }
   | {
@@ -441,6 +442,7 @@ export async function authorizeFinalToolInput(
     input: candidate,
     context: preparedContext,
     decision,
+    humanApprovedFinalInput,
     ...(trustedSedEdit ? { trustedSedEdit } : {}),
     ...(humanApprovedFinalInput && decision.behavior === 'allow' && decision.acceptFeedback
       ? { userApprovalFeedback: decision.acceptFeedback } : {}),

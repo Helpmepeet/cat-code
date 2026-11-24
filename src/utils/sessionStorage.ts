@@ -471,6 +471,7 @@ export type AgentMetadata = {
   assignedCwd?: string
   /** The parent checkout this non-isolated worker was launched in. */
   parentWorktreePath?: string
+  parentWorktreeIdentity?: import('./borrowedWorktree.js').BorrowedWorktreeIdentity
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -4882,6 +4883,7 @@ export function saveWorktreeState(
         sessionId: worktreeSession.sessionId,
         tmuxSessionName: worktreeSession.tmuxSessionName,
         hookBased: worktreeSession.hookBased,
+        ...(worktreeSession.borrowed ? { borrowed: worktreeSession.borrowed } : {}),
       }
     : null
   const project = getProject()

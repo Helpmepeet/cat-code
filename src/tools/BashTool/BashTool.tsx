@@ -40,6 +40,9 @@ import { maybeRecordPluginHint } from '../../utils/plugins/hintRecommendation.js
 import { exec } from '../../utils/Shell.js';
 import type { ExecResult } from '../../utils/ShellCommand.js';
 import { SandboxManager } from '../../utils/sandbox/sandbox-adapter.js';
+import { BORROWED_GIT_WRITE_UNAVAILABLE, isBorrowedGitWrite, prepareBorrowedGitWrite, type BorrowedGitWrite } from '../../utils/borrowedWorktree.js';
+import { getCurrentWorktreeSession } from '../../utils/worktree.js';
+import { getCwd } from '../../utils/cwd.js';
 import { semanticBoolean } from '../../utils/semanticBoolean.js';
 import { semanticNumber } from '../../utils/semanticNumber.js';
 import { EndTruncatingAccumulator } from '../../utils/stringUtils.js';
@@ -332,7 +335,7 @@ export function getBashExecutionSettings(input: BashToolInput, inline: boolean, 
   const canBackground = !inline && !isBackgroundTasksDisabled
   return {
     timeoutMs: input.timeout || getDefaultTimeoutMs(),
-    sandbox: shouldUseSandbox(input),
+    sandbox: (Boolean(getCurrentWorktreeSession()?.borrowed) && SandboxManager.isSandboxingEnabled()) || shouldUseSandbox(input),
     background: canBackground && input.run_in_background === true,
     canBackground,
     automaticBackgroundOnTimeout: canBackground && isAutobackgroundingAllowed(input.command),
@@ -561,6 +564,11 @@ export const BashTool = buildTool({
     };
   },
   async prepareExecution(input, context) {
+    const borrowed = getCurrentWorktreeSession()?.borrowed;
+    if (borrowed && process.platform === 'darwin' && SandboxManager.isSandboxingEnabled() && isBorrowedGitWrite(input.command)) {
+      const scope = await prepareBorrowedGitWrite(borrowed, input.command);
+      return { state: { kind: 'borrowed-git-write', scope }, cleanup() {} };
+    }
     const sedInfo = parseSedEditCommand(input.command);
     if (!sedInfo || !context.toolUseId) {
       return { state: null, cleanup() {} };
@@ -623,7 +631,21 @@ export const BashTool = buildTool({
     // bashToolHasPermission sits against Bun's feature() DCE budget.
     const ownership = await checkKillOwnership(input.command, context);
     if (ownership) return ownership;
-    return bashToolHasPermission(input, context);
+    const permission = await bashToolHasPermission(input, context);
+    const borrowed = getCurrentWorktreeSession()?.borrowed;
+    if (!borrowed || !SandboxManager.isSandboxingEnabled() || permission.behavior === 'deny') return permission;
+    if (input.dangerouslyDisableSandbox) return { behavior: 'deny', message: 'Sandbox overrides are not available in an entered worktree.' };
+    if (!isBorrowedGitWrite(input.command)) return permission;
+    if (process.platform !== 'darwin') return { behavior: 'deny', message: BORROWED_GIT_WRITE_UNAVAILABLE };
+    if (getCwd() !== borrowed.checkout) return { behavior: 'deny', message: 'Run the Git command from the worktree root.' };
+    if (context.agentId || context.inlineCommand || input.run_in_background || input.work_lifetime === 'service') {
+      return { behavior: 'deny', message: 'Only the main agent can stage or commit in the foreground in this worktree.' };
+    }
+    const prepared = context.preparedExecution?.state as { kind?: string; scope?: BorrowedGitWrite } | undefined;
+    if (prepared?.kind !== 'borrowed-git-write' || !prepared.scope) return { behavior: 'deny', message: 'Could not verify the Git write target.' };
+    const message = 'Allow this Git command on ' + prepared.scope.ref.slice('refs/heads/'.length) + ' in ' + borrowed.checkout + '?';
+    return { behavior: 'ask', humanOnly: true, message, updatedInput: input,
+      decisionReason: { type: 'safetyCheck', reason: message, classifierApprovable: false } };
   },
   renderToolUseMessage,
   renderToolUseProgressMessage,
@@ -708,6 +730,19 @@ export const BashTool = buildTool({
     };
   },
   async call(input: BashToolInput, toolUseContext, _canUseTool?: CanUseToolFn, parentMessage?: AssistantMessage, onProgress?: ToolCallProgress<BashProgress>) {
+    const borrowed = getCurrentWorktreeSession()?.borrowed;
+    let borrowedGitWrite: BorrowedGitWrite | undefined;
+    if (borrowed && SandboxManager.isSandboxingEnabled()) {
+      if (input.dangerouslyDisableSandbox) throw new Error('Sandbox overrides are not available in an entered worktree.');
+      if (isBorrowedGitWrite(input.command)) {
+        const prepared = toolUseContext.preparedExecution?.state as { kind?: string; scope?: BorrowedGitWrite } | undefined;
+        if (getCwd() !== borrowed.checkout || toolUseContext.agentId || toolUseContext.inlineCommand || input.run_in_background || input.work_lifetime === 'service' ||
+            !toolUseContext.finalInputApprovedByUser || prepared?.kind !== 'borrowed-git-write' || prepared.scope?.command !== input.command) {
+          throw new Error('The Git metadata write requires approval from the main session.');
+        }
+        borrowedGitWrite = prepared.scope;
+      }
+    }
     registerLidShellTool(toolUseContext.toolUseId, input.work_lifetime === 'finite' || !input.run_in_background && input.work_lifetime !== 'service');
     const trustedSedEdit = consumeTrustedSedEditForExecution(toolUseContext);
     const preparedSedState = toolUseContext.preparedExecution?.state;
@@ -758,7 +793,8 @@ export const BashTool = buildTool({
         isMainThread,
         inlineCommand: toolUseContext.inlineCommand,
         toolUseId: toolUseContext.toolUseId,
-        agentId: toolUseContext.agentId
+        agentId: toolUseContext.agentId,
+        borrowedGitWrite,
       });
 
       // Consume the generator and capture the return value
@@ -1000,7 +1036,8 @@ async function* runShellCommand({
   isMainThread,
   inlineCommand,
   toolUseId,
-  agentId
+  agentId,
+  borrowedGitWrite,
 }: {
   input: BashToolInput;
   abortController: AbortController;
@@ -1011,6 +1048,7 @@ async function* runShellCommand({
   inlineCommand?: ToolUseContext['inlineCommand'];
   toolUseId?: string;
   agentId?: AgentId;
+  borrowedGitWrite?: BorrowedGitWrite;
 }): AsyncGenerator<{
   type: 'progress';
   output: string;
@@ -1074,12 +1112,13 @@ async function* runShellCommand({
         pendingInlineProgress = true;
       }
     },
-    preventCwdChanges,
-    cwd: inlineCommand?.cwd,
-    requireExactCommand: Boolean(inlineCommand),
-    stdin: inlineCommand ? 'ignore' : undefined,
+    preventCwdChanges: preventCwdChanges || Boolean(borrowedGitWrite),
+    cwd: borrowedGitWrite?.identity.checkout ?? inlineCommand?.cwd,
+    requireExactCommand: Boolean(inlineCommand || borrowedGitWrite),
+    stdin: inlineCommand || borrowedGitWrite ? 'ignore' : undefined,
     shouldUseSandbox: settings.sandbox,
-    shouldAutoBackground,
+    shouldAutoBackground: !borrowedGitWrite && shouldAutoBackground,
+    borrowedGitWrite,
     // Already carried this far to attribute background tasks to their agent.
     // exec needs the same fact to decide whether the child gets the worker
     // environment allowlist.

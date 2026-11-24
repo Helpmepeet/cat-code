@@ -3,10 +3,7 @@ export function getExitWorktreeToolPrompt(): string {
 
 ## Scope
 
-This tool ONLY operates on worktrees created by EnterWorktree in this session. It will NOT touch:
-- Worktrees created manually with \`git worktree add\`
-- Worktrees from a previous session
-- The directory you're in if EnterWorktree was never called
+This tool operates on the session's active worktree, including an existing worktree entered by path. For an existing worktree, use keep to leave it; removal is never available.
 
 If called outside an EnterWorktree session, the tool is a no-op: it reports that no worktree session is active and takes no filesystem action.
 

@@ -148,6 +148,7 @@ export type WorktreeSession = {
   sessionId: string
   tmuxSessionName?: string
   hookBased?: boolean
+  borrowed?: import('./borrowedWorktree.js').BorrowedWorktreeIdentity
   /** How long worktree creation took (unset when resuming an existing worktree). */
   creationDurationMs?: number
   /** True if git sparse-checkout was applied via settings.worktree.sparsePaths. */
@@ -814,6 +815,9 @@ export async function keepWorktree(): Promise<void> {
 export async function cleanupWorktree(): Promise<void> {
   if (!currentWorktreeSession) {
     return
+  }
+  if (currentWorktreeSession.borrowed) {
+    throw new Error('Cat Code did not create this worktree and cannot remove it.')
   }
 
   try {

@@ -5,6 +5,7 @@ export function getEnterWorktreeToolPrompt(): string {
 
 - Use isolation for parallel edits, risky edits, broad refactors, experiments, or an implementation attempt that should not touch the main workspace yet
 - The user explicitly asks to work in a worktree
+- A task already has an existing sibling worktree, especially one with an in-progress merge. Enter that checkout before assigning workers; creating it with Git alone does not move the session.
 
 ## When NOT to Use
 
@@ -30,10 +31,13 @@ export function getEnterWorktreeToolPrompt(): string {
 - In a git repository: creates a new git worktree inside \`.cat-code/worktrees/\` with a new branch based on HEAD
 - Outside a git repository: delegates to WorktreeCreate/WorktreeRemove hooks for VCS-agnostic isolation
 - Switches the session's working directory to the isolated workspace
-- Use ExitWorktree to leave mid-session. On session exit, if still in the worktree, the user will be prompted only for the meaningful outcome: apply, discard, or keep the isolated result.
+- With a path, enters that exact checkout after user approval. It does not create a worktree, change its branch, or take ownership of its cleanup.
+- Use ExitWorktree to leave mid-session. Only a worktree Cat Code manages can be removed on exit. A worktree entered by path remains on disk.
+- When the shell sandbox is enabled in an existing worktree, stage and commit with separate foreground commands: git add -- path and git commit -m 'message'. Each needs user approval for its Git metadata writes. Do not disable the sandbox.
 
 ## Parameters
 
 - \`name\` (optional): A stable name for the isolated attempt. If not provided, a random name is generated.
+- \`path\` (optional, instead of name): The absolute path to a registered sibling worktree of the same repository. Use this to preserve the existing files and index.
 `
 }

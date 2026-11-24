@@ -37,6 +37,10 @@ export function WorktreeExitDialog({
   const [resultMessage, setResultMessage] = useState<string | undefined>();
   const worktreeSession = getCurrentWorktreeSession();
   useEffect(() => {
+    if (worktreeSession?.borrowed) {
+      setStatus('done');
+      return;
+    }
     async function loadChanges() {
       let changeLines: string[] = [];
       const gitStatus = await execFileNoThrow('git', ['status', '--porcelain']);
@@ -96,7 +100,7 @@ export function WorktreeExitDialog({
     return null;
   }
   async function handleSelect(value: string) {
-    if (!worktreeSession) return;
+    if (!worktreeSession || worktreeSession.borrowed) return;
     const hasTmux = Boolean(worktreeSession.tmuxSessionName);
     if (value === 'keep' || value === 'keep-with-tmux') {
       setStatus('keeping');

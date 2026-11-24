@@ -226,6 +226,8 @@ export type ToolUseContext = {
     input: Record<string, unknown>
     state: unknown
   }
+  /** Engine receipt for the final input, not a field supplied by the model. */
+  finalInputApprovedByUser?: boolean
   /** Engine-owned, main-turn-only transfer fence; workers cannot accept it. */
   turnHandoff?: import('./app-runtime/handoff.js').TurnHandoff
   options: {

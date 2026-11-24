@@ -17,6 +17,7 @@ import { updateHooksConfigSnapshot } from '../../utils/hooks/hooksConfigSnapshot
 import { lazySchema } from '../../utils/lazySchema.js'
 import { getPlansDirectory } from '../../utils/plans.js'
 import { setCwd } from '../../utils/Shell.js'
+import { SandboxManager } from '../../utils/sandbox/sandbox-adapter.js'
 import { saveWorktreeState } from '../../utils/sessionStorage.js'
 import { withWorktreeTransition } from '../../utils/workspaceTransition.js'
 import {
@@ -153,7 +154,7 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
   searchHint: 'exit a worktree session and return to the original directory',
   maxResultSizeChars: 100_000,
   async description() {
-    return 'Exits a worktree session created by EnterWorktree and restores the original working directory'
+    return 'Leaves the active worktree and restores the original working directory'
   },
   async prompt() {
     return getExitWorktreeToolPrompt()
@@ -188,6 +189,10 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
           'No-op: there is no active EnterWorktree session to exit. This tool only operates on worktrees created by EnterWorktree in the current session — it will not touch worktrees created manually or in a previous session. No filesystem changes were made.',
         errorCode: 1,
       }
+    }
+
+    if (input.action === 'remove' && session.borrowed) {
+      return { result: false, errorCode: 4, message: 'Cat Code did not create this worktree and cannot remove it. Use keep to leave it unchanged.' }
     }
 
     if (input.action === 'remove' && !input.discard_changes) {
@@ -234,6 +239,9 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
       // state — defend against a race between validation and execution.
       throw new Error('Not in a worktree session')
     }
+    if (session.borrowed && input.action === 'remove') {
+      throw new Error('Cat Code did not create this worktree and cannot remove it.')
+    }
 
     // Capture before keepWorktree/cleanupWorktree null out currentWorktreeSession.
     const {
@@ -265,6 +273,7 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
       if (input.action === 'keep') {
         await keepWorktree()
         restoreSessionToOriginalCwd(originalCwd, projectRootIsWorktree)
+        if (session.borrowed) SandboxManager.refreshConfig()
 
         logEvent('tengu_worktree_kept', {
           mid_session: true,

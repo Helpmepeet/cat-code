@@ -415,6 +415,7 @@ async function* runAgentInCleanupScope({
   worktreePath,
   cwd,
   parentWorktreePath,
+  parentWorktreeIdentity,
   seededMessagesForPersistence,
   resume,
   description,
@@ -507,6 +508,7 @@ async function* runAgentInCleanupScope({
   /** Assigned cwd. Persisted to metadata for resume restoration. */
   cwd?: string
   parentWorktreePath?: string
+  parentWorktreeIdentity?: import('../../utils/borrowedWorktree.js').BorrowedWorktreeIdentity
   /** Worktree path if the agent was spawned with isolation: "worktree".
    * Persisted to metadata so resume can restore the correct cwd. */
   worktreePath?: string
@@ -1208,6 +1210,7 @@ async function* runAgentInCleanupScope({
       agentName: workerName,
       ...(cwd && { assignedCwd: cwd }),
       ...(parentWorktreePath && { parentWorktreePath }),
+      ...(parentWorktreeIdentity && { parentWorktreeIdentity }),
       ...(worktreePath && { worktreePath }),
       ...(description && { description }),
       parentSessionId: getSessionId(),

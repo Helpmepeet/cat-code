@@ -50,7 +50,8 @@ export function createSavedWorkspaceObservationReader(
     try {
       const value = await promise
       if (cache.size >= 32) cache.delete(cache.keys().next().value!)
-      cache.set(transcriptPath, { stamp, value })
+      // A linked checkout can be removed or replaced without touching its transcript.
+      if (value.cwd === cwd) cache.set(transcriptPath, { stamp, value })
       return value
     } finally {
       pending = null

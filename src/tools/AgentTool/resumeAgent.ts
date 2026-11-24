@@ -1,5 +1,6 @@
 import { promises as fsp } from 'fs'
 import { isAbsolute } from 'path'
+import { isDeepStrictEqual } from 'node:util'
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js'
 import { getSessionStatePathFromTranscriptPath } from '../../utils/workerState.js'
 import { getCurrentSessionMode } from '../../coordinator/coordinatorMode.js'
@@ -18,6 +19,7 @@ import { asAgentId } from '../../types/ids.js'
 import { runWithAgentContext } from '../../utils/agentContext.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
 import { getCurrentWorktreeSession } from '../../utils/worktree.js'
+import { verifyBorrowedWorktree } from '../../utils/borrowedWorktree.js'
 import { logForDebugging } from '../../utils/debug.js'
 import {
   createUserMessage,
@@ -157,6 +159,12 @@ async function resumeAgentBackgroundLocked(
   if (meta?.parentWorktreePath !== undefined &&
       (!meta.assignedCwd || meta.parentWorktreePath !== getCurrentWorktreeSession()?.worktreePath)) {
     throw new Error('Resume the worker from the worktree where it started.')
+  }
+  if (meta?.parentWorktreeIdentity) {
+    if (!isDeepStrictEqual(meta.parentWorktreeIdentity, getCurrentWorktreeSession()?.borrowed)) {
+      throw new Error('The worker was started in a different worktree.')
+    }
+    await verifyBorrowedWorktree(meta.parentWorktreeIdentity)
   }
   const resumedMessages = filterWhitespaceOnlyAssistantMessages(
     filterOrphanedThinkingOnlyMessages(
@@ -363,6 +371,7 @@ async function resumeAgentBackgroundLocked(
     // Re-persist so metadata survives runAgent's writeAgentMetadata overwrite
     ...(resumedCwd !== undefined ? { cwd: resumedCwd } : {}),
     parentWorktreePath: meta?.parentWorktreePath,
+    parentWorktreeIdentity: meta?.parentWorktreeIdentity,
     worktreePath: resumedWorktreePath,
     description: meta?.description,
     agentName: meta?.agentName,

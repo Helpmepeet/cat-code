@@ -1,4 +1,5 @@
 import { realpath, stat } from 'node:fs/promises'
+import { verifyBorrowedWorktree } from '../../src/utils/borrowedWorktree.js'
 import { MAX_WORKSPACE_OBSERVATION_BYTES, parseWorkspaceObservationRequest } from '../shared/workspaceObservation.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import { bootstrapWorkerEngine, emitWorkerRecord, runDisposableWorker } from './workerRuntime.js'
@@ -18,7 +19,12 @@ async function main(): Promise<void> {
   // Match restoreWorktreeForResume's missing-directory fallback without restoring
   // a session, running hooks, or rewriting transcript metadata.
   const worktree = log.worktreeSession?.worktreePath
-  if (worktree) {
+  const borrowed = log.worktreeSession?.borrowed
+  if (borrowed) {
+    if (worktree !== borrowed.checkout) throw new Error('Invalid saved worktree binding.')
+    await verifyBorrowedWorktree(borrowed)
+    cwd = borrowed.checkout
+  } else if (worktree) {
     try {
       if ((await stat(worktree)).isDirectory()) cwd = await realpath(worktree)
     } catch (error) {

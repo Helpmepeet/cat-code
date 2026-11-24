@@ -139,26 +139,28 @@ describe('EnterWorktreeTool transcript path', () => {
     let tasks = {}
     const context = {
       getAppState: () => ({ tasks }), abortController: new AbortController(),
-    } as ToolUseContext
+    } as unknown as ToolUseContext
+    const enter = EnterWorktreeTool.call as (input: { name: string }, context: ToolUseContext) => Promise<unknown>
+    const exit = ExitWorktreeTool.call as (input: { action: 'keep' }, context: ToolUseContext) => Promise<unknown>
     const input = { name: 'transition-test' }
-    await expect(EnterWorktreeTool.call(input, { ...context, agentId: asAgentId('worker') })).rejects.toThrow('Only the main agent')
+    await expect(enter(input, { ...context, agentId: asAgentId('worker') })).rejects.toThrow('Only the main agent')
     tasks = { worker: { type: 'local_agent', status: 'running' } }
-    await expect(EnterWorktreeTool.call(input, context)).rejects.toThrow('background work')
+    await expect(enter(input, context)).rejects.toThrow('background work')
     expect(getCwd()).toBe(repoDir)
     tasks = {}
     const release = beginWorkspaceToolUse()!
     try {
-      await expect(EnterWorktreeTool.call(input, context)).rejects.toThrow('running tools')
+      await expect(enter(input, context)).rejects.toThrow('running tools')
     } finally { release() }
     setWorkspaceTransitionCoordinator({
       begin: async () => { expect(beginWorkspaceToolUse()).toBeNull() },
       finish: async () => {},
     })
-    await EnterWorktreeTool.call(input, context)
+    await enter(input, context)
     const worktree = getCwd()
-    await expect(ExitWorktreeTool.call({ action: 'keep' }, { ...context, agentId: asAgentId('worker') })).rejects.toThrow('Only the main agent')
+    await expect(exit({ action: 'keep' }, { ...context, agentId: asAgentId('worker') })).rejects.toThrow('Only the main agent')
     expect(getCwd()).toBe(worktree)
-    await ExitWorktreeTool.call({ action: 'keep' }, context)
+    await exit({ action: 'keep' }, context)
     expect(getCwd()).toBe(repoDir)
   })
 

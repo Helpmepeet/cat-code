@@ -145,7 +145,7 @@ test('legacy checkpoint restore after switching worktree A to B targets only B',
     const sessionA = asSessionId(randomUUID())
     const sessionB = asSessionId(randomUUID())
     switchSession(sessionA, null)
-    restoreWorktreeForResume({
+    await restoreWorktreeForResume({
       originalCwd: sandbox,
       worktreePath: worktreeA,
       worktreeName: 'a',
@@ -175,7 +175,7 @@ test('legacy checkpoint restore after switching worktree A to B targets only B',
     let state = getDefaultAppState()
     switchSession(sessionB, null)
     exitRestoredWorktree()
-    restoreWorktreeForResume(log.worktreeSession)
+    await restoreWorktreeForResume(log.worktreeSession)
     restoreSessionStateFromLog(log, updater => { state = updater(state) })
 
     expect(getSessionId()).toBe(sessionB)

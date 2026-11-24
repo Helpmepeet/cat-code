@@ -52,6 +52,7 @@ import {
 } from './commitAttribution.js'
 import { updateSessionName } from './concurrentSessions.js'
 import { getCwd } from './cwd.js'
+import { verifyBorrowedWorktree } from './borrowedWorktree.js'
 import { logForDebugging } from './debug.js'
 import type { FileHistorySnapshot } from './fileHistory.js'
 import { fileHistoryRestoreStateFromLog } from './fileHistory.js'
@@ -383,9 +384,9 @@ type ResumeLoadResult = {
  * re-assert the fresh worktree here before adoptResumedSessionFile writes
  * it back to disk.
  */
-export function restoreWorktreeForResume(
+export async function restoreWorktreeForResume(
   worktreeSession: PersistedWorktreeSession | null | undefined,
-): void {
+): Promise<void> {
   const fresh = getCurrentWorktreeSession()
   if (fresh) {
     saveWorktreeState(fresh)
@@ -393,9 +394,15 @@ export function restoreWorktreeForResume(
   }
   if (!worktreeSession) return
 
+  if (worktreeSession.borrowed) {
+    if (worktreeSession.borrowed.checkout !== worktreeSession.worktreePath) throw new Error('Invalid saved worktree binding.')
+    await verifyBorrowedWorktree(worktreeSession.borrowed)
+  }
+
   try {
     process.chdir(worktreeSession.worktreePath)
-  } catch {
+  } catch (error) {
+    if (worktreeSession.borrowed) throw error
     // Directory is gone. Override the stale cache so the next
     // reAppendSessionMetadata records "exited" instead of re-persisting
     // a path that no longer exists.
@@ -443,6 +450,11 @@ export async function restoreTrustedDeferredContinuationContext(
   if (canonicalWorktree !== transcriptWorktree) {
     throw new Error('Deferred continuation worktree identity mismatch')
   }
+  const borrowed = transcript.worktreeSession?.borrowed
+  if (borrowed) {
+    if (borrowed.checkout !== transcriptWorktree) throw new Error('Invalid saved worktree binding.')
+    await verifyBorrowedWorktree(borrowed)
+  }
   const trustedRoot = canonicalWorktree ?? canonicalProject
   if (!trustedRoot) {
     throw new Error('Deferred continuation transcript lacks trusted project context')
@@ -454,7 +466,7 @@ export async function restoreTrustedDeferredContinuationContext(
 
   process.chdir(canonicalCwd)
   setCwd(canonicalCwd)
-  setOriginalCwd(canonicalProject ?? canonicalCwd)
+  setOriginalCwd(borrowed?.checkout ?? canonicalProject ?? canonicalCwd)
   if (transcript.worktreeSession) {
     restoreWorktreeSession(transcript.worktreeSession)
   }
@@ -885,12 +897,12 @@ export async function processResumedConversation(
     // partial state changes on an already-busy session; this second acquisition
     // closes the after-probe window where a worker could start before the
     // transcript pointer is adopted.
-    const adopt = () => {
+    const adopt = async () => {
       // Cd back into the worktree the session was in when it last exited.
       // Done after restoreSessionMetadata (which caches the worktree state
       // from the transcript) so if the directory is gone we can override
       // the cache before adoptResumedSessionFile writes it.
-      restoreWorktreeForResume(result.worktreeSession)
+      await restoreWorktreeForResume(result.worktreeSession)
 
       // Point sessionFile at the resumed transcript and re-append metadata
       // now. resetSessionFilePointer above nulled it (so the old fresh-session
@@ -903,7 +915,7 @@ export async function processResumedConversation(
     if (adoptedSessionId) {
       await withDeferredContinuationResumeAuthority(adoptedSessionId, adopt)
     } else {
-      adopt()
+      await adopt()
     }
   }
 

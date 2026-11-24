@@ -178,6 +178,7 @@ export type ExecOptions = {
   ) => void
   preventCwdChanges?: boolean
   shouldUseSandbox?: boolean
+  borrowedGitWrite?: import('./borrowedWorktree.js').BorrowedGitWrite
   shouldAutoBackground?: boolean
   /** When provided, stdout is piped (not sent to file) and this callback fires on each data chunk. */
   onStdout?: (data: string) => void
@@ -293,6 +294,7 @@ export async function exec(
       sandboxBinShell,
       undefined,
       abortSignal,
+      options?.borrowedGitWrite,
     )
     // Create sandbox temp directory for sandboxed processes with secure permissions
     try {

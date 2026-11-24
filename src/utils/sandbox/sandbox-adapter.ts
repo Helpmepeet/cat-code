@@ -23,7 +23,9 @@ import {
 import { rmSync, statSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { memoize } from 'lodash-es'
-import { join, resolve, sep } from 'path'
+import { isAbsolute, join, relative, resolve, sep } from 'path'
+import { homedir } from 'node:os'
+import { isDeepStrictEqual } from 'node:util'
 import {
   getAdditionalDirectoriesForClaudeMd,
   getCwdState,
@@ -32,6 +34,8 @@ import {
 import { logForDebugging } from '../debug.js'
 import { expandPath } from '../path.js'
 import { getPlatform, type Platform } from '../platform.js'
+import { getCurrentWorktreeSession } from '../worktree.js'
+import { borrowedGitWritePaths, type BorrowedGitWrite } from '../borrowedWorktree.js'
 import { settingsChangeDetector } from '../settings/changeDetector.js'
 import { SETTING_SOURCES, type SettingSource } from '../settings/constants.js'
 import { getManagedSettingsDropInDir } from '../settings/managedPath.js'
@@ -171,6 +175,7 @@ function shouldAllowManagedReadPathsOnly(): boolean {
  */
 export function convertToSandboxRuntimeConfig(
   settings: SettingsJson,
+  scopedGitWrite = false,
 ): SandboxRuntimeConfig {
   const permissions = settings.permissions || {}
 
@@ -222,8 +227,11 @@ export function convertToSandboxRuntimeConfig(
   // Extract filesystem paths from Edit and Read rules
   // Always include current directory and Claude temp directory as writable
   // The temp directory is needed for Shell.ts cwd tracking files
-  const allowWrite: string[] = ['.', getClaudeTempDir()]
+  const borrowed = getCurrentWorktreeSession()?.borrowed
+  const allowWrite: string[] = [borrowed?.checkout ?? '.', getClaudeTempDir()]
   const denyWrite: string[] = []
+  if (borrowed) denyWrite.push(join(borrowed.checkout, '.git'))
+  if (borrowed && !scopedGitWrite) denyWrite.push(borrowed.primary)
   const denyRead: string[] = []
   const allowRead: string[] = []
 
@@ -289,7 +297,7 @@ export function convertToSandboxRuntimeConfig(
   // cached in worktreeMainRepoPath. Git operations in a worktree need write
   // access to the main repo's .git directory for index.lock etc.
   // This is resolved once at init time (worktree status doesn't change mid-session).
-  if (worktreeMainRepoPath && worktreeMainRepoPath !== cwd) {
+  if (!borrowed && worktreeMainRepoPath && worktreeMainRepoPath !== cwd) {
     allowWrite.push(worktreeMainRepoPath)
   }
 
@@ -712,7 +720,10 @@ async function wrapWithSandbox(
   binShell?: string,
   customConfig?: Partial<SandboxRuntimeConfig>,
   abortSignal?: AbortSignal,
+  gitWrite?: BorrowedGitWrite,
 ): Promise<string> {
+  const borrowed = getCurrentWorktreeSession()?.borrowed
+  if (borrowed && isSandboxingEnabled() && !initializationPromise) await initialize()
   // If sandboxing is enabled, ensure initialization is complete
   if (isSandboxingEnabled()) {
     if (initializationPromise) {
@@ -722,6 +733,21 @@ async function wrapWithSandbox(
     }
   }
 
+  if (borrowed) {
+    const filesystem = convertToSandboxRuntimeConfig(getSettings_DEPRECATED(), !!gitWrite).filesystem
+    if (gitWrite) {
+      if (!isDeepStrictEqual(gitWrite.identity, borrowed)) throw new Error('The approved Git command belongs to a different worktree.')
+      const temporaryRoots = [getClaudeTempDir(), '/tmp/claude', '/private/tmp/claude',
+        join(homedir(), '.npm', '_logs'), join(homedir(), '.claude', 'debug')]
+      if (temporaryRoots.some(root => {
+        const rel = relative(root, borrowed.primary)
+        return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + sep)
+      })) throw new Error('Cannot grant Git metadata access when the primary checkout is under a sandbox temporary directory.')
+      filesystem.allowWrite = [borrowed.checkout, getClaudeTempDir(), ...await borrowedGitWritePaths(gitWrite)]
+      filesystem.denyWrite.push(join(borrowed.commonDir, 'objects', 'info'), join(borrowed.commonDir, 'objects', 'pack'))
+    }
+    customConfig = { ...customConfig, filesystem }
+  } else if (gitWrite) throw new Error('The approved Git command no longer has an active worktree.')
   return BaseSandboxManager.wrapWithSandbox(
     command,
     binShell,
@@ -918,6 +944,7 @@ export interface ISandboxManager {
     binShell?: string,
     customConfig?: Partial<SandboxRuntimeConfig>,
     abortSignal?: AbortSignal,
+    gitWrite?: BorrowedGitWrite,
   ): Promise<string>
   cleanupAfterCommand(): void
   getSandboxViolationStore(): SandboxViolationStore

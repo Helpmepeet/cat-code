@@ -24,7 +24,8 @@ export async function call(onDone: LocalJSXCommandOnDone): Promise<React.ReactNo
     });
     return null;
   }
-  const showWorktree = getCurrentWorktreeSession() !== null;
+  const worktree = getCurrentWorktreeSession();
+  const showWorktree = worktree !== null && !worktree.borrowed;
   if (showWorktree) {
     return <ExitFlow showWorktree={showWorktree} onDone={onDone} onCancel={() => onDone()} />;
   }

@@ -205,6 +205,7 @@ export type PersistedWorktreeSession = {
   sessionId: string
   tmuxSessionName?: string
   hookBased?: boolean
+  borrowed?: import('../utils/borrowedWorktree.js').BorrowedWorktreeIdentity
 }
 
 /**
