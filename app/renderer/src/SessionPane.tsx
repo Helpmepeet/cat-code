@@ -938,7 +938,7 @@ export function SessionPane({
   )
   const [dockCollapsed, setDockCollapsed] = useSubagentDockCollapsedPreference()
   const { dock, clearFinished, setDetailsVisible } = useSubagentDock(activeSessionId, activeDescriptor?.engineSessionId ?? null, {
-    workers, tasks: tasksSnapshot, transcriptRows: nestedRows, leases, parentModel: model,
+    workers, tasks: tasksSnapshot, transcriptRows: nestedRows, flatTranscriptRows: paneFileSession?.rows, leases, parentModel: model,
   })
   const [revealAgent, setRevealAgent] = useState<AgentRevealRequest | null>(null)
   const [revealOutlineRow, setRevealOutlineRow] = useState<{ key: string; sequence: number } | null>(null)
@@ -1906,7 +1906,7 @@ export function SessionPane({
     <AgentFaceRegistryContext.Provider value={paneFaces}>
     <LatestPaneFileCardContext.Provider value={latestFileCards}>
     <TranscriptFileScopeContext.Provider value={fileScopes}>
-    <SubagentWorkspace key={activeSessionId} appSessionId={activeSessionId ?? undefined} onFocusComposer={() => composerRef.current?.element?.focus({ preventScroll: true })} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
+    <SubagentWorkspace key={activeSessionId} appSessionId={activeSessionId ?? undefined} onFocusComposer={() => composerRef.current?.element?.focus({ preventScroll: true })} dock={dock} findRunHistory={dock.findRunHistory} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
       onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
       onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending && !historyLoadEarlierUnavailable ? onLoadEarlierHistory : undefined}
       onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}

@@ -1,5 +1,5 @@
 import { deriveAgentToolState } from './agentIdentity.js'
-import { isSubagentDockTerminal, type SubagentDockRow, type SubagentDockStatus } from './subagentDockState.js'
+import { isSubagentDockTerminal, type FindSubagentRunHistory, type SubagentDockRow, type SubagentDockStatus } from './subagentDockState.js'
 import { selectParentSubagentBranches } from './subagentTranscriptBranches.js'
 import { agentIdOf, agentToolSourceOf } from './transcriptAgent.js'
 import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
@@ -54,27 +54,29 @@ export function canOpenSubagentPanel(row: SubagentDockRow, rows: readonly Nested
 
 /**
  * The dock row an Agent card opens: the dock's own row for any of the agent's
- * runs, or one read from the card when the dock no longer holds the agent.
+ * runs, or its latest transcript run when the dock no longer shows the agent.
  */
-export function selectSubagentPanelRowForCard(card: NestedToolUseRow, dockRows: readonly SubagentDockRow[]): SubagentDockRow {
+export function selectSubagentPanelRowForCard(card: NestedToolUseRow, dockRows: readonly SubagentDockRow[], findRunHistory?: FindSubagentRunHistory): SubagentDockRow {
   const known = dockRows.find(row => row.toolUseId === card.toolUseId || row.runToolUseIds.includes(card.toolUseId))
   if (known) return known
-  const derived = deriveAgentToolState(agentToolSourceOf(card))
+  const history = findRunHistory?.(card.toolUseId)
+  const run = history?.latest ?? card
+  const derived = deriveAgentToolState(agentToolSourceOf(run))
   const state: SubagentDockStatus = derived === 'completed' || derived === 'result-ready' || derived === 'reviewed' ? 'completed'
     : derived === 'failed' ? 'failed'
     : derived === 'stopped' || derived === 'paused' ? 'stopped'
     : derived === 'waiting' || derived === 'needs-you' || derived === 'attention' ? 'waiting'
     : derived === 'background' ? 'background' : 'running'
-  const description = card.input.description
-  const type = card.input.subagent_type
+  const description = run.input.description ?? card.input.description
+  const type = run.input.subagent_type ?? card.input.subagent_type
   return {
-    agentId: agentIdOf(card) ?? card.toolUseId, runKey: card.toolUseId, toolUseId: card.toolUseId,
-    name: card.result?.agentName ?? null,
+    agentId: history?.agentId ?? agentIdOf(card) ?? card.toolUseId, runKey: run.toolUseId, toolUseId: run.toolUseId,
+    name: run.result?.agentName ?? card.result?.agentName ?? null,
     task: typeof description === 'string' && description.trim() ? description.trim() : 'Agent',
     type: typeof type === 'string' && type.trim() ? type.trim() : null,
     state, model: null, recordedAccount: null, usageLabel: null, verdict: null, resultSummary: null, blockReason: null,
     launchOrder: 0, terminalAt: null, resumedAt: null, lastSeenAt: 0, missingSince: null, settleUntil: null,
     stateWord: state === 'completed' ? 'done' : state, account: null, rowModel: null,
-    stripLines: [null, null], chipLines: [null, null], settling: false, runToolUseIds: [card.toolUseId],
+    stripLines: [null, null], chipLines: [null, null], settling: false, runToolUseIds: history?.runToolUseIds ?? [run.toolUseId],
   }
 }

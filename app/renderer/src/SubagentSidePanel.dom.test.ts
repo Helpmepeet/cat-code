@@ -279,6 +279,56 @@ test('real SessionPane opens projected child reasoning, and the parent Agent car
   expect(tree.container.querySelector('main')?.textContent).not.toContain('Child reply')
 })
 
+test('the sidebar orders late Script runs by dispatch and opens the same history after dock retirement', async () => {
+  const sessionId = 'script-worker-run-order'
+  const agentId = 'script-worker'
+  let transcript = projectServerFrame(createTranscriptState(), {
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId, engineSessionId: 'script-worker-order-engine', payload: {
+      type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
+      abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
+    },
+  })
+  function message(uuid: string, role: 'assistant' | 'user', parent: string | null, content: unknown[], extra = {}) {
+    transcript = projectServerFrame(transcript, {
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId,
+      event: { type: 'message', message: { type: role, uuid, session_id: sessionId, parent_tool_use_id: parent,
+        message: { id: uuid, role, content }, ...extra } },
+    } as unknown as ServerFrame)
+  }
+  function run(id: string, tool: 'Agent' | 'ResumeAgent', text: string, viaScript = false) {
+    message(id, 'assistant', null, [{ type: 'tool_use', id, name: tool,
+      input: tool === 'Agent' ? { description: 'Inspect the history' } : { agentId: viaScript ? '@Ada' : agentId, prompt: 'Continue' } }],
+    viaScript ? { isVirtual: true, code_mode: { cellId: 'script', generation: 'generation' } } : {})
+    message('step-' + id, 'assistant', id, [{ type: 'text', text }])
+    message('result-' + id, 'user', null, [{ type: 'tool_result', tool_use_id: id, content: 'Done' }], {
+      tool_use_result: { agentId, agentName: 'Ada' },
+    })
+  }
+  message('script', 'assistant', null, [{ type: 'tool_use', id: 'script', name: 'REPL', input: { description: 'Run background work' } }])
+  run('launch', 'Agent', 'Original worker steps', true)
+  run('first', 'ResumeAgent', 'First resume steps')
+  run('latest', 'ResumeAgent', 'Latest resume steps', true)
+
+  const render = (retired = false) => createElement(SessionPane, {
+    ...idleSessionPaneProps(), activeSessionId: sessionId, transcript,
+    workers: retired ? [] : [{ agentId, handle: '@Ada', role: 'explore', description: 'Inspect the history', status: 'completed' }],
+  })
+  const tree = await harness.mount(render())
+  const history = () => Array.from(tree.container.querySelector('.subagent-side-body')?.textContent?.match(/(?:Original worker|First resume|Latest resume) steps/g) ?? [])
+  const expected = ['Original worker steps', 'First resume steps', 'Latest resume steps']
+  await click(tree.container, '[data-dock-row="script-worker"]')
+  expect(history()).toEqual(expected)
+  await click(tree.container, '[aria-label="Close subagent panel"]')
+
+  await tree.render(render(true))
+  expect(tree.container.querySelector('[data-dock-row="script-worker"]')).toBeNull()
+  for (const toolUseId of ['first', 'launch']) {
+    await click(tree.container, '[data-agent-tool-id="' + toolUseId + '"] button')
+    expect(history()).toEqual(expected)
+    await click(tree.container, '[aria-label="Close subagent panel"]')
+  }
+})
+
 test('real SessionPane shares recorded worker file origins with the docked panel and preview buttons', async () => {
   const previousBridge = Object.getOwnPropertyDescriptor(window, 'catcode')
   const requested: string[] = []

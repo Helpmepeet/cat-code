@@ -1,5 +1,5 @@
 import type { LeaseSnapshot, LiveWorkerItem, TasksSnapshot } from '../../shared/protocol.js'
-import type { NestedTranscriptRow, NestedToolUseRow } from './transcriptProjector.js'
+import type { NestedTranscriptRow, NestedToolUseRow, TranscriptRow } from './transcriptProjector.js'
 import { deriveAgentToolState } from './agentIdentity.js'
 import { selectWorkerDisplayName, workerState } from './workersState.js'
 import { agentAccountLabel, agentActivityOf, agentIdOf, agentModelOf, agentProgressBadge, agentToolSourceOf, agentUsageOf } from './transcriptAgent.js'
@@ -40,6 +40,7 @@ export type SubagentDockInput = {
   workers: readonly LiveWorkerItem[]
   tasks: TasksSnapshot | null
   transcriptRows: readonly NestedTranscriptRow[]
+  flatTranscriptRows?: readonly TranscriptRow[]
   leases: LeaseSnapshot | null
   clearMarkers?: readonly SubagentDockClearMarker[]
   nowMs: number
@@ -62,6 +63,11 @@ export type DerivedSubagentDock = {
   chipFaces: SubagentDockRow[]
   nextUpdateAt: number | null
 }
+export type FindSubagentRunHistory = (toolUseId: string) => {
+  agentId: string
+  latest: NestedToolUseRow
+  runToolUseIds: string[]
+} | undefined
 
 const DISAPPEARANCE_GRACE_MS = 2000
 // A capped entry can still have a terminal card in the current transcript.
@@ -112,20 +118,43 @@ export function createSubagentDockState(restoredEntries: readonly SubagentDockEn
   return { entries, initialized: false, nextLaunchOrder: Math.max(0, ...restoredEntries.map(entry => entry.launchOrder + 1)) }
 }
 
-const agentCandidatesByRows = new WeakMap<readonly NestedTranscriptRow[], readonly NestedToolUseRow[]>()
+const agentCandidatesByRows = new WeakMap<readonly NestedTranscriptRow[], {
+  flatRows: SubagentDockInput['flatTranscriptRows']; candidates: readonly NestedToolUseRow[]
+}>()
+const lastAgentPosition = new WeakMap<NestedToolUseRow, number>()
 
-function agentCandidates(rows: readonly NestedTranscriptRow[]): readonly NestedToolUseRow[] {
+function agentCandidates(rows: readonly NestedTranscriptRow[], flatRows: SubagentDockInput['flatTranscriptRows']): readonly NestedToolUseRow[] {
   const cached = agentCandidatesByRows.get(rows)
-  if (cached) return cached
+  if (cached && cached.flatRows === flatRows) return cached.candidates
   const candidates = Array.from(selectParentSubagentBranches(rows).values()).filter(
     (row): row is NestedToolUseRow => row.kind === 'tool-use')
-  agentCandidatesByRows.set(rows, candidates)
+  // A background Script can dispatch a child after a standalone call below it.
+  if (flatRows && candidates.length > 1 && candidates.some(row => row.codeMode || row.parentToolUseId !== null)) {
+    // Streaming can replace the flat array without moving a call. Recovery can
+    // move it, so validate cached positions against the current snapshot.
+    const missing = new Map<string, NestedToolUseRow>()
+    for (const row of candidates) {
+      const position = lastAgentPosition.get(row)
+      if (position !== undefined && flatRows[position]?.id === row.id) continue
+      lastAgentPosition.delete(row)
+      missing.set(row.id, row)
+    }
+    for (let i = 0; missing.size && i < flatRows.length; i++) {
+      const row = missing.get(flatRows[i]!.id)
+      if (!row) continue
+      lastAgentPosition.set(row, i)
+      missing.delete(row.id)
+    }
+    const positionOf = (row: NestedToolUseRow) => lastAgentPosition.get(row) ?? flatRows.length
+    candidates.sort((a, b) => positionOf(a) - positionOf(b))
+  }
+  agentCandidatesByRows.set(rows, { flatRows, candidates })
   return candidates
 }
 
-function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'tasks' | 'workers'>, state: SubagentDockState): { latest: Map<string, NestedToolUseRow>; runs: Map<string, string[]> } {
-  const { transcriptRows: rows, tasks, workers } = input
-  const candidates = agentCandidates(rows)
+function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'flatTranscriptRows' | 'tasks' | 'workers'>, state: SubagentDockState): { latest: Map<string, NestedToolUseRow>; runs: Map<string, string[]> } {
+  const { transcriptRows: rows, flatTranscriptRows, tasks, workers } = input
+  const candidates = agentCandidates(rows, flatTranscriptRows)
   const agentByToolUseId = new Map((tasks?.subagents ?? []).map(agent => [agent.toolUseId, agent.agentId]))
   const knownAgents = new Map(Object.values(state.entries).map(entry => [entry.agentId, entry.name]))
   const rememberedByToolUseId = new Map(Object.values(state.entries).filter(entry => entry.toolUseId !== null).map(entry => [entry.toolUseId!, entry.agentId]))
@@ -293,8 +322,17 @@ function join(parts: (string | null | undefined)[]): string | null {
   const present = parts.filter((part): part is string => !!part)
   return present.length ? present.join(' · ') : null
 }
-export function selectSubagentDock(state: SubagentDockState, input: SubagentDockInput): DerivedSubagentDock {
+export function selectSubagentDock(state: SubagentDockState, input: SubagentDockInput): DerivedSubagentDock & {
+  findRunHistory: FindSubagentRunHistory
+} {
   const { latest: rows, runs } = latestAgentRows(input, state)
+  const findRunHistory: FindSubagentRunHistory = toolUseId => {
+    for (const [agentId, runToolUseIds] of runs) {
+      if (!runToolUseIds.includes(toolUseId)) continue
+      const latest = rows.get(agentId)
+      if (latest) return { agentId, latest, runToolUseIds }
+    }
+  }
   const roster = new Set([
     ...input.workers.map(worker => worker.agentId),
     ...(input.tasks?.items ?? []).filter(task => task.type === 'local_agent').map(task => task.id),
@@ -349,7 +387,7 @@ export function selectSubagentDock(state: SubagentDockState, input: SubagentDock
   finished.sort((a, b) => (b.terminalAt ?? 0) - (a.terminalAt ?? 0) || b.launchOrder - a.launchOrder)
   const chipFaces = active.some(row => !isSubagentDockTerminal(row.state))
     ? active : [...active, ...finished].filter(row => row.state === 'failed')
-  return { active, finished, chipFaces, nextUpdateAt }
+  return { active, finished, chipFaces, nextUpdateAt, findRunHistory }
 }
 
 function usageLabel(usage: ReturnType<typeof agentUsageOf>, state: SubagentDockStatus): string | null {

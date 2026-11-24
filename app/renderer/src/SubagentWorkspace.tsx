@@ -26,18 +26,19 @@ import { SidePaneShellContext } from './sidePaneShellContext.js'
 import { paneFileIndex } from './transcriptPaneFiles.js'
 import { useToast } from './toastContext.js'
 import { localhostPreviewHostPort } from '../../shared/filePreview.js'
-import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.js'
+import type { DerivedSubagentDock, FindSubagentRunHistory, SubagentDockRow } from './subagentDockState.js'
 import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
 import './filePane.css'
 
 const WORKSPACE_FIELDS = ['open', 'opened', 'file', 'scroll', 'lineTarget', 'visible', 'worker', 'output', 'browser', 'computer', 'screenActivity', 'width'] as const
 
-export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopped = false, dock, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, running = false, runKey = null, cwd, children }: {
+export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopped = false, dock, findRunHistory, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, running = false, runKey = null, cwd, children }: {
   appSessionId?: string
   onFocusComposer?: () => void
   onStop?: () => void
   stopped?: boolean
   dock: DerivedSubagentDock
+  findRunHistory?: FindSubagentRunHistory
   collapsed: boolean
   onCollapsedChange: (collapsed: boolean) => void
   onClearFinished: () => void
@@ -170,7 +171,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
     if (row.toolUseId !== null && !selectParentSubagentBranches(rows).has(row.toolUseId)) onLoadMissingHistory?.()
   }, [sessionId, rows, onFallback, onLoadMissingHistory])
   const openCardRef = useRef((_card: NestedToolUseRow) => {})
-  openCardRef.current = card => open(selectSubagentPanelRowForCard(card, workers))
+  openCardRef.current = card => open(selectSubagentPanelRowForCard(card, workers, findRunHistory))
   const openCard = useCallback((card: NestedToolUseRow) => openCardRef.current(card), [])
   const closeWorker = useCallback(() => {
     hideSidePane(sessionId)
