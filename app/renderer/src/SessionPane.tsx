@@ -181,6 +181,7 @@ import { TranscriptFileScopeContext, createTranscriptFileScopesSelector } from '
 import { useSubagentDock } from './subagentDockController.js'
 import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
 import type { SubagentDockRow } from './subagentDockState.js'
+import { selectParentSubagentBranches } from './subagentTranscriptBranches.js'
 import type { AgentRevealRequest } from './transcriptAgentReveal.js'
 import {
   resultToastTone,
@@ -947,7 +948,7 @@ export function SessionPane({
       focusedScrollRef.current?.release()
       applyAtBottom(false)
       setRevealAgent(previous => ({ toolUseId: row.toolUseId!, sequence: (previous?.sequence ?? 0) + 1 }))
-      if (!nestedRows.some(candidate => candidate.kind === 'tool-use' && candidate.toolUseId === row.toolUseId) &&
+      if (selectParentSubagentBranches(nestedRows).get(row.toolUseId)?.kind !== 'tool-use' &&
           !historyLoadEarlierUnavailable && activeSessionId && transcript.sessions[activeSessionId]?.historyTruncated) onLoadEarlierHistory?.()
     } else onOpenTasks?.(row.agentId, true)
   }

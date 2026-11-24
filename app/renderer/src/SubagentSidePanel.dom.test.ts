@@ -394,6 +394,35 @@ test('a resume keeps the open panel and its earlier steps above the resumed run'
   expect(body.querySelector('.subagent-side-availability') === null).toBe(true)
 })
 
+test('the dock opens a historical Script launch and joins it to a standalone resume', async () => {
+  const child = { ...agent('nested'), result: { isError: false, content: 'Nested', diff: null, agentId: 'nested' } }
+  const original = { ...agent('a', [prose('original-step', 'Steps from Script launch'), child]),
+    status: 'success' as const, result: { isError: false, content: 'Finished', diff: null, agentId: 'a' } }
+  const script: NestedToolUseRow = { ...agent('script', [original]), toolName: 'REPL', toolFamily: 'mcp', input: {} }
+  const resume: NestedToolUseRow = { ...agent('a', [prose('resume-step', 'Steps from standalone resume')]),
+    id: 'resume-row-a', toolUseId: 'resume-a', toolName: 'ResumeAgent', input: { agentId: 'a', prompt: 'Continue' } }
+  const facts: SubagentDockInput = {
+    workers: [{ agentId: 'a', handle: '@Ada', status: 'completed', role: 'explore', description: 'Task a' }],
+    tasks: null, leases: null, nowMs: 1000, reducedMotion: true, transcriptRows: [script],
+  }
+  const state = reconcileSubagentDockState(createSubagentDockState(), facts)
+  const dock = selectSubagentDock(state, facts)
+  expect(state.entries.nested).toBeUndefined()
+  const fallback = () => { throw new Error('The launch is available in the transcript') }
+  const tree = await harness.mount(workspace({ rows: [script], active: dock.active, finished: dock.finished, fallback, loadMissing: fallback }))
+  await click(tree.container, '[data-dock-row="a"]')
+  const body = tree.container.querySelector('.subagent-side-body')!
+  expect(body.textContent).toContain('Steps from Script launch')
+  const resumed: SubagentDockInput = { ...facts, transcriptRows: [script, resume],
+    workers: facts.workers.map(item => ({ ...item, status: 'running' })) }
+  const next = selectSubagentDock(reconcileSubagentDockState(state, resumed), resumed)
+  await tree.render(workspace({ rows: [script, resume], active: next.active, finished: next.finished, fallback, loadMissing: fallback }))
+  expect(tree.container.querySelector('.subagent-side-body')).toBe(body)
+  expect(body.textContent).toContain('Steps from Script launch')
+  expect(body.textContent).toContain('Steps from standalone resume')
+  expect(body.querySelector('.subagent-side-availability')).toBeNull()
+})
+
 test('dock opens a repeatedly resumed worker when its card arrives before the task update', async () => {
   const original = agent()
   const firstResume: NestedToolUseRow = {

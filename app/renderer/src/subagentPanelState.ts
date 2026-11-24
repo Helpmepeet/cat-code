@@ -1,5 +1,6 @@
 import { deriveAgentToolState } from './agentIdentity.js'
 import { isSubagentDockTerminal, type SubagentDockRow, type SubagentDockStatus } from './subagentDockState.js'
+import { selectParentSubagentBranches } from './subagentTranscriptBranches.js'
 import { agentIdOf, agentToolSourceOf } from './transcriptAgent.js'
 import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
 
@@ -8,21 +9,16 @@ const EMPTY_STEPS: NestedTranscriptRow[] = []
 // follow effect and row rendering only react to real changes.
 const joinedStepsByRows = new WeakMap<readonly NestedTranscriptRow[], Map<string, NestedTranscriptRow[]>>()
 
-function findBranch(rows: readonly NestedTranscriptRow[], toolUseId: string) {
-  return rows.find(row =>
-    row.kind === 'tool-use' && row.toolFamily === 'agent' && row.toolUseId === toolUseId ||
-    row.kind === 'orphaned-agent' && row.missingToolUseId === toolUseId)
-}
-
 /**
  * A resume runs under its own tool use, so the agent's earlier runs are joined
  * above the current one. Runs recorded after the current one are excluded.
  */
 export function selectSubagentPanelBranch(rows: readonly NestedTranscriptRow[], toolUseId: string | null, runToolUseIds: readonly string[] = []) {
-  const branch = toolUseId === null ? undefined : findBranch(rows, toolUseId)
+  const branches = toolUseId === null ? undefined : selectParentSubagentBranches(rows)
+  const branch = toolUseId === null ? undefined : branches?.get(toolUseId)
   const current = runToolUseIds.indexOf(toolUseId ?? '')
   const earlier = toolUseId === null ? [] : (current === -1 ? runToolUseIds : runToolUseIds.slice(0, current))
-    .filter(id => id !== toolUseId).map(id => findBranch(rows, id))
+    .filter(id => id !== toolUseId).map(id => branches?.get(id))
   let steps = branch?.children ?? EMPTY_STEPS
   if (earlier.some(run => run?.children.length)) {
     const cache = joinedStepsByRows.get(rows) ?? new Map<string, NestedTranscriptRow[]>()

@@ -19,6 +19,7 @@ import {
 } from './filePaneState.js'
 import { findToolOutputRow } from './toolOutputRow.js'
 import { canOpenSubagentPanel, selectSubagentPanelBranch, selectSubagentPanelRowForCard } from './subagentPanelState.js'
+import { selectParentSubagentBranches } from './subagentTranscriptBranches.js'
 import { AgentPanelContext } from './transcriptAgentReveal.js'
 import { SidePaneNavigationContext } from './sidePaneNavigationContext.js'
 import { SidePaneShellContext } from './sidePaneShellContext.js'
@@ -166,9 +167,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
     if (!canOpenSubagentPanel(row, rows)) { onFallback(row); return }
     updateFilePaneSession(sessionId, { worker: row })
     showSlotOccupant(sessionId, 'worker')
-    if (!rows.some(candidate =>
-      candidate.kind === 'tool-use' && candidate.toolUseId === row.toolUseId ||
-      candidate.kind === 'orphaned-agent' && candidate.missingToolUseId === row.toolUseId)) onLoadMissingHistory?.()
+    if (row.toolUseId !== null && !selectParentSubagentBranches(rows).has(row.toolUseId)) onLoadMissingHistory?.()
   }, [sessionId, rows, onFallback, onLoadMissingHistory])
   const openCardRef = useRef((_card: NestedToolUseRow) => {})
   openCardRef.current = card => open(selectSubagentPanelRowForCard(card, workers))

@@ -6,6 +6,7 @@ import { agentAccountLabel, agentActivityOf, agentIdOf, agentModelOf, agentProgr
 import { leaseAccountShortLabel, leaseHeldLabel, selectLeaseForOwner } from './leaseState.js'
 import { formatModelDisplayName } from './statsState.js'
 import { MAX_PERSISTED_DOCK_FINISHED } from './subagentDockPersistence.js'
+import { selectParentSubagentBranches } from './subagentTranscriptBranches.js'
 export type SubagentDockClearMarker = { agentId: string; runKey: string }
 
 export type SubagentDockStatus = 'waiting' | 'running' | 'background' | 'resumed' | 'completed' | 'failed' | 'stopped'
@@ -116,8 +117,8 @@ const agentCandidatesByRows = new WeakMap<readonly NestedTranscriptRow[], readon
 function agentCandidates(rows: readonly NestedTranscriptRow[]): readonly NestedToolUseRow[] {
   const cached = agentCandidatesByRows.get(rows)
   if (cached) return cached
-  const candidates = rows.filter((row): row is NestedToolUseRow =>
-    row.kind === 'tool-use' && row.toolFamily === 'agent')
+  const candidates = Array.from(selectParentSubagentBranches(rows).values()).filter(
+    (row): row is NestedToolUseRow => row.kind === 'tool-use')
   agentCandidatesByRows.set(rows, candidates)
   return candidates
 }
