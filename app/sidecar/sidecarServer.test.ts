@@ -9582,6 +9582,20 @@ test('the creation-prompt flag survives onto the origin, so the engine can frame
   })
 })
 
+test('a peer creation prompt reaches the engine queue with its assignment', () => {
+  const { server, conn } = connect(new AppSessionController(probeAdapter()))
+  const assignment = { parentSessionId: randomUUID(), userMessageId: randomUUID() }
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ untagged: true, assignment })))
+
+  const queued = getCommandQueueSnapshot()
+  expect(queued).toHaveLength(1)
+  expect(queued[0]).toMatchObject({
+    value: 'take a look at the parser',
+    origin: { kind: 'peer', creationPrompt: true, assignment },
+  })
+})
+
 test('HR5 — an unknown key on peer.deliver is REJECTED, not stripped, and nothing is queued', () => {
   const { server, logged } = makePeerServer()
   const { socket, received } = makeSocket()
@@ -9601,7 +9615,7 @@ test('HR5 — an unknown key on peer.deliver is REJECTED, not stripped, and noth
   expect(received.some(f => f.kind === 'error')).toBe(false)
 })
 
-test('HR5 — a wrong-typed peer.deliver field is rejected at the boundary', () => {
+test('HR5 — invalid peer.deliver fields are rejected at the boundary', () => {
   const { server, logged } = makePeerServer()
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
@@ -9611,6 +9625,14 @@ test('HR5 — a wrong-typed peer.deliver field is rejected at the boundary', () 
     validPeerDeliver({ fromSessionId: 7 }),
     validPeerDeliver({ text: '' }),
     validPeerDeliver({ untagged: 'yes' }),
+    validPeerDeliver({
+      untagged: true,
+      assignment: { parentSessionId: randomUUID(), userMessageId: 'not-a-uuid' },
+    }),
+    validPeerDeliver({
+      untagged: true,
+      assignment: { parentSessionId: randomUUID(), userMessageId: randomUUID(), extra: true },
+    }),
   ]) {
     const before = logged.length
     server.handleData(conn, hostPlaneFrame(bad))

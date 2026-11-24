@@ -7265,14 +7265,13 @@ function checkStrictKeys(message: unknown): string | null {
     //
     // `host.result` answers a request THIS sidecar minted the id for, so an
     // unmatched id settles nothing and is dropped downstream. `peer.deliver`
-    // carries main-stamped identity (`from`, `fromSessionId`) and a
-    // main-derived hop chain, all of which the sidecar treats as DATA: it is
-    // never read as authority, and the chain is never authored on this side.
+    // carries main-stamped sender identity and an optional creation assignment.
+    // The assignment is a reference, not authority without engine verification.
     ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
     ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'forGeneration', 'action', 'tipUuid', 'toolUseId', 'continuationId', 'cancelId', 'outcome', 'authorizationRevision', 'recoveryId'])],
     [
       'peer.deliver',
-      new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'untagged']),
+      new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'assignment', 'untagged']),
     ],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
