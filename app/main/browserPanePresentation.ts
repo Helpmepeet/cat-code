@@ -7,8 +7,9 @@ export interface BrowserPanePresentationNative {
   detach(window: unknown, view: BrowserPaneView): void
   bounds(view: BrowserPaneView, rect: { x: number; y: number; width: number; height: number }): void
   visible(view: BrowserPaneView, visible: boolean): void
-  capture(view: BrowserPaneView): Promise<string>
+  capture(view: BrowserPaneView): Promise<string | undefined>
 }
+const PNG_DATA_URL_PREFIX = 'data:image/png;base64,'
 export type BrowserPanePresentationDependencies = {
   host: BrowserPaneHost
   sessions: () => readonly { appSessionId: string }[]
@@ -168,7 +169,8 @@ export class BrowserPanePresentation {
         const still = await this.deps.native.capture(record.view)
         if (this.epoch === epoch && (this.now() - this.reportedAt >= 1500 || this.deps.window() !== window)) { this.rendererLost(); return }
         if (this.epoch !== epoch || this.records.get(record.id) !== record || this.selected?.appSessionId !== record.id || !this.selected.overlay || this.now() - this.reportedAt >= 1500 || this.deps.window() !== window) return
-        if (!still.startsWith('data:image/png;base64,') || still.length > 4_000_000) throw new Error('Invalid browser still capture')
+        if (still === undefined) return
+        if (!still.startsWith(PNG_DATA_URL_PREFIX) || still.length <= PNG_DATA_URL_PREFIX.length || still.length > 4_000_000) throw new Error('Invalid browser still capture')
         const state = this.states.get(record.id)
         if (state) { state.still = still; this.emit(record.id) }
       } catch (error) { this.report(error) }

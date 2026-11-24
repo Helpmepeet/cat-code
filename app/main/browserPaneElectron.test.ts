@@ -19,6 +19,7 @@ async function fixture() {
     const historyEntries = [{ id: 11, url: 'http://localhost:3000/same' }, { id: 12, url: 'http://localhost:3000/same' }];
     class Image {
       constructor(width, height, scale = 1) { this.width = width; this.height = height; this.scale = scale; }
+      isEmpty() { return this.width === 0 || this.height === 0; }
       getSize() { return { width: this.width, height: this.height }; }
       resize({width, height}) { return new Image(width, height, this.scale); }
       toPNG() {

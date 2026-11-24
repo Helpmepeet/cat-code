@@ -125,6 +125,8 @@ test('loopback routes resolve against current page without overriding existing a
 test('host routes read, describe and screenshot through CDP/capture and wires genuine input', async () => {
   let hooks!: import('./browserPaneHost.js').BrowserPaneViewHooks
   let captures = 0
+  let frame = { data: 'png', width: 10, height: 10 }
+  let onCapture: (() => void) | undefined
   let url = ''
   const commands: string[] = []
   const host = new BrowserPaneHost({ folders: () => null, devOrigin: null, adapter: {
@@ -134,7 +136,7 @@ test('host routes read, describe and screenshot through CDP/capture and wires ge
       navigate: async value => { url = value; hooks.navigated() },
       getURL: () => url,
       back: async () => {}, forward: async () => {}, reload: async () => {}, destroy: () => {}, clearData: async () => {},
-      capturePage: async maxPixels => { captures++; expect(maxPixels).toBe(2_000_000); return { data: 'png', width: 10, height: 10 } },
+      capturePage: async maxPixels => { captures++; expect(maxPixels).toBe(2_000_000); onCapture?.(); return frame },
       debugger: { sendCommand: async (method, params: any) => {
         commands.push(method)
         if (method === 'Accessibility.getFullAXTree') return { nodes: [{ backendDOMNodeId: 1, role: { value: 'button' }, name: { value: 'Save' } }] }
@@ -147,9 +149,24 @@ test('host routes read, describe and screenshot through CDP/capture and wires ge
   await host.handleRequest('a', request)
   expect(await host.handleRequest('a', { verb: 'browser.read', args: {} })).toMatchObject({ ok: true, value: { text: 'Hello' } })
   expect(await host.handleRequest('a', { verb: 'browser.describe', args: { operation: 'screenshot' } })).toMatchObject({ ok: true, value: { description: 'screenshot on http://localhost:3000/' } })
+  const sequence = host.get('a')!.agentUseSequence
   expect(await host.handleRequest('a', { verb: 'browser.screenshot', args: {} })).toMatchObject({ ok: true, value: { data: 'png' } })
+  expect(host.get('a')!.agentUseSequence).toBe(sequence)
   expect(captures).toBe(1)
   expect(commands).not.toContain('Page.captureScreenshot')
+  frame = { data: '', width: 10, height: 10 }
+  expect(await host.handleRequest('a', { verb: 'browser.screenshot', args: {} })).toMatchObject({
+    ok: false, error: { code: 'unavailable', message: expect.stringContaining('Open the browser pane') },
+  })
+  expect(host.get('a')!.agentUseSequence).toBe(sequence)
+  const capturesBeforeTakeover = captures
+  onCapture = () => { setImmediate(() => hooks.input({ type: 'keyDown' })) }
+  expect(await host.handleRequest('a', { verb: 'browser.screenshot', args: {} })).toMatchObject({
+    ok: false, error: { code: 'unavailable', message: 'The user is using the browser' },
+  })
+  onCapture = undefined
+  expect(captures - capturesBeforeTakeover).toBe(1)
+  host.handBack('a')
   hooks.input({ type: 'mouseDown', _modifiers: 1 << 23 })
   hooks.input({ type: 'mouseMove' })
   expect(host.get('a')!.controller).toBe('agent')

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { BROWSER_LOCAL_SCHEME } from './browserPanePolicy.js'
 import type { BrowserPaneAdapter, BrowserPaneView, BrowserPaneViewHooks, BrowserNavigationOptions } from './browserPaneHost.js'
 import type { BrowserPanePresentationNative } from './browserPanePresentation.js'
-import { BROWSER_SCREENSHOT_MAX_PIXELS } from './browserPaneCdp.js'
+import { BROWSER_SCREENSHOT_MAX_PIXELS, hasBrowserFrame } from './browserPaneCdp.js'
 
 /** Call before app.ready, alongside the application's other privileged schemes. */
 export function registerBrowserPaneScheme(otherSchemes: Electron.CustomScheme[] = []): void {
@@ -130,9 +130,14 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
           try { await historyNavigation(() => wc.navigationHistory.goToIndex(index)) } finally { requested = undefined }
         }, options),
         capturePage: async maxPixels => {
-          // Normalize Retina representations so these limits describe encoded pixels, not DIPs.
-          let image = nativeImage.createFromBuffer((await wc.capturePage()).toPNG(), { scaleFactor: 1 })
+          const frame = await wc.capturePage(undefined, { stayHidden: true })
+          if (frame.isEmpty()) return undefined
+          const png = frame.toPNG()
+          if (!png.length) return undefined
+          // Normalize Retina representations to measure limits in encoded pixels.
+          let image = nativeImage.createFromBuffer(png, { scaleFactor: 1 })
           let { width, height } = image.getSize()
+          if (!width || !height) return undefined
           const scale = Math.min(1, Math.sqrt(maxPixels / (width * height)), 4096 / width, 4096 / height)
           if (scale < 1) image = image.resize({ width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) })
           // PNG entropy varies; keep the base64 result below the transport's 4 MiB cap.
@@ -144,7 +149,8 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
             data = image.toPNG().toString('base64')
           }
           ;({ width, height } = image.getSize())
-          return { data, width, height }
+          const result = { data, width, height }
+          return hasBrowserFrame(result) ? result : undefined
         },
         navigate: (url, options) => navigation(async () => { requested = url; try { await wc.loadURL(url) } finally { requested = undefined } }, options),
         back: options => navigation(async () => {
@@ -217,7 +223,7 @@ export function createBrowserPanePresentationNative(): BrowserPanePresentationNa
     capture: async view => {
       if (!view.capturePage) throw new Error('Browser capture is unavailable')
       const image = await view.capturePage(BROWSER_SCREENSHOT_MAX_PIXELS)
-      return `data:image/png;base64,${image.data}`
+      return hasBrowserFrame(image) ? `data:image/png;base64,${image.data}` : undefined
     },
   }
 }

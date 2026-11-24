@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { BrowserPanePolicy, type BrowserPanePolicyDependencies } from './browserPanePolicy.js'
 import { parseBrowserArgs, type BrowserRequestArgs, type BrowserResult } from '../shared/browserPane.js'
-import { BrowserPaneCdp, isUserBrowserInput, type BrowserCapturedPage, type BrowserCdpCommand } from './browserPaneCdp.js'
+import { BrowserPaneCdp, BrowserScreenshotUnavailable, isUserBrowserInput, type BrowserCapturedPage, type BrowserCdpCommand } from './browserPaneCdp.js'
 
 export type BrowserNavigationOptions = { ignoreBeforeUnload?: boolean }
 export interface BrowserPaneViewHooks {
@@ -24,7 +24,7 @@ export interface BrowserPaneView {
   historyEntry?(): Promise<string>
   restoreHistoryEntry?(entry: string, options?: BrowserNavigationOptions): Promise<void>
   setHooks?(hooks: BrowserPaneViewHooks): void
-  capturePage?(maxPixels: number): Promise<BrowserCapturedPage>
+  capturePage?(maxPixels: number): Promise<BrowserCapturedPage | undefined>
   destroy(): void
   clearData(): Promise<void>
   /** The real adapter exposes WebContentsView and its attached debugger here. */
@@ -221,7 +221,8 @@ export class BrowserPaneHost {
           gate()
           if (record.cdp && !record.automationReady) return fail('unavailable', 'Browser automation could not start; close the browser and reopen it')
           record.lastUsed = ++this.clock
-          if (!header && request.verb !== 'browser.describe') {
+          // The renderer can reveal a pane in response to agent use. Capture follows the current layout.
+          if (!header && request.verb !== 'browser.describe' && request.verb !== 'browser.screenshot') {
             record.agentUseSequence = ++this.nextAgentUseSequence
             this.publish(id)
           }
@@ -255,7 +256,7 @@ export class BrowserPaneHost {
         }
         return await Promise.race([work(), interrupted])
       } catch (error) {
-        return fail(error instanceof BrowserUnavailable ? 'unavailable' : 'bad_request', error instanceof Error ? error.message : String(error))
+        return fail(error instanceof BrowserUnavailable || error instanceof BrowserScreenshotUnavailable ? 'unavailable' : 'bad_request', error instanceof Error ? error.message : String(error))
       } finally {
         finished = true
         if (timer) clearTimeout(timer)

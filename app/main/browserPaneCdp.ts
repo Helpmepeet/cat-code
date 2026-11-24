@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import type { BrowserActInput, BrowserDescribeInput, BrowserRequestValues } from '../shared/browserPane.js'
 import { BROWSER_ARM_CONFIRM_SCRIPT, BROWSER_DIALOG_BINDING, BROWSER_DIALOG_SCRIPT } from './browserPaneDialogs.js'
 import { browserCursorScript } from './browserPaneCursor.js'
@@ -6,6 +7,14 @@ export type BrowserDispatchGate = () => void
 export type BrowserCdpCommand = (method: string, params?: any, sessionId?: string) => Promise<any>
 export type BrowserCapturedPage = { data: string; width: number; height: number }
 export const BROWSER_SCREENSHOT_MAX_PIXELS = 2_000_000
+const SCREENSHOT_RETRY_DELAYS_MS = [0, 25, 50, 100, 150, 175]
+export class BrowserScreenshotUnavailable extends Error {}
+
+export function hasBrowserFrame(image: BrowserCapturedPage | undefined): image is BrowserCapturedPage {
+  return !!image && Number.isInteger(image.width) && image.width > 0 &&
+    Number.isInteger(image.height) && image.height > 0 && image.data.length > 0
+}
+
 const MAX_TEXT = 32_000
 const MAX_NODES = 300
 export function isUserBrowserInput(input: { type: string; _modifiers?: number }): boolean {
@@ -63,7 +72,7 @@ export class BrowserPaneCdp {
     command: BrowserCdpCommand
     url: () => string
     displayUrl?: () => Promise<string>
-    capture: (maxPixels: number) => Promise<BrowserCapturedPage>
+    capture: (maxPixels: number) => Promise<BrowserCapturedPage | undefined>
     onDialog?: (report: { type: string; message: string; accepted: boolean }) => void
     onNativeDialog?: (open: boolean) => void
     nextGeneration?: () => number
@@ -146,18 +155,31 @@ export class BrowserPaneCdp {
   }
   async screenshot(gate: BrowserDispatchGate): Promise<BrowserRequestValues['browser.screenshot']> {
     const generation = this.generation
-    const viewport = (await this.send('Runtime.evaluate', {
+    const captureGate = () => {
+      gate()
+      if (generation !== this.generation) throw new Error('The page changed while capturing; take another screenshot')
+    }
+    const readViewport = async () => (await this.send('Runtime.evaluate', {
       expression: '({ width: window.innerWidth, height: window.innerHeight })', returnByValue: true,
-    }, gate)).result?.value
-    const image = await this.deps.capture(BROWSER_SCREENSHOT_MAX_PIXELS)
-    gate()
-    if (generation !== this.generation) throw new Error('The page changed while capturing; take another screenshot')
-    if (!Number.isInteger(image.width) || !Number.isInteger(image.height) || image.width < 1 || image.height < 1 || image.width > 4096 || image.height > 4096 || image.width * image.height > BROWSER_SCREENSHOT_MAX_PIXELS) throw new Error('Browser screenshot exceeds the pixel limit')
-    if (image.data.length > 3_900_000) throw new Error('Browser screenshot exceeds the result limit')
-    if (!Number.isFinite(viewport?.width) || !Number.isFinite(viewport?.height) || viewport.width <= 0 || viewport.height <= 0) throw new Error('Browser viewport is unavailable')
-    // Captures contain device pixels and may be resized again to meet the transport limit.
-    this.screenshotScale = { x: viewport.width / image.width, y: viewport.height / image.height }
-    return { ...image, mimeType: 'image/png' }
+    }, captureGate)).result?.value
+    for (const wait of SCREENSHOT_RETRY_DELAYS_MS) {
+      if (wait) await delay(wait)
+      const viewport = await readViewport()
+      captureGate()
+      const image = await this.deps.capture(BROWSER_SCREENSHOT_MAX_PIXELS)
+      captureGate()
+      if (!hasBrowserFrame(image)) continue
+      if (image.width > 4096 || image.height > 4096 || image.width * image.height > BROWSER_SCREENSHOT_MAX_PIXELS) throw new Error('Browser screenshot exceeds the pixel limit')
+      if (image.data.length > 3_900_000) throw new Error('Browser screenshot exceeds the result limit')
+      // A layout change during capture can leave the pixels and CSS coordinates out of sync.
+      const currentViewport = await readViewport()
+      captureGate()
+      if (!Number.isFinite(viewport?.width) || !Number.isFinite(viewport?.height) || viewport.width <= 0 || viewport.height <= 0 ||
+          viewport.width !== currentViewport?.width || viewport.height !== currentViewport?.height) continue
+      this.screenshotScale = { x: viewport.width / image.width, y: viewport.height / image.height }
+      return { ...image, mimeType: 'image/png' }
+    }
+    throw new BrowserScreenshotUnavailable('Browser screenshot is unavailable. Open the browser pane or dismiss any overlay, then try again.')
   }
   private cssPoint(input: BrowserActInput): BrowserActInput {
     if (input.x === undefined || input.y === undefined || !this.screenshotScale) return input

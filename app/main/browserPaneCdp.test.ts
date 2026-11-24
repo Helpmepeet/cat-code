@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { BrowserPaneCdp, isUserBrowserInput } from './browserPaneCdp.js'
 import { browserCursorScript } from './browserPaneCursor.js'
 
-function fixture(image = { data: 'png', width: 800, height: 600 }, viewport = { width: 800, height: 600 }) {
+function fixture(image = { data: 'png', width: 800, height: 600 }, viewport = { width: 800, height: 600 }, capture = async () => image) {
   const calls: { method: string; params: any }[] = []
   let password = false
   let crossOrigin = false
@@ -11,7 +11,7 @@ function fixture(image = { data: 'png', width: 800, height: 600 }, viewport = { 
       calls.push({ method, params })
       if (method === 'Accessibility.getFullAXTree') return { nodes: [{ nodeId: '1', backendDOMNodeId: 10, role: { value: 'textbox' }, name: { value: 'Display name' } }] }
       if (method === 'DOM.resolveNode') return { object: { objectId: 'element' } }
-      if (method === 'Runtime.evaluate' && params.expression.includes('window.innerWidth')) return { result: { value: viewport } }
+      if (method === 'Runtime.evaluate' && params.expression.includes('window.innerWidth')) return { result: { value: { ...viewport } } }
       if (method === 'Runtime.evaluate' && params.expression.includes('innerText')) return { result: { value: 'page text' } }
       if (method === 'Runtime.evaluate') return { result: { objectId: 'element' } }
       if (method === 'Runtime.callFunctionOn' && params.returnByValue) return { result: { value: { password, crossOrigin, x: 20, y: 30, role: 'textbox', name: 'Display name', tag: 'INPUT' } } }
@@ -19,7 +19,7 @@ function fixture(image = { data: 'png', width: 800, height: 600 }, viewport = { 
       return {}
     },
     url: () => 'http://localhost:3000/',
-    capture: async () => image,
+    capture,
   })
   return { cdp, calls, password: () => { password = true }, crossOrigin: () => { crossOrigin = true } }
 }
@@ -90,6 +90,44 @@ test('screenshot points are translated for target checks, descriptions, clicks a
   }
 })
 
+test('opening retries reject missing frames and use the viewport of the returned frame after resize', async () => {
+  const viewport = { width: 1024, height: 768 }
+  const image = { data: 'png', width: 400, height: 300 }
+  let captures = 0
+  const { cdp, calls } = fixture(image, viewport, async () => {
+    switch (++captures) {
+      case 1:
+        Object.assign(viewport, { width: 1000, height: 750 })
+        return { data: '', width: 0, height: 0 }
+      case 2:
+        Object.assign(viewport, { width: 800, height: 600 })
+        return { data: 'pre-resize', width: 500, height: 375 }
+      default:
+        return image
+    }
+  })
+  expect(await cdp.screenshot(() => {})).toMatchObject(image)
+  await cdp.act({ action: 'click', x: 50, y: 75 }, () => {})
+  expect(calls.find(c => c.params?.type === 'mousePressed')?.params).toMatchObject({ x: 100, y: 150 })
+})
+
+test.each(['navigation', 'cancellation'])('%s stops a screenshot before another capture attempt', async interruption => {
+  let captures = 0
+  let interrupted = false
+  const empty = { data: '', width: 0, height: 0 }
+  const { cdp } = fixture(empty, { width: 800, height: 600 }, async () => {
+    if (++captures === 1) setImmediate(() => {
+      interrupted = true
+      if (interruption === 'navigation') cdp.navigated()
+    })
+    return empty
+  })
+  await expect(cdp.screenshot(() => {
+    if (interruption === 'cancellation' && interrupted) throw new Error('Browser is closed')
+  })).rejects.toThrow(interruption === 'navigation' ? 'page changed' : 'Browser is closed')
+  expect(captures).toBe(1)
+})
+
 test('only genuine user activation input takes control', () => {
   for (const type of ['mouseDown', 'rawKeyDown', 'keyDown', 'touchStart']) {
     expect(isUserBrowserInput({ type, _modifiers: 0 })).toBe(true)
@@ -123,7 +161,7 @@ test('read bounds text and nodes with a truncation marker; oversized captures ar
     command: async method => method === 'Accessibility.getFullAXTree'
       ? { nodes: Array.from({ length: 1000 }, (_, i) => ({ backendDOMNodeId: i + 1, role: { value: 'button' }, name: { value: 'a'.repeat(500) } })) }
       : { result: { value: 'x'.repeat(40_000) } },
-    url: () => 'http://localhost:3000/', capture: async () => ({ data: '', width: 4096, height: 4096 }),
+    url: () => 'http://localhost:3000/', capture: async () => ({ data: 'png', width: 4096, height: 4096 }),
   })
   const read = await cdp.read(() => {})
   expect(read.text.length).toBeLessThanOrEqual(32_000)
