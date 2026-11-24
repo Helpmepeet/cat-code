@@ -17,6 +17,7 @@ import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
 import type { getSkillGrantsForReview } from '../../tools/SkillTool/SkillTool.js'
 import { getBashExecutionSettings, type BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { codeModeToolPrincipal } from '../../tools/REPLTool/codeModeTools.js'
+import type { ScriptReviewHistory } from '../../tools/REPLTool/scriptReviewHistory.js'
 import { workspaceInstructionsForReview } from '../claudemd.js'
 import { getPatchFromContents } from '../diff.js'
 import { isCompleteUnboundedRead } from '../fileStateCache.js'
@@ -161,15 +162,12 @@ function readMode(): ReviewMode | undefined {
 export type ContextualScriptGrant = {
   readonly cellId: string
   readonly generation: string
+  readonly history: ScriptReviewHistory
   granted?: {
     authority: ReturnType<typeof readContextualAuthority>
     policy: ToolPermissionContext
     instructions: ReturnType<typeof getSourcedAutoModeInstructions>
   }
-}
-
-function scriptReviewOnce(): boolean {
-  return process.env.CLAUDE_CODE_CONTEXTUAL_SCRIPT_REVIEW === 'once'
 }
 
 function withoutDefaultRules(instructions: ReturnType<typeof getSourcedAutoModeInstructions>) {
@@ -206,8 +204,8 @@ export async function createContextualAttempt(
   const principal = codeModeToolPrincipal(tool, context)
   const { cellId, generation } = assistant.codeMode ?? {}
   const holder = context.contextualScriptGrant
-  const scriptGrant = mode === 'experimental' && scriptReviewOnce() && cellId && generation &&
-    holder?.cellId === cellId && holder.generation === generation ? holder : undefined
+  const scriptGrant = mode === 'experimental' && cellId && generation &&
+    holder?.cellId === cellId && holder.generation === generation && !holder.history.marked ? holder : undefined
   let allowedOutsideRead = false
   function isReviewException(): boolean {
     if (mcp) return tool.contextualClosedWorldRead === true
@@ -248,8 +246,7 @@ export async function createContextualAttempt(
   let actionAllowed = false
   let requiresHuman = false
   let humanAllowed = false
-  // Set when the script review itself asked, so the person's Yes covers the cell.
-  let cellAsk = false
+  let coveringGrant: ContextualScriptGrant | undefined
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
   let reviewFailure: 'unavailable' | 'invalid_response' | undefined
@@ -381,7 +378,7 @@ export async function createContextualAttempt(
 
   function coveredByScript(): PermissionDecision | undefined {
     const granted = scriptGrant?.granted
-    if (!granted) return undefined
+    if (!granted || scriptGrant.history.marked) return undefined
     const latest = readContextualAuthority(context, peerParent)
     if (latest.stopped || latest.pendingOperatorInput || !isDeepStrictEqual(latest, granted.authority) ||
         !isDeepStrictEqual(latest, authority) || !isDeepStrictEqual(policy, granted.policy) ||
@@ -399,6 +396,7 @@ export async function createContextualAttempt(
 
   async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
     reviewStarted = true
+    coveringGrant = undefined
     if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
     if (!refreshInstructions()) return stale('The assignment or action changed before review.')
     reviewedInstructions = true
@@ -450,10 +448,21 @@ export async function createContextualAttempt(
       })),
       workspaceInstructions: source,
     }
-    const evidence = redactReviewFields(rawEvidence)
+    let evidence = redactReviewFields(rawEvidence)
     const reviewerInstructions = redactReviewFields(withoutDefaultRules(instructions))
     const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
-    const built = buildContextualReview(evidence, profile, reviewerInstructions, true, Boolean(scriptGrant))
+    let built: ReturnType<typeof buildContextualReview>
+    const script = evidence.action.script
+    if (scriptGrant && !scriptGrant.history.marked && script) {
+      const combined = { ...evidence, action: { ...evidence.action, script: {
+        ...script, source: scriptGrant.history.reviewSource(redactReviewText),
+      } } }
+      built = buildContextualReview(combined, profile, reviewerInstructions, false, true)
+      if (built) evidence = combined
+      else scriptGrant.history.mark()
+    }
+    const reviewedScript = built ? scriptGrant : undefined
+    built ??= buildContextualReview(evidence, profile, reviewerInstructions, true)
     if (!built) {
       if (!buildContextualReview({ action: evidence.action, conversation: [] }, profile)) {
         return denyReview('This action exceeds the Auto Mode review limit. Split this action into smaller calls and retry.')
@@ -486,9 +495,8 @@ export async function createContextualAttempt(
     const { decision, rationale } = result.verdict
     const reason = containsCredentialMaterial(rationale) ? 'Auto Mode reviewed the proposed action.' : rationale
     if (decision === 'ask') {
-      if (!scriptGrant) return ask(reason)
-      cellAsk = true
-      return ask(`${reason} Yes runs the rest of this script without another review.`)
+      coveringGrant = reviewedScript
+      return ask(coveringGrant ? `${reason} Yes runs the rest of this script without another review.` : reason)
     }
     const decisionReason = { type: 'classifier' as const, classifier: 'auto-mode', reason }
     if (decision === 'deny') {
@@ -501,7 +509,7 @@ export async function createContextualAttempt(
     }
     emit('allowed', reason)
     actionAllowed = true
-    if (scriptGrant) scriptGrant.granted = { authority: structuredClone(authority), policy, instructions }
+    coveringGrant = reviewedScript
     return { behavior: 'allow', updatedInput: input, decisionReason }
   }
 
@@ -523,13 +531,12 @@ export async function createContextualAttempt(
       return reviewHeldAction()
     },
     requireHuman(reason: string) {
-      cellAsk = false
+      coveringGrant = undefined
       return ask(reason)
     },
     recordHuman(candidate: Input, replyContext: ToolUseContext) {
       if (!requiresHuman || !unchangedAction(candidate, replyContext)) return
       humanAllowed = true
-      if (cellAsk && scriptGrant) scriptGrant.granted = { authority: structuredClone(authority), policy, instructions }
     },
     isCurrent: current,
     release(candidate: Input, releasedContext: ToolUseContext): boolean {
@@ -537,6 +544,9 @@ export async function createContextualAttempt(
       if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : reviewStarted && !actionAllowed)) {
         stale('The approval no longer matches the current action, assignment or permissions.')
         return false
+      }
+      if (coveringGrant && !coveringGrant.history.marked) {
+        coveringGrant.granted = { authority: structuredClone(authority), policy, instructions }
       }
       if (mode === 'experimental' && (mcp || tool.name !== 'REPL')) {
         const state = releasedContext.localDenialTracking ?? releasedContext.getAppState().denialTracking

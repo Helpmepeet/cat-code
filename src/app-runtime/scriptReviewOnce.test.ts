@@ -76,3 +76,66 @@ test('with review-once, a denied child still stops the Script', async () => {
   expect(proof.requests.length).toBeGreaterThan(0)
   expect(proof.effect).toBeNull()
 }, 30_000)
+
+const write = 'await tools.call({name:"Bash",input:{command:"printf effect >> effects.txt"}});'
+const helper = 'const run = async () => { ' + write + ' };'
+const patch = 'String.prototype.fixtureRun = function () { return run(); };'
+const usePatch = 'await "fixture".fixtureRun();'
+const twoWrites = write + '\n' + write
+
+for (const verdict of ['allow', 'approve ask', 'flag off']) {
+  test(`retained helper and background prototype patch: ${verdict}`, async () => {
+    const proof = await run('native-script-children', verdict !== 'flag off', {
+      ...(verdict === 'approve ask' && { CONTEXTUAL_AUTO_TEST_SCRIPT_ASK: 'approve' }),
+      CONTEXTUAL_AUTO_TEST_SCRIPT_CELLS: JSON.stringify([
+        { code: helper }, { code: patch, run_in_background: true }, { code: usePatch }, { code: twoWrites },
+      ]),
+    })
+    expect(proof.effect).toBe('effecteffecteffect')
+    const sources = proof.requests.map((r: any) => r.content.action.script.source)
+    if (verdict !== 'flag off') {
+      expect(sources).toHaveLength(2)
+      const [combined, next] = sources
+      const sections = combined.split(/Script \d+ of 3\b/).slice(1)
+      expect(sections).toHaveLength(3)
+      expect(sections[0]).toContain(helper)
+      expect(sections[1]).toContain(patch)
+      expect(sections[2]).toContain(usePatch)
+      expect(next).toContain(twoWrites)
+      expect(next).not.toContain(patch)
+      expect(next).not.toContain(helper)
+      expect(next).not.toContain(usePatch)
+    } else {
+      expect(sources).toEqual([usePatch, twoWrites, twoWrites])
+    }
+  }, 30_000)
+}
+
+for (const size of [32_000, 32_001]) {
+  test(`combined source of ${size} characters controls coverage until reset`, async () => {
+    const setup = '//'.padEnd(size - twoWrites.length, 'x')
+    const overBudget = size > 32_000
+    const proof = await run('native-script-children', true, {
+      CONTEXTUAL_AUTO_TEST_SCRIPT_CELLS: JSON.stringify([
+        { code: setup }, { code: twoWrites }, { code: twoWrites, run_in_background: true },
+        // An undrained guest promise ends this generation.
+        { code: 'var pending = Promise.race([]);' }, { code: twoWrites },
+      ]),
+    })
+    expect(proof.effect).toBe('effect'.repeat(6))
+    const generations = proof.requests.map((r: any) => r.content.action.script.generation)
+    expect(generations.slice(0, -1)).toEqual(Array(overBudget ? 4 : 2).fill(generations[0]))
+    expect(generations.at(-1)).not.toBe(generations[0])
+  }, 30_000)
+}
+
+test('a review that would omit conversation uses individual child decisions', async () => {
+  const proof = await run('native-oversize-history', true, {
+    CONTEXTUAL_AUTO_TEST_SCRIPT_CELLS: JSON.stringify([{ code: twoWrites }]),
+    CONTEXTUAL_AUTO_TEST_SCRIPT_ASK: 'approve',
+  })
+  expect(proof.effect).toBe('effecteffect')
+  expect(proof.requests.map((r: any) => r.tool)).toEqual(['Bash', 'Bash'])
+  expect(proof.prompts).toHaveLength(2)
+  expect(JSON.stringify(proof.prompts)).not.toContain(coverNote)
+}, 30_000)

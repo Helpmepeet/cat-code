@@ -100,6 +100,8 @@ const peerAction = scenario === 'main-peer-create'
     : undefined
 // Review-once ask: Script child reviews ask and the person answers Yes.
 const scriptAskApproved = process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_ASK === 'approve'
+const scriptCells: { code: string; run_in_background?: boolean }[] | undefined =
+  process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_CELLS && JSON.parse(process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_CELLS)
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated fixture required')
 Object.assign(globalThis, { MACRO: { VERSION: 'contextual-auto-test' } })
 globalThis.fetch = Object.assign(async () => { throw new Error('Unexpected network request') }, { preconnect: globalThis.fetch.preconnect })
@@ -346,7 +348,7 @@ mock.module('../services/api/client.js', () => ({
       JSON.stringify(message.content).includes(workerBrief))
     const index = worker ? workerModelCalls++ : modelCalls++
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
+    const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
     let check
     if (twoChecks && index > 0) {
       const first = { name: 'Bash', input: {
@@ -359,7 +361,8 @@ mock.module('../services/api/client.js', () => ({
           : first
         : { name: 'Bash', input: { command: 'CHROME_BIN=/usr/bin/false printf checked >> effects.txt', description: 'Verify the restricted failure path' } }
     }
-    const main = worker ? workerActions[index] : check ?? (scenario === 'mcp-browser-used' ? (index === 0
+    const main = scriptCells ? { name: 'REPL', input: { description: 'Run isolated cell', ...scriptCells[index] } }
+      : worker ? workerActions[index] : check ?? (scenario === 'mcp-browser-used' ? (index === 0
       ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? (repeatedScriptDenials ? submitted : command) : cleanupCall || (legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : index === 0 ? submitted
@@ -400,7 +403,8 @@ const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
-if ((routed && scenario.endsWith('-direct')) || workerRouting || loadSkill || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
+const hasBackgroundScript = scriptCells?.some(cell => cell.run_in_background)
+if (hasBackgroundScript || (routed && scenario.endsWith('-direct')) || workerRouting || loadSkill || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
@@ -452,12 +456,12 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
     return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
-      backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || observeReviewUsage || scenario.startsWith('trial-'))
+      hasBackgroundScript || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || observeReviewUsage || scenario.startsWith('trial-'))
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
   initialMessages: oversizeHistory ? [
-    createUserMessage({ content: earlyRestriction }),
+    createUserMessage({ content: scriptCells ? 'Run the fixture scripts.' : earlyRestriction }),
     createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
       origin: { kind: 'coordinator' } }),
   ] : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]

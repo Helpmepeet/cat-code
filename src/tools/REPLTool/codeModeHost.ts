@@ -5,6 +5,7 @@ import type { ToolUseContext } from '../../Tool.js'
 import type { Message, AssistantMessage, UserMessage, AttachmentMessage, SystemMessage } from '../../types/message.js'
 import { createRuntime, type JsonValue, type PersistentRuntime } from './runtime/index.js'
 import { RuntimeRequestError } from './runtime/protocol.js'
+import { ScriptReviewHistory } from './scriptReviewHistory.js'
 import { CodeModeDispatch, type CodeModeCall } from './codeModeDispatch.js'
 import { buildCodeModeShellCommand } from './codeModeShell.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
@@ -79,6 +80,7 @@ export type CodeModeResult = {
 export class CodeModeHost {
   generation = randomUUID()
   private runtime?: PersistentRuntime
+  private scriptReviewHistory?: ScriptReviewHistory
   private notebookReads?: { generation: string; cache: FileStateCache }
   private disposed = false
   private lane: Promise<void> = Promise.resolve()
@@ -561,11 +563,15 @@ export class CodeModeHost {
         cache: createFileStateCacheWithSizeLimit(context.readFileState.max, context.readFileState.maxSize),
       }
     }
+    if (this.scriptReviewHistory?.generation !== this.generation) {
+      this.scriptReviewHistory = new ScriptReviewHistory(this.generation)
+    }
+    const scriptGrant = this.scriptReviewHistory.startCell(cellId, input.code)
     const cellContext = {
       ...context, abortController: controller, codeModeBackgroundCell: background,
       launchingTurnSignal: context.launchingTurnSignal ?? context.abortController.signal,
       contextualParentScriptSource: input.code,
-      contextualScriptGrant: { cellId, generation: this.generation },
+      contextualScriptGrant: scriptGrant,
       onHumanPermissionWait: (waiting: boolean) => this.runtime?.setHumanWait(cellId, waiting),
     }
     const dispatch = new CodeModeDispatch(cellContext, canUseTool, { cellId, generation: this.generation },
@@ -702,6 +708,7 @@ export class CodeModeHost {
       this.runtime = undefined
       this.generation = randomUUID()
     } finally {
+      if (scriptGrant?.granted) scriptGrant.history.clearSources()
       dispatch.stop('Cell execution ended')
       result.calls = structuredClone(dispatch.calls)
       result.changedFiles = [...changedFiles.values()]
