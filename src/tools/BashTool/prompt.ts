@@ -196,7 +196,7 @@ function getSimpleSandboxSection(): string {
 }
 
 export const SCRIPT_BASH_DIRECTORY_GUIDANCE =
-  'Use absolute paths for Bash commands that need files outside the current directory. A directory change must be a standalone Bash call. Script rejects compound directory changes.'
+  'Do not prepend cd when already in the target directory. Run the command directly. Use absolute paths for files outside the current directory, or change directories with a standalone Bash call. Script rejects compound directory changes.'
 
 export function getBashPrompt(
   provider: APIProvider = getAPIProvider(),

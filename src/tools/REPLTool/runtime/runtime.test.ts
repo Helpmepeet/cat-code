@@ -118,6 +118,26 @@ test('safe serialization rejects getters, cycles, special keys, and non-JSON', (
   const cyclic: unknown[] = []; cyclic.push(cyclic)
   for (const value of [cyclic, undefined, NaN, () => {}, JSON.parse('{"__proto__":1}'), { get x() { throw new Error('getter invoked') } }]) expect(() => encode(value, 100)).toThrow()
 })
+test('display omits undefined object fields but requests and other unsupported data stay strict', async () => {
+  const h = harness()
+  try {
+    expect((await h.run('output({ absent: undefined, nested: { absent: undefined, empty: "" } }); console.log({ absent: undefined });')).status).toBe('ok')
+    expect(h.outputs.map(event => event.value)).toEqual([{ nested: { empty: '' } }, [{}]])
+    for (const [index, source] of [
+      'await tools.call({ nested: { absent: undefined } });',
+      'output(undefined);',
+      'output([undefined]);',
+      'output({ invalid: NaN });',
+      'output({ invalid: () => {} });',
+      'output({ get invalid() { return undefined; } });',
+      'output({ constructor: undefined });',
+    ].entries()) {
+      expect((await h.run(source, `invalid-${index}`)).status).toBe('error')
+    }
+    expect(h.requests).toEqual([])
+    expect(h.outputs).toHaveLength(2)
+  } finally { h.runtime.dispose() }
+})
 test('output and bridge payload caps', async () => {
   const h = harness({ messageBytes: 128, outputBytes: 128 })
   try {

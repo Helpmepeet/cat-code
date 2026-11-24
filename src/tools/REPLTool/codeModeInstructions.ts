@@ -48,6 +48,13 @@ function literalShellPaths(command: string, base: string, paths: Set<string>, de
     const newlineCommands = legacyCommand.includes('\n') ? outerShellCommands(root) : []
     if ((commands.length > 1 && commands.some(isNormalizedCdCommand)) ||
         (newlineCommands.length > 1 && newlineCommands.some(part => splitCommand_DEPRECATED(part).some(isNormalizedCdCommand)))) {
+      const leadingCd = depth === 0 ? /^[ \t]*cd[ \t]+(\/[A-Za-z0-9_./-]+|'[^'\r\n]+')[ \t]*&&/.exec(command)?.[1] : undefined
+      const literalTarget = leadingCd?.startsWith("'") ? leadingCd.slice(1, -1) : leadingCd
+      // This is a retry hint only. A shell alias or function can change what cd does.
+      if (literalTarget === base && !commands.slice(1).some(isNormalizedCdCommand) &&
+          !newlineCommands.slice(1).some(part => splitCommand_DEPRECATED(part).some(isNormalizedCdCommand))) {
+        throw new RuntimeRequestError('Script Bash cannot preflight a compound command with a leading cd to the current directory. Remove the leading cd and retry the remaining command.')
+      }
       throw new RuntimeRequestError('Script Bash cannot preflight paths after a compound directory change. Use explicit file paths or run the directory change separately.')
     }
   }

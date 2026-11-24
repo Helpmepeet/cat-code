@@ -90,6 +90,29 @@ test('ordinary child failure details reach the Script catch and uncaught cell re
   })
 }, 35_000)
 
+test('the next model sees rejected searches, empty stdout, and an oversized delivery failure', async () => {
+  await withCodingEvidence('shell-result-errors', async (evidence, workspace) => {
+    const prompt = evidence.modelBodies[0].tools.find((tool: { name: string }) => tool.name === 'REPL').description
+    expect(prompt).toContain('Do not prepend cd when already in the target directory')
+    const searches = scriptResultInRequest(evidence.modelBodies[1].messages, 'cell-0')
+    expect(JSON.parse(searches.split('\n\n[Code Mode]')[0]!)).toEqual({ empty: '', emptyFailed: false })
+    expect(searches).toContain('2 failed, blocked, or cancelled')
+    expect(searches).toContain('Remove the leading cd and retry')
+    expect(searches).not.toContain('Non-JSON data')
+
+    const oversized = scriptResultInRequest(evidence.modelBodies[3].messages, 'cell-2')
+    expect(JSON.parse(oversized.split('\n\n[Code Mode]')[0]!)).toEqual({ failed: true, complete: false })
+    expect(oversized).toContain('1 child calls completed; 0 failed')
+    expect(oversized).toContain("cannot read property 'stdout' of undefined")
+    expect(oversized).toContain('sh could not deliver complete stdout')
+    const saved = oversized.match(/Full output saved to: ([^\n]+)/)?.[1]
+    expect(saved).toStartWith(join(dirname(workspace), 'config') + '/')
+    expect((await stat(saved!)).size).toBe(1_300_000)
+    expect(oversized.length).toBeLessThan(4096)
+    expect(await readFile(join(workspace, 'ran.txt'), 'utf8')).toBe('ran')
+  })
+}, 35_000)
+
 test('Bash previews and cut stdout are marked incomplete before Script can consume them', async () => {
   await withCodingEvidence('shell-completeness', async evidence => {
     const result = scriptResultInRequest(evidence.modelBodies[1].messages, 'cell-0')

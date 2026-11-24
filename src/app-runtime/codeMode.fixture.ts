@@ -140,6 +140,17 @@ if (isInstructions) {
 if (scenario === 'instructions-shell') {
   await mkdir(join(root, 'workspace', 'nested'))
   await writeFile(join(root, 'workspace', 'nested', 'note.txt'), 'nested-file-content')
+  await writeFile('nested/CLAUDE.md', 'SHELL-FOLDER-RULE: Wait for the model before running the command.')
+  const hookOutput = JSON.stringify({ hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    updatedInput: { command: 'cd nested && cat note.txt > changed.txt' },
+  } })
+  await writeFile(join(root, 'config', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [{
+    matcher: 'Bash', hooks: [{ type: 'command', command: `case "$(cat)" in *rewrite-fixture-command*) printf '%s' '${hookOutput}' ;; esac` }],
+  }] } }))
+}
+if (scenario === 'shell-result-errors') {
+  await writeFile('large.txt', 'x'.repeat(1_300_000))
 }
 if (isSkillCase) {
   await mkdir(join(root, 'config', 'skills', 'fixture-skill'), { recursive: true })
@@ -257,6 +268,14 @@ printf %s \${file}\`
  ] : scenario === 'shell-failure-detail' ? [
   `try { ${bashCall(failingCommand)}; } catch (error) { output(error.message); }`,
   `${bashCall(failingCommand)};`,
+] : scenario === 'shell-result-errors' ? [
+  `const a = await sh\`cd ${process.cwd()} && find . -name '*.html'\`;
+   const b = await sh\`cd ${process.cwd()} && find . -name '*.htm'\`;
+   const empty = await sh\`find . -name '*.missing'\`;
+   output({a: a.data?.stdout, b: b.data?.stdout, empty: empty.data?.stdout, emptyFailed: empty.isError});`,
+  `const large = await sh\`printf ran > ran.txt && cat large.txt\`;
+   output({stdout: large.data?.stdout, failed: large.isError, complete: large.dataComplete});
+   output(large.data.stdout.slice(0, 10));`,
 ] : scenario === 'shell-completeness' ? [
   `const result = ${bashCall("printf '%43000s' fixture-padding; printf 'end-of-full-stdout\\n'")};
    output({ contentComplete: result.contentComplete, dataComplete: result.dataComplete, tail: result.data?.stdout?.endsWith('end-of-full-stdout') ?? false });`,
@@ -265,8 +284,9 @@ printf %s \${file}\`
 ] : scenario === 'shell-heredoc' || scenario === 'shell-heredoc-instructions' ? [
   `output((${bashCall(`cat <<'END'${scenario === 'shell-heredoc' ? ' > captured.txt' : ''}\n${manyFiles.map(file => `./fixtures/${file}`).join('\n')}\nEND\ncat ${scenario === 'shell-heredoc' ? 'sample.txt captured.txt' : 'nested/sample.txt'}`)}).content);`,
 ] : scenario === 'instructions-shell' ? [
-  `var note = await tools.call({name:"Bash",input:{command:"cd nested && cat note.txt",work_lifetime:"finite",run_in_background:false}}); output(note.content);`,
-  `output("finished");`,
+  `const note = await sh\`printf rewrite-fixture-command\`; throw new Error("fixture could not use the result");`,
+  `await sh\`cat nested/note.txt > nested/changed.txt\`;
+   await sh\`printf forbidden > forbidden.txt\`;`,
 ] : scenario === 'search-exact' ? [
   `const first = async query => (await tools.discover({op:"search",query,max:1})).matches[0]?.name;
   output({name: await first("Bash"), alias: await first("Brief"), partial: await first("bas")});`,
@@ -752,6 +772,9 @@ await writeFile(join(root, 'evidence.json'), JSON.stringify({
   allowedFile: await readFile(join(root, 'workspace', 'allowed.txt'), 'utf8').catch(() => null),
   secondForbidden: await readFile(join(root, 'workspace', 'second-forbidden.txt'), 'utf8').catch(() => null),
   forbidden: await readFile(join(root, 'workspace', 'forbidden.txt'), 'utf8').catch(() => null),
+  ...(scenario === 'instructions-shell' ? {
+    shellFolderEffects: await Promise.all(['changed.txt', 'nested/changed.txt'].map(path => Bun.file(path).exists())),
+  } : {}),
 }))
 session.dispose?.()
 if (scenario === 'shell-detached' && process.env.CODE_MODE_FORCE_FIXTURE_EXIT === '1') process.exit(0)

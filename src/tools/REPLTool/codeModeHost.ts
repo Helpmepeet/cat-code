@@ -705,16 +705,29 @@ export class CodeModeHost {
       result.calls = structuredClone(dispatch.calls)
       result.changedFiles = [...changedFiles.values()]
       deadline.dispose()
-      const selectedOutput = output.join('\n')
+      const guestOutput = output.join('\n')
       const failed = result.calls.filter(call => call.status !== 'completed')
       const permissionDetails = [...dispatch.permissionFailures]
         .map(([call, reason]) => `${call.name}: ${reason}`).join('\n')
       const reportedError = [...dispatch.permissionFailures.values()].includes(result.error ?? '') ? undefined : result.error
+      const visibleGuestOutput = guestOutput.slice(0, 240 * 1024)
+      const childProblems = new Set<string>()
+      for (const call of dispatch.calls) {
+        if (!call.error || dispatch.permissionFailures.has(call) || call.error === reportedError ||
+            visibleGuestOutput.includes(call.error)) continue
+        const label = call.status === 'completed' ? `${call.name} output` : call.name
+        childProblems.add(`${label}: ${call.error}`)
+      }
+      const childDetails = [...childProblems].slice(-4)
+      if (childProblems.size > childDetails.length) childDetails.unshift('Earlier child errors omitted. See the call ledger.')
+      // Background tool content goes through the same output hook as guest-selected data.
+      const selectedOutput = background ? [...childDetails, guestOutput].filter(Boolean).join('\n') : guestOutput
       const notice = [
         `[Code Mode] ${result.status}; cell ${cellId}; generation ${result.generation}.`,
         ...(selectedOutput.length > 240 * 1024 ? ['Selected output was truncated at the cell delivery limit.'] : []),
         `${result.calls.filter(call => call.status === 'completed').length} child calls completed; ${failed.length} failed, blocked, or cancelled.`,
         ...(reportedError ? [reportedError.slice(0, 4096)] : []),
+        ...(!background ? childDetails : []),
         ...(permissionDetails ? [permissionDetails] : []),
         ...(failed.length ? [`Non-successful calls: ${failed.map(call => `${call.name} (${call.status})`).join(', ')}. Earlier effects were not rolled back.`] : []),
         ...(result.changedFiles.length ? [`Structured file-change receipts: ${result.changedFiles.map(file => file.path).join(', ')}. Bash effects are not enumerated here.`] : []),

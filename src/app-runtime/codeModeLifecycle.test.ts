@@ -38,12 +38,22 @@ test(`new applicable instructions preflight before ${pathKind} Read and cannot b
 }, 30_000)
 }
 
-test('Script Bash requires precise paths for compound commands that change directories', async () => {
+test('Script guards a hook-rewritten directory change and loads folder rules before an explicit-path retry', async () => {
   const evidence = await scenario('instructions-shell')
-  const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
-  expect(result.status).toBe('failed')
-  expect(result.calls[0].error).toContain('compound directory change')
-  expect(JSON.stringify(result)).not.toContain('nested-file-content')
+  const modelResult = (index: number, toolUseId: string) => evidence.modelBodies[index].messages
+    .flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
+    .find((block: any) => block.type === 'tool_result' && block.tool_use_id === toolUseId)?.content
+  const rejected = modelResult(1, 'cell-0')
+  expect(rejected).toContain('fixture could not use the result')
+  expect(rejected).toContain('compound directory change')
+  expect(rejected).toContain('Use explicit file paths')
+  expect(rejected).not.toContain('Remove the leading cd')
+  expect(JSON.stringify(evidence.modelBodies[1].messages)).not.toContain('SHELL-FOLDER-RULE')
+  expect(modelResult(3, 'cell-2')).toContain('[Code Mode] yielded')
+  expect(JSON.stringify(evidence.modelBodies[3].messages)).toContain('SHELL-FOLDER-RULE')
+  expect(JSON.stringify(evidence.modelBodies)).not.toContain('nested-file-content')
+  expect(evidence.shellFolderEffects).toEqual([false, false])
+  expect(evidence.forbidden).toBeNull()
 }, 30_000)
 
 test('guest-launched Agent has ordinary Auto review and model-visible worker Read delivery', async () => {

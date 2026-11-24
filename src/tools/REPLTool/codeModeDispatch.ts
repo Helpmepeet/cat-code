@@ -180,7 +180,7 @@ export class CodeModeDispatch {
       })
     }).catch(error => {
       if (call.status === 'running') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence ? 'blocked' : 'failed'
-      call.error = this.permissionFailures.get(call) ?? (error instanceof RuntimeRequestError ? boundRuntimeError(error.message) : 'Host request failed')
+      call.error ??= error instanceof RuntimeRequestError ? boundRuntimeError(error.message) : 'Host request failed'
       throw error
     })
     const finish = () => {
@@ -239,7 +239,6 @@ export class CodeModeDispatch {
     }), { codeMode: identity })
     await this.deliver(assistant)
     let result: unknown
-    let failureText: string | undefined
     let failed = false
     let received = false
     let preparedGlob: unknown
@@ -348,7 +347,6 @@ export class CodeModeDispatch {
             const bashOutputIncomplete = tool === BashTool && (message.toolUseResult as BashOutput | undefined)?.outputIncomplete === true
             const contentComplete = contentFits && !persistedPreview && !errorExcerpt && !bashOutputIncomplete &&
               (typeof content === 'string' || content.every(block => block.type === 'text'))
-            if (failed) failureText = typeof content === 'string' ? content : content.filter(block => block.type === 'text').map(block => block.text).join('\n')
             result = {
               content: contentFits ? content : '[Effective content exceeds 96 KiB guest delivery limit; narrow the tool inputs or use direct delivery]',
               contentComplete, isError: failed,
@@ -419,6 +417,11 @@ export class CodeModeDispatch {
                 }
               }
             }
+            if (failed && !call.error) {
+              const text = typeof content === 'string' ? content
+                : content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+              call.error = boundRuntimeError(text || `${call.name} failed`)
+            }
             await this.deliver(auditMessage)
             if (modelImages.length) {
               this.stop('Read yielded to deliver an image to the model')
@@ -461,17 +464,22 @@ export class CodeModeDispatch {
         const { data, ...rest } = response
         const bashData = data as BashOutput | undefined
         if (!failed && bashData?.backgroundTaskId) {
+          call.error = `Bash is still running with task ID ${bashData.backgroundTaskId}.`
           result = {
             ...rest, isError: true, contentComplete: false, dataComplete: false,
             data: { backgroundTaskId: bashData.backgroundTaskId },
-            content: `Bash is still running with task ID ${bashData.backgroundTaskId}.`,
+            content: call.error,
           }
         } else if (!failed && (response.dataComplete !== true || typeof bashData?.stdout !== 'string')) {
+          const reason = 'sh could not deliver complete stdout. Narrow the command output or use Read if Bash retained it.'
+          const preview = typeof response.content === 'string' && response.content.includes(PERSISTED_OUTPUT_TAG)
+            ? response.content : undefined
+          const savedOutput = preview?.startsWith(`${PERSISTED_OUTPUT_TAG}\n`) ? preview.split('\n', 2)[1] : undefined
+          // Keep the saved-output reference in the summary without including the preview body.
+          call.error = boundRuntimeError(savedOutput ? `${reason}\n${savedOutput}` : reason)
           result = {
             ...rest, contentComplete: false, dataComplete: false, isError: true,
-            content: ['sh could not deliver complete stdout. Narrow the command output or use Read if Bash retained it.',
-              typeof response.content === 'string' && response.content.includes(PERSISTED_OUTPUT_TAG) ? response.content : '',
-            ].filter(Boolean).join('\n'),
+            content: preview ? `${reason}\n${preview}` : reason,
           }
         }
       }
@@ -480,7 +488,7 @@ export class CodeModeDispatch {
       call.result = this.resultBytes + resultBytes <= 128 * 1024
         ? result : { omitted: true, reason: 'Cumulative cell display-result limit', bytes: resultBytes }
       this.resultBytes += Math.min(resultBytes, 128 * 1024)
-      if (failed && !nothrow) throw new RuntimeRequestError(this.permissionFailures.get(call) ?? (failureText || `${call.name} failed`))
+      if (failed && !nothrow) throw new RuntimeRequestError(call.error ?? `${call.name} failed`)
       return result as JsonValue
     } catch (error) {
       if (call.status !== 'skipped') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence && !overlapping ? 'blocked' : 'failed'

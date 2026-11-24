@@ -159,7 +159,7 @@ async function initialize(l: RuntimeLimits) {
     const keys = Reflect.ownKeys, descriptor = Object.getOwnPropertyDescriptor;
     const getPrototype = Object.getPrototypeOf, plainPrototype = Object.prototype;
     const isArray = Array.isArray, finite = Number.isFinite;
-    const validate = (value, ancestors = [], depth = 0) => {
+    const validate = (value, display = true, ancestors = [], depth = 0) => {
       if (depth > 64) throw new ErrorType('JSON nesting limit');
       if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
       if (typeof value === 'number' && finite(value)) return;
@@ -172,19 +172,20 @@ async function initialize(l: RuntimeLimits) {
         if (typeof key !== 'string' || key === '__proto__' || key === 'constructor' || key === 'prototype') throw new ErrorType('Unsafe JSON key');
         const d = descriptor(value, key);
         if (!('value' in d) || !d.enumerable) throw new ErrorType('Non-data property');
-        validate(d.value, next, depth + 1);
+        if (display && !array && d.value === undefined) continue;
+        validate(d.value, display, next, depth + 1);
       }
     };
     delete globalThis.__bridge;
     const call = (kind, value) => {
-      validate(value);
+      validate(value, kind === 'selected' || kind === 'console');
       return bridge(kind, stringify(value), new ErrorType().stack);
     };
     const shellTag = async (strings, ...values) => {
       let request;
       try {
         request = { literals: strings?.raw, values };
-        validate(request);
+        validate(request, false);
       } catch {
         return { isError: true, content: 'Use sh as a tagged template with strings, finite numbers, or nonempty arrays of those values.' };
       }
