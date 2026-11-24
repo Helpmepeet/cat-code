@@ -1,8 +1,9 @@
 import { mock } from 'bun:test'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const root = process.env.WORKTREE_INSTRUCTIONS_TEST_ROOT!
+const cwdPhase = process.env.WORKTREE_CWD_PHASE
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) {
   throw new Error('Isolated fixture required')
 }
@@ -31,13 +32,18 @@ mock.module('../services/api/client.js', () => ({
     const bash = (name: string) => ({ name: 'Bash', input: {
       command: `bash -c 'printf fixture > ${name}.txt'`, work_lifetime: 'finite', run_in_background: false,
     } })
-    const calls = round === 1
-      ? [{ name: 'EnterWorktree', input: { name: 'instructions' } }, bash('stale-first')]
-      : round === 2
-        ? [bash('fresh-first')]
-        : round === 3
-          ? [{ name: 'ExitWorktree', input: { action: 'keep' } }, bash('stale-second')]
-          : round === 4 ? [bash('fresh-second')] : []
+    const write = (name: string) => ({ name: 'Write', input: { file_path: name + '.txt', content: 'fixture' } })
+    const calls = cwdPhase === 'enter'
+      ? round === 1 ? [{ name: 'EnterWorktree', input: { name: 'instructions' } }]
+        : round === 3 ? [bash('next-shell'), write('next-file')] : []
+      : cwdPhase === 'reopen'
+        ? round === 1 ? [{ name: 'ExitWorktree', input: { action: 'keep' } }]
+          : round === 3 ? [bash('return-shell'), write('return-file')] : []
+        : round === 1
+          ? [{ name: 'EnterWorktree', input: { name: 'instructions' } }, bash('stale-first')]
+          : round === 2 ? [bash('fresh-first')]
+            : round === 3 ? [{ name: 'ExitWorktree', input: { action: 'keep' } }, bash('stale-second')]
+              : round === 4 ? [bash('fresh-second')] : []
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${round}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
       if (calls.length) for (const [index, call] of calls.entries()) {
@@ -63,22 +69,51 @@ const { createQueryEngineAppSession } = await import('./createQueryEngineAppSess
 const { EnterWorktreeTool } = await import('../tools/EnterWorktreeTool/EnterWorktreeTool.js')
 const { ExitWorktreeTool } = await import('../tools/ExitWorktreeTool/ExitWorktreeTool.js')
 const { BashTool } = await import('../tools/BashTool/BashTool.js')
+const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
+const { getOriginalCwd, getSessionId } = await import('../bootstrap/state.js')
+const { createAssistantMessage } = await import('../utils/messages.js')
+const { getCurrentWorktreeSession } = await import('../utils/worktree.js')
+const { restoreWorktreeForResume } = await import('../utils/sessionRestore.js')
 enableConfigs()
+if (cwdPhase === 'reopen') {
+  restoreWorktreeForResume(JSON.parse(await readFile(join(root, 'checkout.json'), 'utf8')))
+}
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
+const inlineFile = cwdPhase === 'reopen' ? 'return-inline.txt' : 'next-inline.txt'
+const sourceMessage = createAssistantMessage({ content: '```bash\nprintf fixture > ' + inlineFile + '\n```' })
+sourceMessage.message.stop_reason = 'end_turn'
 const session = createQueryEngineAppSession({
-  cwd: process.cwd(), tools: [EnterWorktreeTool, ExitWorktreeTool, BashTool], commands: [], mcpClients: [], agents: [],
+  cwd: process.cwd(), getWorkspaceCwd: getOriginalCwd,
+  ...(cwdPhase ? { initialMessages: [sourceMessage] } : {}),
+  tools: [EnterWorktreeTool, ExitWorktreeTool, BashTool, FileWriteTool], commands: [], mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => { state = update(state) },
   readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'Perform the synthetic transitions.',
   userSpecifiedModel: 'claude-sonnet-4-5',
   recordTranscript: async () => null,
 })
-for await (const message of session.submitMessage('Enter the fixture worktree, return, and report.', {
-  onPermissionRequest: async () => { failures.push('Unexpected manual approval'); return { behavior: 'deny', message: 'Fixture denies fallback' } },
-})) {
-  if (message.type === 'user' && Array.isArray(message.message.content)) {
-    for (const block of message.message.content) if (block.type === 'tool_result' && block.is_error) failures.push(String(block.content))
+const prompts = cwdPhase ? ['Change checkout.', 'Write the two fixture files.'] : ['Enter the fixture worktree, return, and report.']
+for (const [index, prompt] of prompts.entries()) {
+  for await (const message of session.submitMessage(prompt, {
+    onPermissionRequest: async () => { failures.push('Unexpected manual approval'); return { behavior: 'deny', message: 'Fixture denies fallback' } },
+  })) {
+    if (message.type === 'user' && Array.isArray(message.message.content)) {
+      for (const block of message.message.content) if (block.type === 'tool_result' && block.is_error) failures.push(String(block.content))
+    }
   }
+  if (cwdPhase && index === 0) {
+    if (!session.executeInlineCommand) throw new Error('Missing inline command runtime')
+    for await (const _message of session.executeInlineCommand({
+      source: { engineSessionId: getSessionId(), messageUuid: sourceMessage.uuid, contentBlockIndex: 0, fenceOrdinal: 0 },
+      runId: crypto.randomUUID(), signal: new AbortController().signal,
+      onProgress: run => { if (run.status !== 'running' && run.exitCode !== 0) failures.push(run.output) },
+    })) { /* drain the execution */ }
+  }
+}
+if (cwdPhase === 'enter') {
+  const checkout = getCurrentWorktreeSession()
+  if (!checkout) throw new Error('Fixture did not enter its worktree')
+  await writeFile(join(root, 'checkout.json'), JSON.stringify(checkout))
 }
 await writeFile(join(root, 'evidence.json'), JSON.stringify({ models, reviews, failures }))
 session.dispose?.()

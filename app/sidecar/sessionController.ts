@@ -25,6 +25,7 @@ import {
   resolveStartupProvider,
 } from '../../src/utils/model/providers.js'
 import {
+  getOriginalCwd,
   getSessionId,
   setInitialMainLoopModel,
   setMainLoopModelOverride,
@@ -551,6 +552,7 @@ export async function createNormalSidecarQueryEngineConfig(
      */
     commands,
     queryEngineConfig: {
+      getWorkspaceCwd: getOriginalCwd,
       ...createQueryEngineAppSessionConfigFromSetup({
         cwd,
         tools,

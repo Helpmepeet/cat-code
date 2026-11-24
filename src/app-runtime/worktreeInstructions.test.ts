@@ -75,3 +75,49 @@ test('worktree transitions change main and reviewer instructions at the next mod
     await rm(root, { recursive: true, force: true })
   }
 }, 60_000)
+
+test('relative tools keep their checkout on a new turn and return after a cold reopen', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'worktree-cwd-')))
+  const primary = join(root, 'workspace')
+  const runPhase = async (phase: 'enter' | 'reopen') => {
+    const result = Bun.spawnSync([
+      process.execPath, '--feature=TRANSCRIPT_CLASSIFIER', '--feature=AUTO_MODE_UPSTREAM_PORT',
+      new URL('./worktreeInstructions.fixture.ts', import.meta.url).pathname,
+    ], {
+      cwd: primary, stdout: 'pipe', stderr: 'pipe', timeout: 20_000,
+      env: {
+        PATH: process.env.PATH, HOME: root, TMPDIR: root,
+        CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
+        ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: '0',
+        CLAUDE_CODE_AUTO_MODE_MODEL: 'sonnet', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', WORKTREE_INSTRUCTIONS_TEST_ROOT: root,
+        WORKTREE_CWD_PHASE: phase,
+      },
+    })
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString())
+    const evidence: Evidence = JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8'))
+    expect(evidence.failures).toEqual([])
+  }
+  try {
+    await mkdir(join(root, 'config'))
+    await mkdir(primary)
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: primary, stdio: 'pipe' })
+    git('init', '-q', '-b', 'main')
+    git('config', 'user.email', 'fixture@example.invalid')
+    git('config', 'user.name', 'Fixture')
+    git('commit', '-q', '--allow-empty', '-m', 'fixture')
+    await runPhase('enter')
+    const { worktreePath } = JSON.parse(await readFile(join(root, 'checkout.json'), 'utf8'))
+    for (const name of ['next-shell.txt', 'next-file.txt', 'next-inline.txt']) {
+      expect(await readFile(join(worktreePath, name), 'utf8')).toBe('fixture')
+      await expect(readFile(join(primary, name))).rejects.toThrow('ENOENT')
+    }
+    await runPhase('reopen')
+    for (const name of ['return-shell.txt', 'return-file.txt', 'return-inline.txt']) {
+      expect(await readFile(join(primary, name), 'utf8')).toBe('fixture')
+      await expect(readFile(join(worktreePath, name))).rejects.toThrow('ENOENT')
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 60_000)

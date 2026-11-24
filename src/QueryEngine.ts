@@ -180,6 +180,8 @@ export type QueryEngineConfig = {
   /** A structured-input session owns its interpreter and restores history once. */
   codeModeHost?: CodeModeHost
   cwd: string
+  /** A live desktop session can change its workspace without being recreated. */
+  getWorkspaceCwd?: () => string
   tools: Tools
   commands: Command[]
   mcpClients: MCPServerConnection[]
@@ -536,7 +538,7 @@ export class QueryEngine {
           }
           operation.onProgress(run)
         },
-      }, command, config.cwd, context, operation.canUseTool ?? config.canUseTool)
+      }, command, config.getWorkspaceCwd?.() ?? config.cwd, context, operation.canUseTool ?? config.canUseTool)
       // Reserve the next boundary only once execution has a result. Ordinary
       // turns remain free to run while the shell and its permission request wait.
       await (settlementLane ??= this.acquireTranscriptLane())
@@ -691,7 +693,7 @@ export class QueryEngine {
       : {}
 
     this.discoveredSkillNames.clear()
-    setCwd(cwd)
+    setCwd(this.config.getWorkspaceCwd?.() ?? cwd)
     const persistSession = !isSessionPersistenceDisabled()
     const startTime = Date.now()
     const turnHandoff = new TurnHandoff()
