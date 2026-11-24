@@ -55,6 +55,44 @@ test('Script cells show call rows rather than code and keep Output closed until 
   await click(tree.container.querySelector('.code-mode-output-toggle')!)
   expect(tree.container.textContent).toContain('selected output')
 })
+
+test('the footer switches panels, including on a line link, and copies only the open panel', async () => {
+  const code = 'const patch = String.raw`\n' + ['*** Begin Patch', ...Array(6).fill('+ content'), '*** End Patch'].join('\n') + '\n`; output(patch)'
+  const output = 'Updated /repo/file (hunk 2 at old source coordinates [4, 7))\n  14\t  replacement\nDone'
+  const value = row('exclusive-panel', { code, output, calls: [{ toolUseId: 'fold-call', name: 'Bash', status: 'completed', input: {}, line: 10 }], changedFiles: [] })
+  const tree = await harness.mount(transcript([value]))
+  const copies: string[] = []
+  const clipboard = navigator.clipboard
+  const writeText = clipboard.writeText
+  clipboard.writeText = async text => { copies.push(text) }
+  try {
+    const find = (selector: string) => tree.container.querySelector(selector)
+    expect(find('.code-mode-copy')).toBeNull()
+    await openSource(tree.container)
+    const fold = find('.code-mode-script-fold')!
+    expect(fold.textContent).toBe('8 lines')
+    expect(find('.code-mode-script-body')?.textContent).toContain('String.raw`…`; output(patch)')
+    expect(tree.container.textContent).not.toContain('*** Begin Patch')
+    expect(tree.container.textContent).not.toContain('*** End Patch')
+    await click(find('[aria-label="Copy source"]')!)
+    await click(fold)
+    expect(tree.container.textContent).toContain('*** Begin Patch')
+    expect(tree.container.textContent).toContain('*** End Patch')
+    await click(find('.code-mode-output-toggle')!)
+    expect(find('[aria-label="Source"][role="region"]')).toBeNull()
+    expect([...tree.container.querySelectorAll('.code-mode-output .code-mode-script-gutter')].map(gutter => gutter.textContent)).toEqual(['', '14', ''])
+    expect(find('.code-mode-output')?.textContent).toContain('  replacement')
+    expect(find('.code-mode-output')?.textContent).not.toContain('old source coordinates')
+    await click(find('[aria-label="Copy output"]')!)
+    expect(copies).toEqual([code, output])
+    await click(find('.code-mode-line')!)
+    expect(find('.code-mode-output-toggle')?.getAttribute('aria-expanded')).toBe('false')
+    expect(find('.code-mode-output')).toBeNull()
+    expect(find('.code-mode-script-row.is-active .code-mode-script-gutter')?.getAttribute('aria-label')).toBe('Select line 10, executed')
+  } finally {
+    clipboard.writeText = writeText
+  }
+})
 test('same-line reads form an expandable group without absorbing the next line', async () => {
   const value = row('line-group', { code: 'readMany();\nreadOne();', calls: [
     { toolUseId: 'r1', name: 'Read', input: { file_path: '/first' }, status: 'completed', line: 1 },
@@ -139,6 +177,22 @@ test('a Script with one Bash call shows its result and removes only a repeated O
   expect(echo!.querySelector('.code-mode-output-toggle')).toBeNull()
   await click(transformed!.querySelector('.code-mode-output-toggle')!)
   expect(transformed!.querySelector('.code-mode-output')?.textContent).toContain('completion confirmed')
+})
+
+test('a repeated result prefix opens its matching call, even in a group, but distinct output stays', async () => {
+  const content = '14\tconst a = 1\n15\tconst b = 2'
+  const calls: CodeModeEnvelope['calls'] = [
+    { toolUseId: 'read-a', name: 'Read', status: 'completed', line: 1, input: { file_path: '/repo/a' }, result: { content, isError: false } },
+    { toolUseId: 'read-b', name: 'Read', status: 'completed', line: 1, input: { file_path: '/repo/b' } },
+  ]
+  const echo = row('read-echo', { calls, output: '14\tconst a', changedFiles: [] })
+  const distinct = row('read-distinct', { calls: calls.map(call => ({ ...call })), output: '14\tconst a\nSummary: one match', changedFiles: [] })
+  const tree = await harness.mount(transcript([echo, distinct]))
+  const [echoCard, distinctCard] = [...tree.container.querySelectorAll('.code-mode')]
+  expect(echoCard!.querySelector('.code-mode-output-toggle')).toBeNull()
+  expect(echoCard!.querySelector('.code-mode-group-body .code-mode-member-body')?.textContent).toContain('const a = 1')
+  await click(distinctCard!.querySelector('.code-mode-output-toggle')!)
+  expect(distinctCard!.querySelector('.code-mode-output')?.textContent).toContain('Summary: one match')
 })
 
 test('Script output retains guest text and receipt-only notices in restored rows', async () => {
@@ -295,17 +349,36 @@ test('streaming input, live children and waiting permissions retain the Script o
 })
 
 test('inline Output expands to bounded searchable full output without a second Open control', async () => {
-  const value = row('inline', { output: 'result\n'.repeat(50000) })
+  const value = row('inline', { output: 'Updated /repo/a (hunk 1 at old source coordinates [0, 2); applied in file order)\n40\tresult\n' + 'result\n'.repeat(50000) })
   const tree = await harness.mount(transcript([value]))
   const summary = tree.container.querySelector('.code-mode-output-toggle')!
   await click(summary)
   expect(tree.container.querySelector('.code-mode-inline-output input[data-output-search]')).not.toBeNull()
-  expect(tree.container.querySelector('.code-mode-inline-output [aria-label="Copy output"]')).not.toBeNull()
+  expect(tree.container.querySelectorAll('[aria-label="Copy output"]')).toHaveLength(1)
+  expect(tree.container.querySelector('.code-mode-footer [aria-label="Copy output"]')).not.toBeNull()
+  expect(tree.container.querySelector('.code-mode-inline-output .tool-output-gutter')?.textContent).toBe('')
+  expect(tree.container.querySelectorAll('.code-mode-inline-output .tool-output-gutter')[1]?.textContent).toBe('40')
+  expect(tree.container.querySelector('.code-mode-inline-output')?.textContent).not.toContain('old source coordinates')
   expect([...tree.container.querySelectorAll('.code-mode-inline-output button')].some(button => button.textContent === 'Wrap')).toBe(true)
   const mounted = tree.container.querySelectorAll('.code-mode-inline-output .tool-output-row').length
   expect(mounted).toBeGreaterThan(0)
   expect(mounted).toBeLessThan(300)
   expect([...tree.container.querySelectorAll('.code-mode-output button')].some(button => button.textContent?.includes('Open'))).toBe(false)
+})
+
+test('the quiet list ends at 200 lines and longer output can still wrap and search', async () => {
+  const view = (count: number) => transcript([row('output-boundary', { output: Array.from({ length: count }, (_, i) => 'result ' + i).join('\n') })])
+  const tree = await harness.mount(view(200))
+  await click(tree.container.querySelector('.code-mode-output-toggle')!)
+  expect(tree.container.querySelector('.code-mode-output.code-mode-script-body')).not.toBeNull()
+  expect(tree.container.querySelector('input[data-output-search]')).toBeNull()
+  await tree.render(view(201))
+  expect(tree.container.querySelector('input[data-output-search]')).not.toBeNull()
+  const wrap = [...tree.container.querySelectorAll('.code-mode-inline-output button')].find(button => button.textContent === 'Wrap')!
+  const previous = wrap.getAttribute('aria-pressed')
+  await click(wrap)
+  expect(wrap.getAttribute('aria-pressed')).not.toBe(previous)
+  await click(wrap)
 })
 
 test('streaming Script input causes zero commits in an unchanged sibling cell', async () => {
@@ -544,6 +617,7 @@ test('background child frames advance production Script, source gutter and Focus
   expect(codeModeLiveView(fixture.row())!.calls.map(call => call.name)).toEqual(['Read'])
   await click(full().querySelector('.code-mode-output-toggle')!)
   expect(full().querySelector('.code-mode-output')?.textContent).toContain('Background started')
+  await openSource(full())
   fixture.start('live-check', 'Bash', 4)
   fixture.finish('live-check')
   await tree.render(view())
@@ -563,6 +637,7 @@ test('background child frames advance production Script, source gutter and Focus
   expect(tree.container.querySelector('button[aria-label="Select line 4, executed"]')).toBeNull()
   expect(focusedCount()).toContain('read 1')
   expect(focusedCount()).not.toContain('ran 1')
+  await click(full().querySelector('.code-mode-output-toggle')!)
   expect(full().querySelector('.code-mode-output')?.textContent).toContain('Final selected output')
 })
 

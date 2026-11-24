@@ -85,6 +85,7 @@
 .code-mode-footer { display: flex; align-items: center; gap: 18px; min-height: 22px; }
 .code-mode-fold-head { display: flex; align-items: center; gap: 10px; min-width: 0; height: 22px; border-radius: 4px; font-size: 11px; color: var(--text-subtle); }
 .code-mode-fold-head:hover, .code-mode-fold-head[aria-expanded="true"] { color: var(--text-primary); }
+.code-mode-copy { margin-inline-start: auto; }
 .code-mode-output-count { margin-inline-start: -5px; white-space: nowrap; }
 .code-mode-script-body { max-height: 320px; overflow: auto; margin-block: 2px 4px; white-space: pre; font: 11.5px/19px var(--font-mono); color: var(--text-muted); }
 .code-mode-script-row { display: flex; min-width: max-content; min-height: 19px; }
@@ -92,7 +93,11 @@
 .code-mode-script-gutter { flex: none; min-width: 24px; margin-inline-end: 12px; text-align: end; font-variant-numeric: tabular-nums; color: var(--text-ghost); user-select: none; }
 .code-mode-script-gutter.is-executed { color: var(--script-ink); }
 .code-mode-script-gutter.is-failed { color: var(--tone-danger); }
+.code-mode-source-with-folds .code-mode-script-gutter { min-width: 9ch; }
+.code-mode-output .code-mode-script-gutter { min-width: 6ch; }
 .code-mode-script-code { flex: 1; min-width: 0; }
+.code-mode-script-fold { margin-inline-start: 10px; color: var(--text-subtle); font: inherit; }
+.code-mode-script-fold:hover { color: var(--text-primary); }
 .code-mode-inline-output { display: flex; flex-direction: column; min-width: 0; margin-block: 2px 4px; }
 .code-mode-inline-output .tool-output-scroller { max-height: 320px; padding: 0; }
 .code-mode button:focus-visible, .code-mode summary:focus-visible { outline: 2px solid var(--script-ink); outline-offset: 1px; border-radius: 2px; }

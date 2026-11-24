@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useMemo, useReducer, type ReactNode } from 'react'
+import { memo, useCallback, useContext, useMemo, useReducer, useState, type ReactNode } from 'react'
 import { AutoModeReviewFooter, AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { summarizeAutoModeReviews, visibleAutoModeReason } from './autoModeReview.js'
 import { BoundedChildList } from './BoundedChildList.js'
@@ -46,13 +46,14 @@ export function CodeModeLineLink({ line, onReveal }: { line?: number; onReveal(l
     onClick={() => onReveal(line)}>L{line}</button>
 }
 
-function codeModeGroupDefaultOpen(step: CodeModeStep): boolean {
-  return step.members.some(member => codeModeStepHasError(member.status))
+function codeModeGroupDefaultOpen(step: CodeModeStep, echoedCall: string | undefined): boolean {
+  return step.members.some(member => codeModeStepHasError(member.status) || member.call.toolUseId === echoedCall)
 }
 
-function CodeModeGroup({ expansionKey, step, selected, sessionId, childApprovals, onRevealLine, onToggleFiles, renderMember }: {
+function CodeModeGroup({ expansionKey, step, defaultOpen, selected, sessionId, childApprovals, onRevealLine, onToggleFiles, renderMember }: {
   expansionKey: string
   step: CodeModeStep
+  defaultOpen: boolean
   selected: boolean
   sessionId: NestedToolUseRow['sessionId']
   childApprovals: FocusedLiveState['awaitingApproval'] | null
@@ -65,7 +66,7 @@ function CodeModeGroup({ expansionKey, step, selected, sessionId, childApprovals
   const status = step.members.find(member => member.status === 'failed')?.status
     ?? step.members.find(member => member.status === 'blocked')?.status
     ?? running[0]?.status ?? step.members.find(member => member.status === 'cancelled')?.status
-  const [open, setOpen] = useToolCardExpanded(expansionKey, codeModeGroupDefaultOpen(step))
+  const [open, setOpen] = useToolCardExpanded(expansionKey, defaultOpen)
   const keys = useMemo(() => step.members.map(member => member.call.toolUseId), [step])
   const prefix = first.family === 'read' ? codeModeStepDirectory(step) : undefined
   const count = step.members.length
@@ -106,6 +107,19 @@ export function CodeModeCounts({ adds, dels }: { adds: number; dels: number }) {
   </>
 }
 
+function CopyScriptPanel({ text, panel }: { text: string; panel: 'source' | 'output' }) {
+  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+  return <button type="button" className="code-mode-fold-head code-mode-copy"
+    aria-label={`${status === 'copied' ? 'Copied' : 'Copy'} ${panel}`} onClick={async () => {
+      try {
+        await navigator.clipboard.writeText(text)
+        setStatus('copied')
+      } catch {
+        setStatus('failed')
+      }
+    }}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Copy failed' : 'Copy'}</button>
+}
+
 export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, renderCall, waitingForApproval = false, childApprovals = null }: {
   row: NestedToolUseRow
   renderChild: (row: NestedToolUseRow['children'][number]) => ReactNode
@@ -137,10 +151,14 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
   const [groupRevision, onToggleFiles] = useReducer((revision: number) => revision + 1, 0)
   const [sourceOpen, setSourceOpen] = useToolCardExpanded(`code-mode-source:${id}`, false)
   const [outputOpen, setOutputOpen] = useToolCardExpanded(`code-mode-output:${id}`, false)
+  const openPanel = useCallback((panel: 'source' | 'output' | null) => {
+    setSourceOpen(panel === 'source')
+    setOutputOpen(panel === 'output')
+  }, [setSourceOpen, setOutputOpen])
   const showLine = useCallback((line: number) => {
-    setSourceOpen(true)
+    openPanel('source')
     revealCodeModeLine(row.sessionId, row.toolUseId, line)
-  }, [row.sessionId, row.toolUseId, setSourceOpen])
+  }, [row.sessionId, row.toolUseId, openPanel])
   const keys = useMemo(() => steps.map(step => step.key), [steps])
   const selectedStep = useMemo(() => selection ? steps.find(step => step.members.some(member => member.line === selection.line)) : undefined, [steps, selection])
   const revealRequest = useMemo(() => selectedStep && selection ? { key: selectedStep.key, sequence: selection.token } : null, [selectedStep, selection])
@@ -158,6 +176,24 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
   const statusLabel = status === 'writing' ? 'Writing' : status === 'reviewing' ? 'Reviewing' : status === 'approval' ? 'Waiting for approval' : status === 'waiting' ? 'Waiting' : status === 'yielded' ? 'Paused' : status === 'unknown' ? 'Outcome unknown' : null
   const partial = !!cell?.changedFiles.length && (codeModeStepHasError(status) || status === 'yielded')
   const changedFiles = cell?.changedFiles
+  const output = useMemo(() => {
+    if (!audit) return row.result?.content
+    const explained = new Set(reasons)
+    if (audit.error) explained.add(audit.error)
+    return codeModeDisplayOutput(audit, explained)
+  }, [audit, row.result, reasons])
+  const echoedCall = useMemo(() => {
+    if (!expanded) return undefined
+    const text = output?.trim()
+    if (!text) return undefined
+    for (const step of steps) for (const member of step.members) {
+      if (!(member.child?.result || member.call.result)) continue
+      const content = codeModeChildView(row, member.call, member.child).result?.content
+      if (content?.trimStart().startsWith(text)) return member.call.toolUseId
+    }
+    return extraChildren.find((child): child is NestedToolUseRow => child.kind === 'tool-use' &&
+      !!child.result?.content.trimStart().startsWith(text))?.toolUseId
+  }, [row, steps, extraChildren, expanded, output])
   const unlistedChanges = useMemo(() => {
     if (!expanded || !changedFiles?.length) return []
     const visiblePaths = new Set<string>()
@@ -165,7 +201,7 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
       if (!step.changedPaths.size) continue
       const first = step.members[0]!
       const key = `code-mode-group:${id}:${step.key}`
-      if (step.members.length === 1 || (expansionStore.get(key) ?? codeModeGroupDefaultOpen(step))) {
+      if (step.members.length === 1 || (expansionStore.get(key) ?? codeModeGroupDefaultOpen(step, echoedCall))) {
         for (const path of step.changedPaths) visiblePaths.add(path)
       } else if (first.family === 'edit' && first.file) {
         const path = scopedTranscriptFilePath(first.file, first.cwd ?? undefined)
@@ -173,19 +209,14 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
       }
     }
     return changedFiles.filter(file => !visiblePaths.has(scopedTranscriptFilePath(file.path, cwd ?? undefined)))
-  }, [expanded, changedFiles, steps, id, expansionStore, groupRevision, cwd])
+  }, [expanded, changedFiles, steps, id, expansionStore, groupRevision, cwd, echoedCall])
   const changedKeys = useMemo(() => unlistedChanges.map(file => file.path), [unlistedChanges])
   const showError = cell?.error && !reasons.has(cell.error) && visibleAutoModeReason(row.autoModeReview) !== cell.error
   const loneBash = steps.length === 1 && steps[0]?.members.length === 1 && steps[0].members[0]?.call.name === 'Bash'
     ? steps[0].members[0] : undefined
   const bashResult = useMemo(() => loneBash ? codeModeChildView(row, loneBash.call, loneBash.child).result : undefined, [row, loneBash])
-  const output = useMemo(() => {
-    if (!audit) return row.result?.content
-    const explained = new Set(reasons)
-    if (audit.error) explained.add(audit.error)
-    return codeModeDisplayOutput(audit, explained)
-  }, [audit, row.result, reasons])
-  const showOutput = output === undefined || (!!output && (!bashResult?.content || output.trim() !== bashResult.content.trim()))
+  const showOutput = output === undefined || (!!output && echoedCall === undefined)
+  const copyText = sourceOpen ? code : showOutput && outputOpen ? output : undefined
   const outputLineCount = useMemo(() => {
     if (!output) return 0
     let count = 1
@@ -201,7 +232,7 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
         cwd: member.cwd, file: member.file, status: member.status, error: member.error,
         sourceLine: !grouped || editGroup ? member.line : undefined,
         onRevealLine: showLine, grouped, pathPrefix: prefix,
-        openResult: !!loneBash && !!bashResult,
+        openResult: member.call.toolUseId === echoedCall || (!!loneBash && !!bashResult),
       }) : renderChild(child)}
     </div>
   }
@@ -241,6 +272,7 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
             {renderMember(step.members[0]!, false)}
           </div>
           return <CodeModeGroup expansionKey={`code-mode-group:${id}:${step.key}`} step={step} selected={selected}
+            defaultOpen={codeModeGroupDefaultOpen(step, echoedCall)}
             sessionId={row.sessionId} childApprovals={childApprovals} onRevealLine={showLine}
             onToggleFiles={onToggleFiles} renderMember={renderMember} />
         }} />
@@ -255,16 +287,17 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
       </details> : null}
       <AutoModeReviewFooter review={row.autoModeReview} />
       {code || showOutput ? <div className="code-mode-footer">
-        {code ? <button type="button" className="code-mode-fold-head code-mode-script" aria-expanded={sourceOpen} onClick={() => setSourceOpen(!sourceOpen)}>
+        {code ? <button type="button" className="code-mode-fold-head code-mode-script" aria-expanded={sourceOpen} onClick={() => openPanel(sourceOpen ? null : 'source')}>
           <CodeModeCaret open={sourceOpen} />Source <span className="code-mode-output-count">{lines.length}</span>
         </button> : null}
-        {showOutput ? <button type="button" className="code-mode-fold-head code-mode-output-toggle" aria-expanded={outputOpen} onClick={() => setOutputOpen(!outputOpen)}>
+        {showOutput ? <button type="button" className="code-mode-fold-head code-mode-output-toggle" aria-expanded={outputOpen} onClick={() => openPanel(outputOpen ? null : 'output')}>
           <CodeModeCaret open={outputOpen} />Output <span className="code-mode-output-count">{output === undefined ? 'Waiting for output' : outputLineCount}</span>
         </button> : null}
+        {copyText ? <CopyScriptPanel key={sourceOpen ? 'source' : 'output'} text={copyText} panel={sourceOpen ? 'source' : 'output'} /> : null}
       </div> : null}
       {code && sourceOpen ? <CodeModeSource sessionId={row.sessionId} cellId={row.toolUseId} lines={lines}
         calls={calls} errorLine={cell?.error && cell.line ? cell.line : null} /> : null}
-      {showOutput && outputOpen ? <CodeModeOutput output={output} lineCount={outputLineCount} /> : null}
+      {showOutput && outputOpen ? <CodeModeOutput output={output} /> : null}
     </div> : null}
   </section>
 })

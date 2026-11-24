@@ -1,5 +1,20 @@
 import type { CodeModeEnvelope } from './codeMode.js'
 
+export const QUIET_OUTPUT_LINE_LIMIT = 200
+
+export function codeModeOutputLines(output: string) {
+  const gutters: (string | undefined)[] = []
+  const lines = output.split('\n').map((line, index) => {
+    const numbered = /^ *([0-9]+)\t/.exec(line)
+    if (numbered) {
+      gutters[index] = numbered[1]
+      return line.slice(numbered[0].length)
+    }
+    return line.replace(/^((?:Updated|Added|Deleted) .+) \(hunk \d+ at old source coordinates \[\d+, \d+\).*\)\r?$/, '$1')
+  })
+  return { lines, gutters }
+}
+
 /** Older Script rows store selected text and the model's receipt together. */
 export function codeModeDisplayOutput(cell: CodeModeEnvelope, visibleReasons: ReadonlySet<string>): string {
   const { output, calls, changedFiles } = cell

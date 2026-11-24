@@ -48,7 +48,7 @@ export function SourceTextView({
 }: {
   lines: readonly string[]
   body: string
-  copy: string
+  copy?: string
   gutter: (index: number) => ReactNode
   language: string | null
   diffRows: readonly DiffRow[] | null
@@ -89,7 +89,7 @@ export function SourceTextView({
   const copyOutput = (): void => {
     const clipboard =
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-    if (!clipboard) return
+    if (!clipboard || copy === undefined) return
     void clipboard
       .writeText(copy)
       .then(() => {
@@ -168,7 +168,7 @@ export function SourceTextView({
         >
           Wrap
         </button>
-        <button
+        {copy === undefined ? null : <button
           type="button"
           className="tool-output-tool"
           data-copied={copied ? '' : undefined}
@@ -178,7 +178,7 @@ export function SourceTextView({
         >
           {copied ? <ActionCheckIcon /> : <ActionCopyIcon />}
           <span className="source-text-copy-label">{copied ? 'Copied' : 'Copy'}</span>
-        </button>
+        </button>}
       </div>
       <VirtualLineList
         lines={search.lines}
