@@ -250,3 +250,13 @@ test('a subcommand deny survives an early compound-command safety ask', async ()
   expect(proof.effect).toBe('effect')
   expect(proof.scripts[0].output).toContain('Blocked by permissions')
 }, 30_000)
+
+test('a Bash ask cannot supersede a denied read inside a covered Script', async () => {
+  const proof = await run('native-script-path-deny', cells(
+    write + queue('cat a.txt', 'printf queued >> effects.txt'),
+  ))
+  expect(proof.requests).toHaveLength(1)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
+  expect(proof.scripts[0].calls[1].error).toContain('Blocked by permissions')
+}, 30_000)

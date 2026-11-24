@@ -1824,6 +1824,19 @@ export async function bashToolHasPermission(
     !input.dangerouslyDisableSandbox && !commandHasAnyCd(input.command) && BashTool.isReadOnly(input)
     ? () => { outsideRead = true } : undefined
   const result = await checkBashPermission(input, context, getCommandSubcommandPrefixFn, onOutsideRead)
+  if (attempt?.mode === 'experimental' && context.contextualScriptGrant && result.behavior !== 'deny') {
+    // Compound Bash checks can return before assembling all rule decisions.
+    // Resolve those rules before a Script can reuse its covering approval.
+    const policy = context.getAppState().toolPermissionContext
+    const exact = bashToolCheckExactMatchPermission(input, policy)
+    const restriction = checkExplicitBashRestrictions(input, policy)
+    if (exact.behavior === 'deny') return exact
+    if (restriction?.behavior === 'deny') return restriction
+    if (result.behavior === 'ask' && result.decisionReason?.type === 'safetyCheck' &&
+        !result.decisionReason.classifierApprovable) return result
+    if (restriction) return restriction
+    if (exact.behavior === 'ask') return exact
+  }
   if (outsideRead && result.behavior === 'allow') attempt?.recordAllowedOutsideRead()
   return result
 }
@@ -1869,15 +1882,6 @@ async function checkBashPermission(
       const reason = 'Auto Mode could not check this shell command for critical removals. Split it into simpler commands.'
       return { behavior: 'deny', message: reason, decisionReason: { type: 'other', reason } }
     }
-  }
-  if (contextualScript) {
-    // Some Bash paths ask before building all subcommand decisions. Keep
-    // explicit asks and denies ahead of any whole-Script allowance.
-    const restriction = checkExplicitBashRestrictions(input, appState.toolPermissionContext)
-    const exact = bashToolCheckExactMatchPermission(input, appState.toolPermissionContext)
-    if (exact.behavior === 'deny') return exact
-    if (restriction) return restriction
-    if (exact.behavior === 'ask') return exact
   }
   const lookupAssignmentAstRoot = astRoot
   let astResult: ParseForSecurityResult = astRoot
