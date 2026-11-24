@@ -82,10 +82,12 @@ import { registerStructuredOutputEnforcement } from './utils/hooks/hookHelpers.j
 import { getInMemoryErrors } from './utils/log.js'
 import {
   countToolCalls,
+  createAssistantMessage,
   createUserMessage,
   INTERRUPT_MESSAGE,
   INTERRUPT_MESSAGE_FOR_TOOL_USE,
   isSyntheticMessage,
+  NO_RESPONSE_REQUESTED,
   SYNTHETIC_MESSAGES,
 } from './utils/messages.js'
 import {
@@ -1348,6 +1350,8 @@ export class QueryEngine {
     let structuredOutputFromTool: unknown
     // Track the last stop_reason from assistant messages
     let lastStopReason: string | null = null
+    let providerStopReason: string | null = null
+    let providerCompletedEndTurn = false
     // Reference-based watermark so error_during_execution's errors[] is
     // turn-scoped. A length-based index breaks when the 100-entry ring buffer
     // shift()s during the turn — the index slides. If this entry is rotated
@@ -1531,6 +1535,8 @@ export class QueryEngine {
           break
         case 'stream_event':
           if (message.event.type === 'message_start') {
+            providerStopReason = null
+            providerCompletedEndTurn = false
             hasUnsettledMessageUsage = true
             // Reset current message usage for new message
             currentMessageUsage = EMPTY_USAGE
@@ -1549,10 +1555,11 @@ export class QueryEngine {
             // real value only arrives here (see claude.ts message_delta
             // handler). Without this, result.stop_reason is always null.
             if (message.event.delta.stop_reason != null) {
-              lastStopReason = message.event.delta.stop_reason
+              providerStopReason = lastStopReason = message.event.delta.stop_reason
             }
           }
           if (message.event.type === 'message_stop') {
+            providerCompletedEndTurn = providerStopReason === 'end_turn'
             // Accumulate current message usage into total
             this.totalUsage = accumulateUsage(
               this.totalUsage,
@@ -1657,7 +1664,8 @@ export class QueryEngine {
           }
           break
         case 'stream_request_start':
-          // Don't yield stream request start messages
+          providerStopReason = null
+          providerCompletedEndTurn = false
           break
         case 'system': {
           // Snip boundary: replay on our store to remove zombie messages and
@@ -2027,6 +2035,22 @@ export class QueryEngine {
         textResult = lastContent.text
       }
       isApiError = Boolean(result.isApiErrorMessage)
+    }
+
+    // Recovery removes whitespace and orphaned reasoning. A successful silent
+    // response needs its own boundary or the preceding input/tool result looks
+    // interrupted on cold restore, holding automated input such as peer messages.
+    if (persistSession && queryTerminal?.reason === 'completed' && providerCompletedEndTurn &&
+        !isApiError && !isAuthError && !this.interruptedTools.blocked &&
+        (result.type === 'user' || result.message.content.every(block =>
+          block.type === 'thinking' || block.type === 'redacted_thinking' ||
+          (block.type === 'text' && block.text.trim() === '')))) {
+      const completion = createAssistantMessage({ content: NO_RESPONSE_REQUESTED })
+      completion.isInternalNoResponseSentinel = true
+      if (await recordTranscriptFn([...messages, completion]) === completion.uuid) {
+        await flushCurrentTranscriptDurablyFn(completion.uuid)
+      }
+      this.mutableMessages.push(completion)
     }
 
     yield {
