@@ -85,6 +85,11 @@ describe('Auto refuses critical removals', () => {
         }
       })
 
+      test('relative parent removal in a project stays reviewable in Auto', async () => {
+        const decision = await bashToolHasPermission({ command: 'rmdir -p dist/cache' }, context('auto'))
+        expect(decision.behavior).not.toBe('deny')
+      })
+
       test('a project glob removal stays reviewable in Auto', async () => {
         const decision = await bashToolHasPermission({ command: 'rm -rf dist/*' }, context('auto'))
         expect(decision.behavior).toBe('ask')

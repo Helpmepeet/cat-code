@@ -385,7 +385,6 @@ export async function createContextualAttempt(
     reviewStarted = true
     reviewedInstructions = true
     const reason = 'Covered by the Auto Mode review of this script.'
-    emit('allowed', reason)
     actionAllowed = true
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
   }

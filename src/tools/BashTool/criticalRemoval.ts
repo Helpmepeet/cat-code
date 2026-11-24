@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { splitCommandWithOperators } from '../../utils/bash/commands.js'
 import { getParserModule, type TsNode } from '../../utils/bash/bashParser.js'
 import { tryParseShellCommand } from '../../utils/bash/shellQuote.js'
@@ -26,6 +26,15 @@ function resolveOperand(operand: string, cwd: string, home: string): string | un
   if (operand.startsWith('~') || /[$`{}?\[]/u.test(operand)) return undefined
   if (/^[A-Za-z]:[/\\]/u.test(operand)) return operand
   return resolve(cwd, operand)
+}
+
+function* removalOperands(operand: string, removeParents: boolean): Iterable<string> {
+  yield operand
+  if (removeParents) {
+    for (let parent = dirname(operand); parent !== '.' && parent !== dirname(parent); parent = dirname(parent)) {
+      yield parent
+    }
+  }
 }
 
 function shellPayload(args: string[]): string | undefined {
@@ -87,15 +96,20 @@ export function findCriticalRemoval(
       }
     }
     if (executable === 'rm' || executable === 'rmdir') {
+      const endOfOptions = args.indexOf('--')
+      const removeParents = executable === 'rmdir' && args.slice(0, endOfOptions < 0 ? args.length : endOfOptions)
+        .some(arg => arg === '--parents' || /^-[^-]*p/u.test(arg))
       let options = true
       for (const operand of args) {
         if (options && operand === '--') { options = false; continue }
         if (!operand || options && operand.startsWith('-')) continue
-        for (const dir of directories) {
-          const path = resolveOperand(operand, dir, home)
-          if (path && isCriticalRemovalPath(path)) {
-            refusal = { kind: 'removal', command: executable, path }
-            return unchanged(directories)
+        for (const target of removalOperands(operand, removeParents)) {
+          for (const dir of directories) {
+            const path = resolveOperand(target, dir, home)
+            if (path && isCriticalRemovalPath(path)) {
+              refusal = { kind: 'removal', command: executable, path }
+              return unchanged(directories)
+            }
           }
         }
       }

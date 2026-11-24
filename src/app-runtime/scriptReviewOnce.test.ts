@@ -62,6 +62,8 @@ for (const [model, route] of [['claude-sonnet-5-5', 'firstParty'], ['gpt-6.2-sol
     })
     expect(new Set(proof.taskRoutes)).toEqual(new Set([route]))
     expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
+    expect(proof.reviewEvents.map((event: any) => event.outcome)).toEqual(['reviewing', 'allowed'])
+    expect(new Set(proof.reviewEvents.map((event: any) => event.toolUseId)).size).toBe(1)
     expect(proof.requests[0].content.action.script.source).toContain(reads)
     expect(proof.requests[0].content.action).toMatchObject({
       input: { command: expect.stringContaining('row-0.log') },
@@ -197,6 +199,7 @@ for (const command of [
   'rm -rf "$HOME"',
   'rm -rf >/dev/null "$HOME"',
   'rmdir "${HOME}/"',
+  'rmdir -p "$HOME"/empty-child',
   'rm -rf ~/*',
   'cd / && rm -rf usr',
   'cd "$HOME"; rm -rf .',
@@ -259,4 +262,15 @@ test('a Bash ask cannot supersede a denied read inside a covered Script', async 
   expect(proof.prompts).toHaveLength(0)
   expect(proof.effect).toBe('effect')
   expect(proof.scripts[0].calls[1].error).toContain('Blocked by permissions')
+}, 30_000)
+
+test('a denied output path holds a Script pipeline and its queued work', async () => {
+  const proof = await run('native-script-path-deny', cells(
+    write + queue('printf fixture | cat > a.txt', 'printf queued >> effects.txt'),
+  ))
+  expect(proof.requests).toHaveLength(1)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
+  expect(proof.files.a).toBe('old')
+  expect(proof.scripts[0].calls[1].error).toContain('Output redirection')
 }, 30_000)

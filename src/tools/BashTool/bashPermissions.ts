@@ -1841,6 +1841,18 @@ export async function bashToolHasPermission(
   return result
 }
 
+function mandatoryBashAsk(result: PermissionResult): PermissionResult | undefined {
+  if (result.behavior !== 'ask') return undefined
+  const reason = result.decisionReason
+  if (reason?.type === 'rule' || (reason?.type === 'safetyCheck' && !reason.classifierApprovable)) return result
+  if (reason?.type === 'subcommandResults') {
+    for (const subcommand of reason.reasons.values()) {
+      const ask = mandatoryBashAsk(subcommand)
+      if (ask) return ask
+    }
+  }
+}
+
 async function checkBashPermission(
   input: z.infer<typeof BashTool.inputSchema>,
   context: ToolUseContext,
@@ -2041,6 +2053,11 @@ async function checkBashPermission(
     return earlyExactMatchResult
   }
 
+  const checkOriginalPaths = () => checkPathConstraints(
+    input, getCwd(), context.getAppState().toolPermissionContext, commandHasAnyCd(input.command),
+    astRedirects, astCommands, onOutsideRead,
+  )
+
   // Check sandbox auto-allow (which respects explicit deny/ask rules)
   // Only call this if sandboxing and auto-allow are both enabled
   if (
@@ -2053,6 +2070,10 @@ async function checkBashPermission(
       input,
       appState.toolPermissionContext,
     )
+    if (contextualScript && sandboxAutoAllowResult.behavior === 'allow') {
+      const pathResult = checkOriginalPaths()
+      if (pathResult.behavior === 'deny' || mandatoryBashAsk(pathResult)) return pathResult
+    }
     if (sandboxAutoAllowResult.behavior !== 'passthrough') {
       return sandboxAutoAllowResult
     }
@@ -2204,6 +2225,13 @@ async function checkBashPermission(
     astRoot,
   )
   if (commandOperatorResult.behavior !== 'passthrough') {
+    // Pipeline segments drop the original output paths. Protect those paths
+    // before a contextual Script can release a combined ask.
+    const scriptPathResult = contextualScript && commandOperatorResult.behavior !== 'deny'
+      ? checkOriginalPaths() : undefined
+    if (scriptPathResult && (scriptPathResult.behavior === 'deny' || mandatoryBashAsk(scriptPathResult))) {
+      return scriptPathResult
+    }
     // SECURITY FIX: When pipe segment processing returns 'allow', we must still validate
     // the ORIGINAL command. The pipe segment processing strips redirections before
     // checking each segment, so commands like:
@@ -2258,22 +2286,7 @@ async function checkBashPermission(
         }
       }
 
-      appState = context.getAppState()
-      // SECURITY: Compute compoundCommandHasCd from the full command, NOT
-      // hardcode false. The pipe-handling path previously passed `false` here,
-      // disabling the cd+redirect check at pathValidation.ts:821. Appending
-      // `| echo done` to `cd .claude && echo x > settings.json` routed through
-      // this path with compoundCommandHasCd=false, letting the redirect write
-      // to .claude/settings.json without the cd+redirect block firing.
-      const pathResult = checkPathConstraints(
-        input,
-        getCwd(),
-        appState.toolPermissionContext,
-        commandHasAnyCd(input.command),
-        astRedirects,
-        astCommands,
-        onOutsideRead,
-      )
+      const pathResult = scriptPathResult ?? checkOriginalPaths()
       if (pathResult.behavior !== 'passthrough') {
         return pathResult
       }
@@ -2285,6 +2298,9 @@ async function checkBashPermission(
       appState = context.getAppState()
       return {
         ...commandOperatorResult,
+        ...(contextualScript && {
+          decisionReason: mandatoryBashAsk(commandOperatorResult)?.decisionReason ?? commandOperatorResult.decisionReason,
+        }),
         ...(feature('BASH_CLASSIFIER')
           ? {
               pendingClassifierCheck: buildPendingClassifierCheck(
@@ -2511,9 +2527,7 @@ async function checkBashPermission(
   // Preserve mandatory asks that path validation or normalized
   // subcommands found before Bash combines their decisions.
   if (contextualScript) {
-    const mandatory = [pathResult, ...subcommandPermissionDecisions].find(result =>
-      result.behavior === 'ask' && (result.decisionReason?.type === 'rule' ||
-        result.decisionReason?.type === 'safetyCheck' && !result.decisionReason.classifierApprovable))
+    const mandatory = [pathResult, ...subcommandPermissionDecisions].map(mandatoryBashAsk).find(Boolean)
     if (mandatory) return mandatory
   }
 

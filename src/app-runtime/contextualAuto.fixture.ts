@@ -453,7 +453,7 @@ state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mod
   ...(scenario === 'native-script-deny-rule' && { alwaysDenyRules: { session: ['Bash(printf blocked:*)'] } }),
   ...(scenario === 'native-script-path-deny' && {
     alwaysAskRules: { session: ['Bash(cat a.txt)'] },
-    alwaysDenyRules: { session: ['Read(./a.txt)'] },
+    alwaysDenyRules: { session: ['Read(./a.txt)', 'Edit(./a.txt)'] },
   }),
   ...(scenario === 'native-script-no-human' && { shouldAvoidPermissionPrompts: true }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
