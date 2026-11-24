@@ -47,9 +47,8 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
   } else {
     let toolCall: { name: string; input: object } | undefined
     if (requests.length === 1 && planWorker) {
-      toolCall = { name: 'REPL', input: {
-        description: 'Ask the planner to read the example',
-        code: `const result = await tools.call({name: 'Agent', input: {description: 'Plan an update', subagent_type: 'Plan', prompt: 'Read sample.txt and return your findings.'}}); output(result.content)`,
+      toolCall = { name: 'Agent', input: {
+        description: 'Plan an update', subagent_type: 'Plan', prompt: 'Read sample.txt and return your findings.',
       } }
     } else if (requests.length === 2 && planWorker) {
       toolCall = { name: 'Read', input: { file_path: join(process.cwd(), 'sample.txt') } }

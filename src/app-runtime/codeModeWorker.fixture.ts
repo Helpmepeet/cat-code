@@ -36,7 +36,10 @@ mock.module('../services/api/client.js', () => ({
     const index = worker ? evidence.workerRequests.length : evidence.parentRequests++
     if (worker) evidence.workerRequests.push(JSON.parse(JSON.stringify(body)))
     if (index > (worker ? workerBackground && !workerAncestry ? 1 : 2 : 1)) throw new Error(`Unexpected ${worker ? 'worker' : 'parent'} request ${index}`)
-    const code = `var agentResult = await tools.call({name:"Agent",input:{description:"Read and test isolated worker",prompt:"Worker fixture: read worker-source.txt with Read, then run the ordinary worker command, and report.",subagent_type:"general-purpose"}}); output("worker completed");`
+    const launch = { name: 'Agent', input: {
+      description: 'Read and test isolated worker', subagent_type: 'general-purpose',
+      prompt: 'Worker fixture: read worker-source.txt, then run the ordinary worker command, and report.',
+    } }
     const workerCommand = workerArchive || workerAncestry ? 'printf x >> worker-effects.txt; /bin/sleep 0.1' : 'printf worker-start > worker-start.txt; /bin/sleep 30; printf forbidden > worker-forbidden.txt'
     const workerCode = `await tools.call({name:"Bash",input:{command:${JSON.stringify(workerCommand)},work_lifetime:"finite",run_in_background:false}}); output("worker background finished");`
     const tool = worker && workerEquivalentPolicy ? index < 2
@@ -45,7 +48,7 @@ mock.module('../services/api/client.js', () => ({
       ? index === 0 ? { name: 'REPL', input: { code: workerCode, description: 'Owned worker background script', run_in_background: true } } :
         workerAncestry && index === 1 ? { name: 'Read', input: { file_path: join(root, 'workspace', 'worker-source.txt') } } : undefined
       : index === 0 ? { name: 'Read', input: { file_path: join(root, 'workspace', 'worker-source.txt') } } : index === 1 ? { name: 'Bash', input: { command: 'printf ordinary-worker > worker.txt', work_lifetime: 'finite', run_in_background: false } } : undefined
-      : index === 0 ? { name: 'REPL', input: { code, description: 'Launch a real worker from a script' } } : undefined
+      : index === 0 ? launch : undefined
     const id = `${worker ? 'worker' : 'parent'}-${index}`
     const stream = Object.assign((async function* () {
       if ((workerArchive || workerAncestry) && worker && index === 1) await workerSettlement

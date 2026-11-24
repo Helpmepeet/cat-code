@@ -37,7 +37,7 @@ import {
 } from 'src/services/analytics/index.js'
 import { ImageSizeError } from './utils/imageValidation.js'
 import { ImageResizeError } from './utils/imageResizer.js'
-import { findToolByName, toolMatchesName, type ToolUseContext } from './Tool.js'
+import { findToolByName, type ToolUseContext } from './Tool.js'
 import { getAcceptedHandoff, isHandoffExecutionFenced } from './app-runtime/handoff.js'
 import type { SystemPrompt } from './utils/systemPromptType.js'
 import { asSystemPrompt } from './utils/systemPromptType.js'
@@ -54,11 +54,10 @@ import type {
 } from './types/message.js'
 import { logError } from './utils/log.js'
 import { workerAnswerPrefixes, workerAnswerText } from './utils/workerAnswer.js'
-import { AGENT_TOOL_NAME } from './tools/AgentTool/constants.js'
 import { retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
 import { codeModeModelTools, hasScriptTool, usesScriptForCodingTools } from './tools/REPLTool/codeModeModelTools.js'
 import { initializeCodeModePreference } from './tools/REPLTool/codeModePreference.js'
-import { isReplModeEnabled, REPL_TOOL_NAME } from './tools/REPLTool/constants.js'
+import { isReplModeEnabled } from './tools/REPLTool/constants.js'
 import {
   PROMPT_TOO_LONG_ERROR_MESSAGE,
   isPromptTooLongMessage,
@@ -84,7 +83,7 @@ import {
 } from './services/api/errorUtils.js'
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { buildProviderInstructionAssembly } from './services/api/instructionAssembly.js'
-import { withScriptAgentGuidance, withScriptFirstToolGuidance } from './constants/promptStyles/scriptToolGuidance.js'
+import { withScriptFirstToolGuidance } from './constants/promptStyles/scriptToolGuidance.js'
 import { withTemporaryHarnessFeedback } from './constants/temporaryHarnessFeedback.js'
 import {
   createAgentPendingMessageAttachment,
@@ -858,9 +857,6 @@ async function* queryLoop(
       !!codeModeHost && !toolUseContext.agentId &&
         appState.codeModePreference?.sessionId === getSessionId() && appState.codeModePreference.enabled,
     )
-    const executableTools = toolUseContext.options.tools
-    const agentTool = executableTools.find(tool => tool.name === AGENT_TOOL_NAME && !tool.isMcp && !tool.mcpInfo)
-    const scriptAgent = agentTool && !modelTools.includes(agentTool) ? agentTool : undefined
     let attemptOutputEscaped = false
     const toolResults: (UserMessage | AttachmentMessage | import('./types/message.js').SystemLocalCommandMessage)[] = []
     // @see https://docs.claude.com/en/docs/build-with-claude/tool-use
@@ -933,7 +929,7 @@ async function* queryLoop(
       ? withScriptFirstToolGuidance(systemPrompt, currentProvider === 'openai')
       : systemPrompt
     const requestSystemPrompt = withTemporaryHarnessFeedback(
-      scriptAgent ? withScriptAgentGuidance(codingPrompt) : codingPrompt,
+      codingPrompt,
     )
     if (
       !compactionResult &&
@@ -1095,7 +1091,6 @@ async function* queryLoop(
               },
               querySource,
               agents: toolUseContext.options.agentDefinitions.activeAgents,
-              ...(scriptAgent && { scriptAgentTools: executableTools }),
               allowedAgentTypes:
                 toolUseContext.options.agentDefinitions.allowedAgentTypes,
               hasAppendSystemPrompt:
@@ -1279,18 +1274,6 @@ async function* queryLoop(
               ) as ToolUseBlock[]
               for (const toolBlock of msgToolUseBlocks) {
                 needsFollowUp = true
-                if (scriptAgent && toolMatchesName(scriptAgent, toolBlock.name)) {
-                  const result = createUserMessage({
-                    content: [{
-                      type: 'tool_result', tool_use_id: toolBlock.id, is_error: true,
-                      content: `Use ${AGENT_TOOL_NAME} through ${REPL_TOOL_NAME} in this session.`,
-                    }],
-                    sourceToolAssistantUUID: message.uuid as UUID,
-                  })
-                  yield result
-                  retainToolOutput(toolResults, result)
-                  continue
-                }
                 toolUseBlocks.push(toolBlock)
                 if (!toolUseContext.abortController.signal.aborted) {
                   streamingToolExecutor?.addTool(toolBlock, message)

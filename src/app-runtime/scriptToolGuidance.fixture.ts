@@ -12,7 +12,7 @@ if (!root || process.cwd() !== join(root, 'workspace') ||
 
 const phase = process.argv[2]
 const gpt = process.env.CLAUDE_CODE_USE_OPENAI === '1'
-const probeDirectAgent = !gpt && phase === 'fresh'
+const probeScriptAgent = !gpt && phase === 'fresh'
 const model = gpt ? 'gpt-6.2-astra' : 'claude-sonnet-4-5'
 const accessToken = 'fixture-access-token'
 const accountId = 'fixture-account'
@@ -29,12 +29,12 @@ const unexpectedFetches: string[] = []
 
 globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input))
-  if (`${url.origin}${url.pathname}` !== endpoint || requests.length >= (probeDirectAgent ? 2 : 1)) {
+  if (`${url.origin}${url.pathname}` !== endpoint || requests.length >= (probeScriptAgent ? 2 : 1)) {
     unexpectedFetches.push(`${url.origin}${url.pathname}`)
     throw new Error('Unexpected Script guidance fixture request')
   }
   requests.push(JSON.parse(input instanceof Request ? await input.text() : String(init?.body)))
-  const invokeHiddenAgent = probeDirectAgent && requests.length === 1
+  const invokeScript = probeScriptAgent && requests.length === 1
   const events = gpt ? [
     { type: 'response.output_text.delta', delta: 'Fixture finished.' },
     { type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 1 } } },
@@ -43,16 +43,21 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
       id: `fixture-message-${requests.length}`, type: 'message', role: 'assistant', model, content: [],
       stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 },
     } },
-    { type: 'content_block_start', index: 0, content_block: invokeHiddenAgent
-      ? { type: 'tool_use', id: 'direct-agent', name: 'Agent', input: {} }
+    { type: 'content_block_start', index: 0, content_block: invokeScript
+      ? { type: 'tool_use', id: 'script-agent', name: 'REPL', input: {} }
       : { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: 0, delta: invokeHiddenAgent
+    { type: 'content_block_delta', index: 0, delta: invokeScript
       ? { type: 'input_json_delta', partial_json: JSON.stringify({
-        description: 'Try a standalone launch', subagent_type: 'general-purpose', prompt: 'Return fixture text.',
+        description: 'Check Script launch routing',
+        code: `for (const name of ['Agent', 'Task']) {
+          const input = { description: 'Fixture canary', subagent_type: 'general-purpose', prompt: 'Never launch this worker.' };
+          try { await tools.call({ name, input }); }
+          catch (error) { output(name + ': ' + error.message); }
+        }`,
       }) }
       : { type: 'text_delta', text: 'Fixture finished.' } },
     { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', delta: { stop_reason: invokeHiddenAgent ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: 'message_delta', delta: { stop_reason: invokeScript ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
     { type: 'message_stop' },
   ]
   return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''), {
@@ -108,7 +113,7 @@ const session = createQueryEngineAppSession({
 try {
   const frames = await Array.fromAsync(session.submitMessage('Look at the isolated workspace.'))
   const result = frames.at(-1)
-  if (unexpectedFetches.length || requests.length !== (probeDirectAgent ? 2 : 1) ||
+  if (unexpectedFetches.length || requests.length !== (probeScriptAgent ? 2 : 1) ||
       result?.type !== 'result' || result.subtype !== 'success') {
     throw new Error(JSON.stringify({ unexpectedFetches, requests: requests.length, result }))
   }
@@ -125,7 +130,7 @@ try {
     prompt,
     scriptDescription: body.tools.find(tool => tool.name === 'REPL')?.description,
     resumePrompt: body.tools.find(tool => tool.name === 'ResumeAgent')?.description,
-    ...(probeDirectAgent && { directAgentResult: requests[1]?.messages }),
+    ...(probeScriptAgent && { scriptAgentResult: requests[1]?.messages }),
   }))
 } finally {
   session.dispose?.()

@@ -5,6 +5,7 @@ import { RuntimeRequestError, encode } from './runtime/protocol.js'
 import { isCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
 import { getBashPrompt } from '../BashTool/prompt.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
+import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
 
 export const MAX_CODE_MODE_TOOL_NAME_CHARS = 512
 
@@ -42,6 +43,7 @@ function currentToolDescription(tool: Tool, context: ToolUseContext): Promise<st
 
 /** Compatibility, not authority: callers must still enter runToolUse. */
 const directOnly = new Map<string, string>([
+  [AGENT_TOOL_NAME, 'Launch subagents with the standalone Agent tool'],
   ['REPL', 'Recursive interpreter execution is not supported'],
   ['ToolSearch', 'Use tools.discover({op:"search",query:"..."}) and tools.discover({op:"describe",name:"..."}) inside Code Mode'],
   ['AskUserQuestion', 'Human answers require a new model decision'],

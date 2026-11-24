@@ -9,7 +9,7 @@ type RequestEvidence = {
   scriptGuidance?: string
   prompt: string
   resumePrompt?: string
-  directAgentResult?: unknown[]
+  scriptAgentResult?: unknown[]
 }
 
 for (const provider of ['claude', 'gpt'] as const) {
@@ -48,27 +48,25 @@ for (const provider of ['claude', 'gpt'] as const) {
       const legacyTools = ['Bash', provider === 'gpt' ? 'apply_patch' : 'Edit', 'Read'].sort()
       for (const phase of ['fresh', 'reopened', 'legacy'] as const) {
         expect(evidence[phase]!.tools).toContain('REPL')
+        expect(evidence[phase]!.tools).toContain('Agent')
+        expect(evidence[phase]!.prompt).toContain("the Agent tool's available-agent list")
+        expect(evidence[phase]!.resumePrompt).toContain('Use Agent to start a fresh subagent')
         expect(evidence[phase]!.tools.filter(name => directTools.includes(name)).sort())
           .toEqual(phase === 'legacy' ? legacyTools : [])
       }
-      expect(evidence.legacy!.tools).toContain('Agent')
-      expect(evidence.legacy!.prompt).toContain("the Agent tool's available-agent list")
-      expect(evidence.legacy!.resumePrompt).toContain('Use Agent to start a fresh subagent')
       expect(evidence.legacy!.scriptGuidance).toContain('direct coding tools remain available')
       const scriptPhases = ['fresh', 'reopened'] as const
       expect(scriptPhases.filter(phase => evidence[phase]!.scriptGuidance?.includes('direct coding tools remain available')))
         .toEqual([])
       for (const phase of scriptPhases) {
         expect(evidence[phase]!.scriptDescription.toLowerCase()).not.toContain('direct coding tools remain available')
-        expect(evidence[phase]!.tools).not.toContain('Agent')
-        expect(evidence[phase]!.prompt).toContain('Discover Agent through REPL')
-        expect(evidence[phase]!.prompt).not.toContain("the Agent tool's available-agent list")
-        expect(evidence[phase]!.resumePrompt).toContain('Use Agent through REPL to start a fresh subagent')
+        expect(evidence[phase]!.prompt).not.toContain('Discover Agent through REPL')
         expect(evidence[phase]!.scriptGuidance).toContain('Use REPL for file and shell operations.')
       }
       if (provider === 'claude') {
-        const serializedResult = JSON.stringify(evidence.fresh!.directAgentResult)
-        expect(serializedResult).toContain('Use Agent through REPL in this session.')
+        const serializedResult = JSON.stringify(evidence.fresh!.scriptAgentResult)
+        expect(serializedResult).toContain('Agent: Agent is direct-only')
+        expect(serializedResult).toContain('Task: Agent is direct-only')
       }
     } finally {
       await rm(root, { recursive: true, force: true })

@@ -56,11 +56,12 @@ test('Script guards a hook-rewritten directory change and loads folder rules bef
   expect(evidence.forbidden).toBeNull()
 }, 30_000)
 
-test('guest-launched Agent has ordinary Auto review and model-visible worker Read delivery', async () => {
+test('direct Agent has ordinary Auto review and model-visible worker Read delivery', async () => {
   const evidence = await scenario('worker')
-  const results = evidence.transcript.filter((message: any) => message.toolUseResult?.kind === 'code-mode').map((message: any) => message.toolUseResult)
-  expect(results[0]?.status).toBe('completed')
-  if (evidence.workerRequests.length !== 3) throw new Error(JSON.stringify({ requests: evidence.apiRequests, result: results[0] }))
+  const parent = evidence.transcript.find((message: any) => message.type === 'user' && message.message.content.some?.(
+    (block: any) => block.type === 'tool_result' && block.tool_use_id === 'parent-0',
+  ))?.toolUseResult
+  expect(parent?.status, JSON.stringify({ requests: evidence.apiRequests, parent })).toBe('completed')
   expect(evidence.workerRequests).toHaveLength(3)
   expect(JSON.stringify(evidence.workerRequests[1].messages)).toContain('model-visible-worker-read-marker')
   expect(evidence.workerOutput).toBe('ordinary-worker')
@@ -130,9 +131,10 @@ test('worker finalization cancels and durably drains its actual background tool 
   expect(evidence.workerAuditChain.some((row: any) => row.codeMode && row.type === 'assistant')).toBe(true)
   expect(evidence.workerAuditChain.some((row: any) => row.codeMode && row.type === 'user')).toBe(true)
   expect(evidence.workerAuditChain.some((row: any) => row.toolUseResult?.kind === 'code-mode' && row.toolUseResult.status === 'cancelled')).toBe(true)
-  const parent = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
-  expect(parent.status).toBe('yielded')
-  expect(JSON.stringify(evidence.apiRequests)).toContain('Worker-owned script outcomes')
+  const parent = evidence.transcript.find((message: any) => message.type === 'user' && message.message.content.some?.(
+    (block: any) => block.type === 'tool_result' && block.tool_use_id === 'parent-0',
+  ))?.toolUseResult
+  expect(parent?.status).toBe('completed')
 }, 30_000)
 
 test('healthy background script returns a task receipt, permits a new turn, and durably delivers final output', async () => {

@@ -13,7 +13,7 @@ async function capture(scenario: Scenario): Promise<{
     input?: Message[]
   }
   planPath: string
-  parentReceipt?: string
+  parentReceipt?: Array<{ type: string; text?: string }>
 }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'plan-mode-reminder-')))
   try {
@@ -63,12 +63,11 @@ for (const scenario of ['script', 'script-specialists', 'reentry', 'specialists'
     const reminder = text.match(/Plan mode is active\.[\s\S]+?<\/system-reminder>/)?.[0] ?? ''
     const agent = request.tools.find(tool => tool.name === 'Agent')
     const names = request.tools.map(tool => tool.name)
-    const scriptFirst = scenario === 'script' || scenario === 'script-specialists'
-    expect(names.includes('Agent')).toBe(!scriptFirst)
-    if (!scriptFirst) {
-      expect(agent?.description.includes('- Explore:')).toBe(scenario === 'specialists')
+    expect(names).toContain('Agent')
+    if (scenario !== 'script') {
+      expect(agent?.description.includes('- Explore:')).toBe(scenario === 'specialists' || scenario === 'script-specialists')
       expect(agent?.description.includes('- Plan:')).toBe(
-        scenario === 'specialists' || scenario === 'restricted' || scenario === 'cached',
+        scenario === 'specialists' || scenario === 'script-specialists' || scenario === 'restricted' || scenario === 'cached',
       )
     }
     expect(reminder).toContain(planPath)
@@ -90,8 +89,9 @@ for (const scenario of ['script', 'script-specialists', 'reentry', 'specialists'
       expect(reminder).not.toContain('using the Write tool')
       expect(reminder).toContain('REPL')
     } else if (scenario === 'script-specialists') {
-      expect(reminder).toContain('Explore agents through REPL')
-      expect(reminder).toContain('Launch Plan agent(s) through REPL')
+      expect(reminder).toContain('Explore subagent type')
+      expect(reminder).toContain('Launch Plan agent')
+      expect(reminder).not.toMatch(/(?:Explore|Plan) agents?[^\n]*through REPL/)
     } else if (scenario === 'reentry') {
       expect(text).toContain('Re-entering Plan Mode')
       expect(names).toContain('apply_patch')
@@ -111,10 +111,9 @@ for (const scenario of ['script', 'script-specialists', 'reentry', 'specialists'
   }, 20_000)
 }
 
-test('a Script-delegated read-only planner returns findings to the parent', async () => {
+test('a directly delegated read-only planner returns findings to a Script-first parent', async () => {
   const { request, parentReceipt } = await capture('plan-worker')
-  expect(parentReceipt).toContain('[Code Mode] completed')
-  expect(parentReceipt).toContain('Planner returned the example findings.')
+  expect(parentReceipt?.map(block => block.text).join('\n')).toContain('Planner returned the example findings.')
   const receipt = request.input?.find(item => item.output?.includes('Plan worker read marker.'))?.output
   expect(receipt).toContain('Plan mode is active.')
   expect(receipt).toContain('Return your findings to your caller')

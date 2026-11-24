@@ -2130,7 +2130,6 @@ export function normalizeMessagesForAPI(
   tools: Tools = [],
   provider: APIProvider = getAPIProvider(),
   planModeCapabilities?: PlanModeCapabilities,
-  agentViaScript = false,
 ): (UserMessage | AssistantMessage)[] {
   // Build set of available tool names for filtering unavailable tool references
   const availableToolNames = new Set(tools.map(t => t.name))
@@ -2418,7 +2417,6 @@ export function normalizeMessagesForAPI(
           const rawAttachmentMessage = normalizeAttachmentForRequest(
             message.attachment,
             planModeCapabilities,
-            agentViaScript,
             availableToolNames,
           )
           const attachmentMessage = checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
@@ -3399,7 +3397,6 @@ export type PlanModeCapabilities = {
   toolNames: ReadonlySet<string>
   agentTypes?: ReadonlySet<string>
   canDiscoverPlanApproval: boolean
-  agentViaScript: boolean
 }
 
 function getPlanModeInstructions(attachment: {
@@ -3515,21 +3512,17 @@ function getPlanModeV2Instructions(attachment: {
   const canPlan = capabilities?.agentTypes?.has(PLAN_AGENT.agentType)
   const canAsk = capabilities?.toolNames.has(ASK_USER_QUESTION_TOOL_NAME)
   const canExit = capabilities?.toolNames.has(ExitPlanModeV2Tool.name)
-  const agentRoute = capabilities?.agentViaScript ? ` through ${REPL_TOOL_NAME}` : ''
-  const exploreLaunch = capabilities?.agentViaScript
-    ? `through ${REPL_TOOL_NAME}** (use background launches for parallel work when available)`
-    : 'IN PARALLEL** (single message, multiple tool calls)'
 
   const exploreAgentCount = canExplore ? getPlanModeV2ExploreAgentCount() : 0
   const exploreGuidance = canExplore ? `
-2. **Launch up to ${exploreAgentCount} ${EXPLORE_AGENT.agentType} agents ${exploreLaunch} to efficiently explore the codebase.
+2. **Launch up to ${exploreAgentCount} ${EXPLORE_AGENT.agentType} agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase.
    - Use 1 agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.
    - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
    - Quality over quantity - ${exploreAgentCount} agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
    - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigating testing patterns` : ''
 
   const agentCount = canPlan ? getPlanModeV2AgentCount() : 0
-  const designGuidance = canPlan ? `Launch ${PLAN_AGENT.agentType} agent(s)${agentRoute} to design the implementation based on the user's intent and your exploration results from Phase 1.
+  const designGuidance = canPlan ? `Launch ${PLAN_AGENT.agentType} agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
 
 You can launch up to ${agentCount} agent(s) in parallel.
 
@@ -3640,9 +3633,7 @@ function getPlanModeInterviewInstructions(attachment: {
   const canExplore = capabilities?.agentTypes?.has(EXPLORE_AGENT.agentType)
   const canExit = capabilities?.toolNames.has(ExitPlanModeV2Tool.name)
   const ask = canAsk ? `use ${ASK_USER_QUESTION_TOOL_NAME}` : 'ask the user directly'
-  const explore = capabilities?.agentViaScript
-    ? ` You can launch ${EXPLORE_AGENT.agentType} agents through ${REPL_TOOL_NAME} to parallelize complex searches without filling your context, though for straightforward queries direct tools are simpler.`
-    : ` You can use the ${EXPLORE_AGENT.agentType} agent type to parallelize complex searches without filling your context, though for straightforward queries direct tools are simpler.`
+  const explore = ` You can use the ${EXPLORE_AGENT.agentType} agent type to parallelize complex searches without filling your context, though for straightforward queries direct tools are simpler.`
 
   const content = `Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
 
@@ -3803,7 +3794,6 @@ export function normalizeAttachmentForAPI(
 function normalizeAttachmentForRequest(
   attachment: Attachment,
   planModeCapabilities?: PlanModeCapabilities,
-  agentViaScript = false,
   declaredTools?: ReadonlySet<string>,
 ): UserMessage[] {
   const resumeView = getWorkspaceResumeAttachmentView(attachment)
@@ -4608,10 +4598,9 @@ You have exited auto mode. The user may now want to interact more directly. You 
     case 'agent_listing_delta': {
       const parts: string[] = []
       if (attachment.addedLines.length > 0) {
-        const route = agentViaScript ? `through ${REPL_TOOL_NAME}` : 'for the Agent tool'
         const header = attachment.isInitial
-          ? `Available agent types ${route}:`
-          : `New agent types are now available ${route}:`
+          ? 'Available agent types for the Agent tool:'
+          : 'New agent types are now available for the Agent tool:'
         parts.push(`${header}\n${attachment.addedLines.join('\n')}`)
       }
       if (attachment.removedTypes.length > 0) {
