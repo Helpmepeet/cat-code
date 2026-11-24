@@ -5,9 +5,9 @@ import { lazySchema } from '../../utils/lazySchema.js'
 import { SCRIPT_BASH_DIRECTORY_GUIDANCE } from '../BashTool/prompt.js'
 import { consumeCodeModeWrapperApproval } from './codeModeAdmission.js'
 import { getScriptToolConcurrency, isReplModeEnabled, REPL_TOOL_NAME } from './constants.js'
+import { MAX_AUTO_SCRIPT_REVIEW_CHARS } from './scriptReviewHistory.js'
 import type { CodeModeResult } from './codeModeHost.js'
 
-const MAX_AUTO_SCRIPT_REVIEW_CHARS = 32_000
 // eslint-disable-next-line custom-rules/no-process-env-top-level -- Match the fixed Bash background schema for this process.
 const backgroundTasksDisabled = isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)
 
@@ -43,7 +43,7 @@ ${SCRIPT_BASH_DIRECTORY_GUIDANCE}
 Each script costs a round trip, and everything it outputs stays in your context: about 150 lines of output cost as much as another script. Gather what your next decision needs in one script, let the code decide follow-up steps it can, and output only the evidence you need. Start another script when a result needs your judgment.
 Inside a script, give each independent read its own sh call unless they form one pipeline, so each result shows whether it failed or found nothing. Keep results in variables instead of rerunning a command. After an edit, output the failing tests and git diff --stat rather than whole files.
 Write short standalone comments above major operations so progress has useful step labels. Do not number the comments or include tool-call tallies.
-Contextual Auto Mode normally admits the Script wrapper locally. Legacy Auto Mode can review the complete submitted source. In Auto Mode, the escaped script projection must fit 32,000 characters. Split larger scripts into smaller persistent cells. Each child call goes through its own permissions, including applicable Auto review of the final arguments.
+In contextual Auto Mode, the first child that needs model review triggers one review of the entire Script and any earlier uncovered cells. A covering decision applies to this cell only. Child calls still go through tool permissions and hooks. Keep the current and uncovered source within 32,000 characters. Legacy Auto Mode uses its own classifier.
 Ordinary results may include data and dataComplete, bounded to 96 KiB. These completeness flags describe guest delivery, not an exhaustive filesystem/search enumeration; honor the underlying data.truncated and pagination semantics. Content delivery is separately bounded and declares contentComplete. Returned structured data is not the selected model output.
 An image returned by Read is sent separately to the model. Script receives a placeholder for the image and yields before further tool calls.
 Run shell commands with sh. It keeps backslashes except for template escapes for backticks and \${. It inserts one quoted shell word per value or array item. Put values in separate argument positions outside quotes. The receiving command decides how to interpret its arguments. Refusals and command failures return isError; a search that finds nothing is not an error. Example:
@@ -68,7 +68,9 @@ State resets on restart, resume, fork, workspace transition, cancellation that d
       result: false, errorCode: 3, message: 'Script source exceeds 128 KiB. Split it into smaller cells. No script code ran.',
     }
     const { getEffectiveAutoMode } = await import('../../utils/permissions/permissions.js')
-    if (getEffectiveAutoMode(context.getAppState().toolPermissionContext) !== null) {
+    const { contextualAutoReviewMode } = await import('../../utils/permissions/contextualAuthorization.js')
+    if (getEffectiveAutoMode(context.getAppState().toolPermissionContext) !== null &&
+        contextualAutoReviewMode() !== 'experimental') {
       const reviewed = /[\r\n\v\f\u0085\u2028\u2029<]/.test(input.code)
         ? JSON.stringify(input.code).replace(/</g, '\\u003c').replace(/\u0085/g, '\\u0085').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
         : input.code

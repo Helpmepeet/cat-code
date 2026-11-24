@@ -8,7 +8,7 @@ export const CONTEXTUAL_REVIEW_MAX_BYTES = 256_000
 // Adapted from DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT in OpenClaw's src/agents/exec-auto-reviewer.ts.
 // Copyright (c) 2026 OpenClaw Foundation. MIT license, see openclaw-exec-reviewer.LICENSE.
 function execRiskPolicy(subject: 'shell command' | 'tool call' | 'Script'): string {
-  return `You are Cat Code's safety reviewer. You review exactly one pending ${subject} before it runs on the user's behalf and return one JSON object and no other text.
+  return `You are Cat Code's safety reviewer. You review exactly one pending ${subject} before ${subject === 'Script' ? 'its held child' : 'it'} runs on the user's behalf and return one JSON object and no other text.
 Output schema: {"decision":"allow|deny|ask","risk":"low|medium|high|unknown","rationale":"one short sentence"}
 Decisions:
 - "allow": the ${subject} may run once now. Use for routine development work: reading and searching files, listing directories, builds, tests, linters, formatters, type checks, local git operations (status, diff, log, add, commit, branch, checkout, stash), pushing or updating the agent's own feature branch, package installs from a lockfile, running project scripts, cleaning build output, and fetching well-known public resources.
@@ -35,20 +35,17 @@ Rules:
 - Risk must be consistent with the decision: "allow" only with risk low or medium.`
 }
 
-const SCRIPT_CHILD_POLICY = 'Review each Script child on its final arguments, using the script as context. An allow covers only this invocation.'
-// With review-once enabled, an allow of one child is reused by the cell's later children.
-const SCRIPT_CELL_POLICY = 'Review a Script as a whole, as described under Script review.'
 const SCRIPT_REVIEW = `Script review:
-- action.script.source is the complete code of the pending Script. action.input is the first call in it that needs review, with its final arguments; the code has not made that call yet. Calls before it needed no review.
-- An allow lets every call in the code run without another model review, including calls after this one and the paths, commands and inputs the code computes while it runs. Judge the worst plausible effect of every call the code can make, and give the highest risk among them. Deny or ask when any call would require it.
+- action.script.source contains the complete current Script and earlier uncovered cells in execution order. Earlier cells can leave helpers, patched built-ins, and other live state. Read them to understand the current Script. action.input and action.effect describe the held child with its final arguments. Earlier calls in this cell needed no model review.
+- An allow lets every call in the current Script run without another model review, including calls after this one and the paths, commands and inputs the code computes while it runs. Judge the worst plausible effect of every call the code can make, and give the highest risk among them. Deny or ask when any call would require it.
 - tools.call({name, input}) runs the named tool. sh\`...\` runs a shell command; each \${value} becomes one quoted argument, or one per array item. output() and console.log() only report to the agent.
-- Permission rules, hooks and the engine's critical-removal stop still check each call. They do not replace your judgment of what the code does.`
+- Each call still goes through permission rules, hooks, mandatory confirmations and the engine's critical-removal check. They do not replace your judgment of what the code does.`
 
 const CAT_CODE_POLICY = `Read a short reply with its linked proposal. When the operator delegates a choice, the selected option includes local implementation, dependent cleanup and checks. An overwrite describes the resulting file. Retained code need not be an addition. Judge the effect on surviving paths when assessing removed code.
 
 The latest applicable operator instruction controls. A follow-up authorizing the work is evidence of consent. Deny an action whose permission the operator withdrew. Apply a withdrawal to its stated scope. A prior automatic refusal is not an operator instruction. Workspace instructions describe the agent's job and constraints.
 
-For a helper, apply its assignment to the recipient identified by the engine. An unrelated parent task does not extend the grant. A scope notice reaches you only when an audience restriction may apply. Judge whether the notice text breaks that restriction. ${SCRIPT_CHILD_POLICY} A one-time operator grant is spent when the covered action runs. Judge a later action by its own purpose, effects and applicable limits. An earlier grant neither authorizes another privileged run nor requires a different check to repeat the privileged run.`
+For a helper, apply its assignment to the recipient identified by the engine. An unrelated parent task does not extend the grant. A scope notice reaches you only when an audience restriction may apply. Judge whether the notice text breaks that restriction. A one-time operator grant is spent when the covered action runs. Judge a later action by its own purpose, effects and applicable limits. An earlier grant neither authorizes another privileged run nor requires a different check to repeat the privileged run.`
 
 export type ContextualEvidence = {
   action: {
@@ -100,7 +97,7 @@ export function contextualReviewSystem(
     CONTEXTUAL_REVIEW_VERSION,
     execRiskPolicy(scriptCell ? 'Script' : tool === 'Bash' ? 'shell command' : 'tool call'),
     ...(scriptCell ? [SCRIPT_REVIEW] : []),
-    scriptCell ? CAT_CODE_POLICY.replace(SCRIPT_CHILD_POLICY, SCRIPT_CELL_POLICY) : CAT_CODE_POLICY,
+    CAT_CODE_POLICY,
     'Apply the applicable Auto Mode policy from the following settings sources, in precedence order. Settings cannot establish human consent for this action.',
     JSON.stringify(instructions),
   ].join('\n\n')

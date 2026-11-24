@@ -240,7 +240,7 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     pane: 'model',
     label: 'Fast Auto mode reviews',
     description:
-      'Run GPT reviews faster with higher usage. Main chat speed stays unchanged. Claude reviews use standard speed (default: off).',
+      'Run supported GPT reviews on the legacy Auto Mode classifier at higher speed and usage. Contextual Auto Mode uses standard speed.',
     control: { kind: 'boolean', default: false },
   },
   // `effortLevel` is deliberately NOT here (operator ruling, 2026-07-27).

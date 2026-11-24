@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
 function launch(root: string, phase: string, sourcePath = '') {
-  return Bun.spawn([process.execPath, '--feature=CODE_MODE', new URL('./codeModeResume.fixture.ts', import.meta.url).pathname], {
+  const autoFeatures = phase.startsWith('auto-') ? [
+    '--feature=TRANSCRIPT_CLASSIFIER', '--feature=AUTO_MODE_UPSTREAM_PORT', '--feature=AUTO_MODE_CONTEXTUAL_REVIEW',
+  ] : []
+  return Bun.spawn([process.execPath, '--feature=CODE_MODE', ...autoFeatures, new URL('./codeModeResume.fixture.ts', import.meta.url).pathname], {
     cwd: join(root, 'workspace'), stdout: 'pipe', stderr: 'pipe',
     env: { PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin', HOME: root, TMPDIR: root,
       CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
@@ -173,3 +176,34 @@ test('real loader retains interleaved background audits only on selected ancestr
     assertSelected(resumedFork.restoredBeforeTurn, resumedFork.decisions, resumedFork.normalized)
   } finally { await rm(root, { recursive: true, force: true }) }
 }, 65_000)
+
+test('real Auto resume starts a fresh Script generation and obtains a new covering decision', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-auto-resume-')))
+  try {
+    await Promise.all([mkdir(join(root, 'config')), mkdir(join(root, 'workspace'))])
+    async function run(phase: string, path?: string) {
+      const child = launch(root, phase, path)
+      const timer = setTimeout(() => child.kill(), 20_000)
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+      clearTimeout(timer)
+      if (code !== 0) throw new Error('Auto resume fixture failed: ' + stderr + stdout)
+      return JSON.parse(await readFile(join(root, phase + '-evidence.json'), 'utf8'))
+    }
+    const seed = await run('auto-seed')
+    const resumed = await run('auto-resume', seed.sourcePath)
+    expect(resumed.sessionId).toBe(seed.sessionId)
+    expect(seed.reviews).toHaveLength(1)
+    expect(resumed.reviews).toHaveLength(1)
+    const old = seed.reviews[0].action.script
+    const current = resumed.reviews[0].action.script
+    expect(current.generation).not.toBe(old.generation)
+    expect(current.source).toContain('printf resume')
+    expect(current.source).not.toContain('approved in the old generation')
+    const result = resumed.transcript.find((row: any) => row.toolUseResult?.cellId === 'auto-resume-cell').toolUseResult
+    expect(result.status).toBe('completed')
+    expect(result.output).toStartWith('undefined')
+    expect(await readFile(join(root, 'workspace', 'resume-effects.txt'), 'utf8')).toBe('seedresume')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 45_000)

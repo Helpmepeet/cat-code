@@ -4,6 +4,10 @@ import { dirname, join } from 'node:path'
 import type { SessionId } from '../types/ids.js'
 const root = process.env.CODE_MODE_TEST_ROOT!
 const phase = process.env.CODE_MODE_RESUME_PHASE!
+const autoSeed = phase === 'auto-seed'
+const autoResume = phase === 'auto-resume'
+const auto = autoSeed || autoResume
+const reviews: unknown[] = []
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated resume fixture required')
 globalThis.fetch = (() => { throw new Error('Network forbidden') }) as unknown as typeof fetch
 ;(globalThis as any).MACRO = { VERSION: 'code-mode-resume-test' }
@@ -18,16 +22,29 @@ mock.module('../services/api/client.js', () => ({
   CLIENT_REQUEST_ID_HEADER: 'x-client-request-id',
   resolveCodexOAuthTokensForLeaseOwner: async () => { throw new Error('OAuth forbidden') },
   getAnthropicClient: async () => ({ beta: { messages: { create: (body: any) => {
+    if (auto && !body.stream) {
+      if (body.tool_choice) throw new Error('Unexpected legacy review')
+      reviews.push(JSON.parse(body.messages.at(-1).content))
+      return Promise.resolve({
+        id: 'review', model: body.model, role: 'assistant', type: 'message',
+        stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 20, output_tokens: 10 },
+        content: [{ type: 'text', text: '{"decision":"allow","risk":"medium","rationale":"Isolated review."}' }],
+      })
+    }
     const index = bodies.length
     bodies.push(JSON.parse(JSON.stringify(body)))
     if (index > 1) throw new Error('Unexpected resume model request')
     const tool = index === 0 ? { name: 'REPL', input: {
-      code: phase === 'crash' ? `var retainedCrash = "must-reset"; ${completedMutation} await tools.call({name:"Bash",input:{command:"printf crash-child",work_lifetime:"finite",run_in_background:false}});` : phase === 'headless-eof-fault' ? 'output("test previous tool outcome");' : phase === 'foreground'
+      code: autoSeed
+        ? 'var retainedCrash = "approved in the old generation"; await tools.call({name:"Bash",input:{command:"printf seed >> resume-effects.txt"}});'
+        : autoResume
+          ? 'output(typeof retainedCrash); await tools.call({name:"Bash",input:{command:"printf resume >> resume-effects.txt"}});'
+          : phase === 'crash' ? `var retainedCrash = "must-reset"; ${completedMutation} await tools.call({name:"Bash",input:{command:"printf crash-child",work_lifetime:"finite",run_in_background:false}});` : phase === 'headless-eof-fault' ? 'output("test previous tool outcome");' : phase === 'foreground'
         ? 'var retainedCrash = "must-reset"; await tools.call({name:"Bash",input:{command:"printf must-not-run",work_lifetime:"finite",run_in_background:false},nothrow:true}); output("foreground-seed");'
         : 'output({prior:typeof retainedCrash});',
       description: 'Isolated incarnation fixture', ...(phase === 'crash' || phase === 'headless-eof-fault' ? { run_in_background: true } : {}),
     } } : undefined
-    const id = phase === 'crash' ? 'crash-cell' : phase === 'foreground' ? 'foreground-cell' : 'restored-cell'
+    const id = autoSeed ? 'auto-seed-cell' : autoResume ? 'auto-resume-cell' : phase === 'crash' ? 'crash-cell' : phase === 'foreground' ? 'foreground-cell' : 'restored-cell'
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `${id}-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
       yield { type: 'content_block_start', index: 0, content_block: tool ? { type: 'tool_use', id, name: tool.name, input: {} } : { type: 'text', text: '' } }
@@ -98,15 +115,16 @@ if (phase === 'headless-eof-fault' || phase === 'headless-legacy') {
   process.exit(0)
 }
 let initialMessages: any[] = []
-if (phase !== 'crash' && phase !== 'foreground') {
+if (phase !== 'crash' && phase !== 'foreground' && !autoSeed) {
   const source = process.env.CODE_MODE_SOURCE_PATH!
   const restored = await (await import('../utils/conversationRecovery.js')).loadConversationForResume(undefined, source, { interruptedTurn: 'defer', mutable: false })
   if (!restored) throw new Error('Real transcript resume failed')
   initialMessages = restored.messages
-  if (phase === 'resume' && restored.sessionId) switchSession(restored.sessionId as SessionId, dirname(source))
+  if ((phase === 'resume' || autoResume) && restored.sessionId) switchSession(restored.sessionId as SessionId, dirname(source))
 }
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'bypassPermissions', isBypassPermissionsModeAvailable: true } }
+if (auto) state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto', isAutoModeAvailable: true } }
 if (phase === 'foreground') state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, alwaysDenyRules: { session: ['Bash'] } } }
 if (phase === 'crash') state = { ...state, toolPermissionContext: {
   ...state.toolPermissionContext, mode: 'default',
@@ -136,7 +154,7 @@ if (phase === 'crash' || phase === 'foreground') await (await import('../utils/t
 const decisions = (await import('../utils/permissions/permissionDecisionContext.js')).collectPermissionDecisionContexts(restoredBeforeTurn)
 const normalize = (await import('../utils/messages.js')).normalizeMessagesForAPI
 const normalized = { firstParty: normalize(restoredBeforeTurn, [], 'firstParty'), openai: normalize(restoredBeforeTurn, [], 'openai') }
-await writeFile(join(root, phase === 'crash' || phase === 'foreground' ? 'ready.json' : `${phase}-evidence.json`), JSON.stringify({ sourcePath, sessionId: getSessionId(), bodies, transcript, restoredBeforeTurn, decisions, normalized }))
+await writeFile(join(root, phase === 'crash' || phase === 'foreground' ? 'ready.json' : `${phase}-evidence.json`), JSON.stringify({ sourcePath, sessionId: getSessionId(), bodies, reviews, transcript, restoredBeforeTurn, decisions, normalized }))
 if (phase === 'crash') await new Promise(() => {})
 session.dispose?.()
 await storage.flushSessionStorage()

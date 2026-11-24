@@ -72,6 +72,14 @@ export type PathCommand =
   | 'sha1sum'
   | 'md5sum'
 
+export function criticalRemovalDeny(command: 'rm' | 'rmdir', path: string): PermissionResult {
+  return {
+    behavior: 'deny',
+    message: `${command} on '${path}' was refused: it would remove a root, home, or top-level system directory, which Auto mode never runs. Remove the specific files or project folders you need instead.`,
+    decisionReason: { type: 'other', reason: `Auto mode refuses ${command} on critical path: ${path}` },
+  }
+}
+
 /**
  * Checks if an rm/rmdir command targets dangerous paths that should always
  * require explicit user approval, even if allowlist rules exist.
@@ -101,16 +109,7 @@ function checkDangerousRemovalPaths(
       ? cleanPath
       : resolve(cwd, cleanPath)
 
-    if (refuseCritical && isCriticalRemovalPath(absolutePath)) {
-      return {
-        behavior: 'deny',
-        message: `${command} on '${absolutePath}' was refused: it would remove a root, home, or top-level system directory, which Auto mode never runs. Remove the specific files or project folders you need instead.`,
-        decisionReason: {
-          type: 'other',
-          reason: `Auto mode refuses ${command} on critical path: ${absolutePath}`,
-        },
-      }
-    }
+    if (refuseCritical && isCriticalRemovalPath(absolutePath)) return criticalRemovalDeny(command, absolutePath)
 
     // Check if this is a dangerous path (using the non-symlink-resolved path)
     if (!dangerous && isDangerousRemovalPath(absolutePath)) {

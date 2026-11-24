@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mock } from 'bun:test'
+import { existsSync } from 'node:fs'
 import { appendFile, mkdir, writeFile, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
@@ -98,8 +99,12 @@ const peerAction = scenario === 'main-peer-create'
   : scenario === 'main-peer-send'
     ? { name: 'SendToPeer', input: { peers: ['Worker'], text: 'Update the file.' } }
     : undefined
-// Review-once ask: Script child reviews ask and the person answers Yes.
-const scriptAskApproved = process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_ASK === 'approve'
+const scriptAsk = process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_ASK
+const scriptAskApproved = scriptAsk === 'approve'
+const scriptGuard = scenario === 'native-script-guard'
+const scriptAuthorityChange = process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_AUTHORITY
+const taskModel = process.env.CONTEXTUAL_AUTO_TEST_MODEL ?? 'claude-sonnet-5-5'
+const taskRoutes: string[] = []
 const scriptCells: { code: string; run_in_background?: boolean }[] | undefined =
   process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_CELLS && JSON.parse(process.env.CONTEXTUAL_AUTO_TEST_SCRIPT_CELLS)
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated fixture required')
@@ -114,6 +119,27 @@ const surface = scenario.includes('-sdk-') ? 'sdk' : scenario.includes('-termina
 const effect = () => readFile(join(cwd, 'effects.txt'), 'utf8').catch(() => null)
 const hookMarker = join(cwd, 'permission-hook-ran')
 const reviewUnavailable = scenario.endsWith('-unavailable')
+if (scriptGuard) {
+  // Catch an erroneous dispatch outside the permission engine without letting
+  // the generated shell payload reach eval, even on the prior revision.
+  const prefix = join(root, 'shell-dispatch-tripwire')
+  await writeFile(prefix, `#!/bin/sh
+case "$1" in
+  *SCRIPT_GUARD_TRIPWIRE*) printf 'unsafe dispatch' >> "${cwd}/guard-dispatched"; exit 77 ;;
+esac
+exec /bin/bash -c "$1"
+`, { mode: 0o700 })
+  process.env.CLAUDE_CODE_SHELL_PREFIX = prefix
+}
+if (scenario === 'native-script-log-inspection') {
+  await mkdir(join(cwd, 'logs'))
+  for (let index = 0; index < 11; index++) await writeFile(join(cwd, 'logs', `row-${index}.log`), `report-line-${index}\n`)
+}
+if (scenario === 'native-script-cleanup') {
+  await mkdir(join(cwd, 'dist'))
+  await writeFile(join(cwd, 'dist', 'artifact'), 'disposable artifact')
+}
+
 const observeReviewUsage = ['direct-unavailable', 'direct-invalid', 'direct-denied'].includes(scenario)
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
 if (outsideSymbol) await writeFile(join(root, 'symbols.txt'), 'outside')
@@ -300,7 +326,10 @@ mock.module('../services/api/client.js', () => ({
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
         : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
         : tool === 'REPL' ? 'allow'
-        : scriptAskApproved ? 'ask'
+        : scriptAsk ? 'ask'
+        : scenario === 'native-script-mixed-review' &&
+          (content?.action?.input?.command?.includes('fixtureProtected') ||
+            (JSON.stringify(body.system).includes('Script review:') && content?.action?.script?.source?.includes('fixtureProtected'))) ? 'deny'
         : scenario.includes('withdrawn') || staleParent || rewrittenEdit || questionReply || mainEdit || peerAction || directPatch || sensitiveWrite ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
@@ -325,7 +354,9 @@ mock.module('../services/api/client.js', () => ({
           await backgroundVerdict.promise
         }
         review.elapsedMs = performance.now() - start
-        if (reviewUnavailable) throw new Error('Synthetic provider outage')
+        if (reviewUnavailable || (scenario === 'native-script-retry' && requests.length === 1)) {
+          throw new Error('Synthetic provider outage')
+        }
         return { id: 'classifier', type: 'message', role: 'assistant', model: body.model,
           content: contextual
             ? [{ type: 'text', text: scenario === 'direct-invalid' ? 'unparseable result' : JSON.stringify({ decision: verdict, risk: 'medium', rationale: 'Isolated review decision.' }) }]
@@ -336,6 +367,7 @@ mock.module('../services/api/client.js', () => ({
           usage: { input_tokens: 20, output_tokens: 10 } }
       })()
     }
+    taskRoutes.push(client.provider)
     if (captureScriptResults) {
       for (const message of body.messages) {
         if (!Array.isArray(message.content)) continue
@@ -369,7 +401,7 @@ mock.module('../services/api/client.js', () => ({
       : questionReply ? command
       : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }))
     const stream = Object.assign((async function* () {
-      yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
+      yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
       if (queuedBrowserRead && index === 0) {
         const { enqueue } = await import('../utils/messageQueueManager.js')
         enqueue({ mode: 'prompt', value: scenario.endsWith('-stop') ? queuedReadWithdrawal : 'Also summarize the results afterwards.' })
@@ -404,7 +436,7 @@ const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
 const hasBackgroundScript = scriptCells?.some(cell => cell.run_in_background)
-if (hasBackgroundScript || (routed && scenario.endsWith('-direct')) || workerRouting || loadSkill || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
+if (hasBackgroundScript || scriptAuthorityChange === 'instruction' || (routed && scenario.endsWith('-direct')) || workerRouting || loadSkill || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
@@ -417,6 +449,9 @@ state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mod
     alwaysAskRules: { session: ['Skill(fixture-auto-skill)'] },
     alwaysAllowRules: { session: ['Skill(fixture-auto-skill)'] },
   }),
+  ...(scenario === 'native-script-mandatory' && { alwaysAskRules: { session: ['Bash(printf mandatory >> effects.txt)'] } }),
+  ...(scenario === 'native-script-deny-rule' && { alwaysDenyRules: { session: ['Bash(printf blocked:*)'] } }),
+  ...(scenario === 'native-script-no-human' && { shouldAvoidPermissionPrompts: true }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
 } }
 const assignment = verifiedParentEdit ? 'Update .vscode/settings.json from old to new.'
@@ -446,17 +481,29 @@ let transcript: readonly any[] = []
 const runtimeLimits = scenario.startsWith('wait-') ? { foregroundMs: 900, backgroundMs: 900, runtimeMs: 900 }
   : scenario === 'timeout-host' ? { foregroundMs: 350, backgroundMs: 350, runtimeMs: 1500 }
   : scenario === 'timeout-runtime' ? { foregroundMs: 1500, backgroundMs: 1500, runtimeMs: 350 } : undefined
+const { enqueue: enqueueScriptInstruction } = await import('../utils/messageQueueManager.js')
+let scriptAuthorityChanged = false
 const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> = {
   cwd, tools: [REPLTool, BashTool, FileReadTool, FileEditTool, ...(questionReply ? [AskUserQuestionTool] : [])], commands: [], mcpClients: [], agents: [],
-  getAppState: () => state, setAppState: update => {
+  getAppState: () => {
+    if (scriptAuthorityChange && !scriptAuthorityChanged && existsSync(join(cwd, 'effects.txt'))) {
+      scriptAuthorityChanged = true
+      if (scriptAuthorityChange === 'instruction') enqueueScriptInstruction({ mode: 'prompt', value: 'Stop. Keep the remaining files untouched.' })
+      else state = { ...state, toolPermissionContext: { ...state.toolPermissionContext,
+        ...(scriptAuthorityChange === 'mode' ? { mode: 'default' as const }
+          : { alwaysDenyRules: { session: ['Bash(printf after:*)'] } }),
+      } }
+    }
+    return state
+  }, setAppState: update => {
     state = update(state)
     if (Object.values(state.tasks).some((task: any) => task.delivery === 'delivered')) resolveBackground()
   }, readFileCache: createFileStateCacheWithSizeLimit(20),
-  userSpecifiedModel: 'claude-sonnet-5-5',
+  userSpecifiedModel: taskModel,
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
     return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
-      hasBackgroundScript || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || observeReviewUsage || scenario.startsWith('trial-'))
+      hasBackgroundScript || scriptAuthorityChange === 'instruction' || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || observeReviewUsage || scenario.startsWith('trial-'))
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
@@ -841,7 +888,10 @@ if (observeReviewUsage) {
 const workerDatabase = workerRouting && await Bun.file(join(cwd, 'fixture.db')).exists()
   ? Bun.spawnSync(['sqlite3', 'fixture.db', 'SELECT value FROM fixture'], { cwd }).stdout.toString().trim() : undefined
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
-  scenarios: scenario, requests, prompts, reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
+  scenarios: scenario, requests, prompts, taskRoutes, scriptAuthorityChanged,
+  ...(scriptGuard && { guardDispatched: existsSync(join(cwd, 'guard-dispatched')) }),
+  ...(scenario === 'native-script-cleanup' && { artifactExists: existsSync(join(cwd, 'dist', 'artifact')) }),
+  reviewEvents, savedReviews, transcript, waitMs, observedBeforeReply, hookRanBeforeHuman, sdkResults, postedNotices, peerRequests,
   ...(captureScriptResults && { modelToolResults }),
   ...(reviewUsage && { reviewUsage }),
   ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),

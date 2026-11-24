@@ -270,17 +270,17 @@ for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
     const review = proof.requests.find((request: any) => request.tool === 'Bash')
     expect(review?.contextual).toBe(true)
     expect(proof.effect).toBeNull()
-    const latest = proof.requests.filter((request: any) => request.tool === 'Bash').at(-1)
-    expect(latest.content.conversation.at(-1)).toMatchObject({ origin: 'operator', text: expect.stringContaining('Stop') })
-    const expected = { toolUseId: review.content.action.attempt, outcome: 'blocked',
-      reviewer: expect.objectContaining({ verdict: 'deny' }) }
+    const reviews = proof.requests.filter((request: any) => request.tool === 'Bash')
+    const script = scenario === 'background-withdrawal'
+    expect(reviews).toHaveLength(script ? 1 : 2)
+    if (!script) expect(reviews.at(-1).content.conversation.at(-1)).toMatchObject({
+      origin: 'operator', text: expect.stringContaining('Stop'),
+    })
+    const expected = { toolUseId: review.content.action.attempt, outcome: script ? 'inconclusive' : 'blocked',
+      reviewer: expect.objectContaining({ verdict: script ? 'allow' : 'deny' }) }
     expect(proof.reviewEvents).toContainEqual(expect.objectContaining(expected))
     expect(proof.savedReviews).toContainEqual(expect.objectContaining(expected))
-    if (scenario === 'background-withdrawal') {
-      const completed = proof.scripts.at(-1)
-      expect(completed.output).toContain('Bash: Denied by Auto Mode. Isolated review decision.')
-      expect(completed.calls[0].error).toBe('Denied by Auto Mode. Isolated review decision.')
-    }
+    if (script) expect(proof.scripts.at(-1).output).toContain('Script authority or permissions changed.')
   }, 30_000)
 }
 
@@ -421,13 +421,6 @@ for (const scenario of ['native-scope-notice', 'native-scope-notice-note', 'nati
       row.sourceToolAssistantUUID && row.message?.content?.some?.((block: any) => block.type === 'tool_result'))).toBe(true)
   }, 30_000)
 }
-
-test('contextual Auto admits Script once and reviews both Bash children', async () => {
-  const proof = await run('native-script-children')
-  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash', 'Bash'])
-  expect(proof.prompts).toHaveLength(0)
-  expect(proof.effect).toBe('effecteffect')
-}, 30_000)
 
 for (const [scenario, reviewed] of [['logs', false], ['peer', false], ['credential', true], ['nested-token', true]] as const) {
   test(`outside-workspace Bash search (${scenario}) follows the credential boundary`, async () => {
@@ -640,7 +633,7 @@ test('a throwing Script child reports a failed review to the model', async () =>
   expect(proof.requests).toHaveLength(1)
   expect(proof.prompts).toHaveLength(0)
   expect(proof.effect).toBeNull()
-  expect(proof.modelToolResults['action-0']).toContain('Bash: Auto Mode review failed. Auto Mode could not complete this review.')
+  expect(proof.modelToolResults['action-0']).toContain('Bash: Auto Mode review failed. Auto Mode could not complete the Script review.')
 }, 30_000)
 
 test('a throwing Script child reports a human skip to the model', async () => {
@@ -682,7 +675,8 @@ test('a correction queued during the human wait invalidates the held write', asy
   const result = await run('wait-correction')
   expect(result.observedBeforeReply).toBeNull()
   expect(result.effect).toBeNull()
-  expect(result.scripts[0].calls[0].status).toBe('failed')
+  expect(result.requests).toHaveLength(1)
+  expect(result.scripts[0].calls[0].status).toBe('blocked')
 }, 30_000)
 
 for (const state of ['verified', 'stale']) {

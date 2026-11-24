@@ -26,6 +26,7 @@ import {
 } from '../../utils/bash/commands.js'
 import { parseCommandRaw, type Node } from '../../utils/bash/parser.js'
 import { tryParseShellCommand } from '../../utils/bash/shellQuote.js'
+import { isAutoModeActive } from '../../utils/permissions/autoModeState.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
@@ -69,13 +70,14 @@ import { SandboxManager } from '../../utils/sandbox/sandbox-adapter.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { windowsPathToPosixPath } from '../../utils/windowsPaths.js'
 import { BashTool } from './BashTool.js'
+import { findCriticalRemoval } from './criticalRemoval.js'
 import { checkCommandOperatorPermissions } from './bashCommandHelpers.js'
 import {
   bashCommandIsSafeAsync_DEPRECATED,
   stripSafeHeredocSubstitutions,
 } from './bashSecurity.js'
 import { checkPermissionMode } from './modeValidation.js'
-import { checkPathConstraints } from './pathValidation.js'
+import { checkPathConstraints, criticalRemovalDeny } from './pathValidation.js'
 import { checkSedConstraints } from './sedValidation.js'
 import { shouldUseSandbox } from './shouldUseSandbox.js'
 
@@ -1380,6 +1382,20 @@ function checkSandboxAutoAllow(
   input: z.infer<typeof BashTool.inputSchema>,
   toolPermissionContext: ToolPermissionContext,
 ): PermissionResult {
+  return checkExplicitBashRestrictions(input, toolPermissionContext) ?? {
+    behavior: 'allow',
+    updatedInput: input,
+    decisionReason: {
+      type: 'other',
+      reason: 'Auto-allowed with sandbox (autoAllowBashIfSandboxed enabled)',
+    },
+  }
+}
+
+function checkExplicitBashRestrictions(
+  input: z.infer<typeof BashTool.inputSchema>,
+  toolPermissionContext: ToolPermissionContext,
+): PermissionResult | undefined {
   const command = input.command.trim()
 
   // Check for explicit deny/ask rules on the full command (exact + prefix)
@@ -1455,16 +1471,7 @@ function checkSandboxAutoAllow(
       },
     }
   }
-  // No explicit rules, so auto-allow with sandbox
 
-  return {
-    behavior: 'allow',
-    updatedInput: input,
-    decisionReason: {
-      type: 'other',
-      reason: 'Auto-allowed with sandbox (autoAllowBashIfSandboxed enabled)',
-    },
-  }
 }
 
 // Read-only tools that agents call by absolute path, often because a shell
@@ -1828,6 +1835,7 @@ async function checkBashPermission(
   onOutsideRead: (() => void) | undefined,
 ): Promise<PermissionResult> {
   let appState = context.getAppState()
+  const contextualScript = context.contextualAutoAttempt?.mode === 'experimental' && context.contextualScriptGrant
 
   // 0. AST-based security parse. This replaces both tryParseShellCommand
   // (the shell-quote pre-check) and the bashCommandIsSafe misparsing gate.
@@ -1852,6 +1860,25 @@ async function checkBashPermission(
     : feature('TREE_SITTER_BASH_SHADOW') && !shadowEnabled
       ? null
       : await parseCommandRaw(input.command)
+  const policyMode = appState.toolPermissionContext.mode
+  if (policyMode === 'auto' ||
+      (policyMode === 'plan' && isAutoModeActive())) {
+    const guard = findCriticalRemoval(input.command, getCwd(), typeof astRoot === 'object' ? astRoot : null)
+    if (guard?.kind === 'removal') return criticalRemovalDeny(guard.command, guard.path)
+    if (guard?.kind === 'limit') {
+      const reason = 'Auto Mode could not check this shell command for critical removals. Split it into simpler commands.'
+      return { behavior: 'deny', message: reason, decisionReason: { type: 'other', reason } }
+    }
+  }
+  if (contextualScript) {
+    // Some Bash paths ask before building all subcommand decisions. Keep
+    // explicit asks and denies ahead of any whole-Script allowance.
+    const restriction = checkExplicitBashRestrictions(input, appState.toolPermissionContext)
+    const exact = bashToolCheckExactMatchPermission(input, appState.toolPermissionContext)
+    if (exact.behavior === 'deny') return exact
+    if (restriction) return restriction
+    if (exact.behavior === 'ask') return exact
+  }
   const lookupAssignmentAstRoot = astRoot
   let astResult: ParseForSecurityResult = astRoot
     ? parseForSecurityFromAst(input.command, astRoot)
@@ -2475,6 +2502,15 @@ async function checkBashPermission(
   )
   if (pathResult.behavior === 'deny') {
     return pathResult
+  }
+
+  // Preserve mandatory asks that path validation or normalized
+  // subcommands found before Bash combines their decisions.
+  if (contextualScript) {
+    const mandatory = [pathResult, ...subcommandPermissionDecisions].find(result =>
+      result.behavior === 'ask' && (result.decisionReason?.type === 'rule' ||
+        result.decisionReason?.type === 'safetyCheck' && !result.decisionReason.classifierApprovable))
+    if (mandatory) return mandatory
   }
 
   const askSubresult = subcommandPermissionDecisions.find(

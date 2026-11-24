@@ -89,7 +89,18 @@ export class CodeModeDispatch {
   }
 
   stop(reason: string): void { this.fence ??= reason }
-  get blockedReason(): string | undefined { return this.fence }
+  get blockedReason(): string | undefined {
+    if (this.fence) return this.fence
+    const grant = this.context.contextualScriptGrant
+    if (grant?.releaseRefusal) {
+      this.permissionBlocked = true
+      this.stop(grant.releaseRefusal)
+    } else if (grant?.granted && !grant.granted.isCurrent(this.context)) {
+      this.permissionBlocked = true
+      this.stop('Script authority or permissions changed. Author a new Script using the current instructions and permissions.')
+    }
+    return this.fence
+  }
   get hasBash(): boolean { return findToolByName(this.currentContext.options.tools, BashTool.name) === BashTool }
   get currentContext(): ToolUseContext {
     const refreshed = this.context.options.refreshMcpRuntime?.()
@@ -223,8 +234,9 @@ export class CodeModeDispatch {
       else if (this.activeReads.size >= this.readConcurrency) await Promise.race(this.activeReads)
       else break
     }
-    if (this.fence || this.context.abortController.signal.aborted) {
-      throw new RuntimeRequestError(this.fence ?? 'Code Mode execution cancelled')
+    const blocked = this.blockedReason
+    if (blocked || this.context.abortController.signal.aborted) {
+      throw new RuntimeRequestError(blocked ?? 'Code Mode execution cancelled')
     }
     const tool = resolveCodeModeTool(this.context, name)
     if (shellHelper && tool !== BashTool) throw new RuntimeRequestError('sh requires a granted Bash tool')
@@ -269,7 +281,7 @@ export class CodeModeDispatch {
             else this.waitingCalls.delete(call)
             this.syncHumanWait()
           },
-          getCodeModeDispatchFence: () => this.fence ?? (this.context.abortController.signal.aborted ? 'Code Mode execution cancelled' : undefined),
+          getCodeModeDispatchFence: () => this.blockedReason ?? (this.context.abortController.signal.aborted ? 'Code Mode execution cancelled' : undefined),
           messages: [...this.context.messages, assistant],
           onToolExecutionStart: () => {
             this.context.onToolExecutionStart?.()
@@ -401,10 +413,12 @@ export class CodeModeDispatch {
               this.permissionFailures.set(call, call.error)
               if (!this.fence?.startsWith('Approval feedback')) this.permissionBlocked = true
               if (humanDisposition === 'skip') {
+                if (this.context.contextualScriptGrant?.granted) this.stop('A covered Script action was declined. Author a new Script for any remaining work.')
                 this.cancelQueuedAfterRefusal('Queued action cancelled after the user skipped an earlier action.')
                 call.status = 'skipped'
                 result = { ...(result as Record<string, unknown>), permission: 'skipped' }
               } else if (contextual && outcome === 'automode-blocked') {
+                if (this.context.contextualScriptGrant?.granted) this.stop('A covered Script action was denied. Author a new Script after resolving the refusal.')
                 this.cancelQueuedAfterRefusal('Queued action cancelled after Auto Mode denied an earlier action.')
                 result = { ...(result as Record<string, unknown>), permission: 'denied' }
               } else {

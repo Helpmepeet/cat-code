@@ -570,7 +570,6 @@ export class CodeModeHost {
     const cellContext = {
       ...context, abortController: controller, codeModeBackgroundCell: background,
       launchingTurnSignal: context.launchingTurnSignal ?? context.abortController.signal,
-      contextualParentScriptSource: input.code,
       contextualScriptGrant: scriptGrant,
       onHumanPermissionWait: (waiting: boolean) => this.runtime?.setHumanWait(cellId, waiting),
     }
@@ -708,7 +707,7 @@ export class CodeModeHost {
       this.runtime = undefined
       this.generation = randomUUID()
     } finally {
-      if (scriptGrant?.granted) scriptGrant.history.clearSources()
+      if (scriptGrant.granted) scriptGrant.history.clearSources()
       dispatch.stop('Cell execution ended')
       result.calls = structuredClone(dispatch.calls)
       result.changedFiles = [...changedFiles.values()]
