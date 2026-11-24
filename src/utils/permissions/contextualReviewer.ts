@@ -76,8 +76,9 @@ export function buildContextualReview(
   profile: { model: string; provider: APIProvider },
   instructions?: unknown,
   trimOlderConversation = false,
+  scriptCell = false,
 ): { options: SideQueryOptions; requestDigest: string; promptDigest: string } | undefined {
-  const system = contextualReviewSystem(evidence.action.tool, instructions)
+  const system = contextualReviewSystem(evidence.action.tool, instructions, scriptCell)
   const budget = CONTEXTUAL_REVIEW_MAX_BYTES - Buffer.byteLength(system)
   const fullContent = JSON.stringify(evidence)
   const content = Buffer.byteLength(fullContent) <= budget ? fullContent

@@ -294,6 +294,8 @@ export type ToolUseContext = {
   >
   contextualWorkerAssignment?: import('./utils/permissions/contextualAuthority.js').ContextualWorkerAssignment
   contextualParentScriptSource?: string
+  /** One per Script cell: a contextual allow recorded here covers the cell's later children. */
+  contextualScriptGrant?: import('./utils/permissions/contextualAuthorization.js').ContextualScriptGrant
   contextualAutoAttempt?: import('./utils/permissions/contextualAuthorization.js').ContextualAutoAttempt
   onHumanPermissionWait?: (waiting: boolean) => void
 

@@ -565,6 +565,7 @@ export class CodeModeHost {
       ...context, abortController: controller, codeModeBackgroundCell: background,
       launchingTurnSignal: context.launchingTurnSignal ?? context.abortController.signal,
       contextualParentScriptSource: input.code,
+      contextualScriptGrant: { cellId, generation: this.generation },
       onHumanPermissionWait: (waiting: boolean) => this.runtime?.setHumanWait(cellId, waiting),
     }
     const dispatch = new CodeModeDispatch(cellContext, canUseTool, { cellId, generation: this.generation },

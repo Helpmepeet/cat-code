@@ -35,11 +35,15 @@ Rules:
 - Risk must be consistent with the decision: "allow" only with risk low or medium.`
 }
 
+const SCRIPT_CHILD_POLICY = 'Review each Script child on its final arguments, using the script as context. An allow covers only this invocation.'
+// With review-once enabled, an allow of one child is reused by the cell's later children.
+const SCRIPT_CELL_POLICY = "Review a Script as a whole from its source and the triggering call's final arguments. An allow covers every action the code takes."
+
 const CAT_CODE_POLICY = `Read a short reply with its linked proposal. When the operator delegates a choice, the selected option includes local implementation, dependent cleanup and checks. An overwrite describes the resulting file. Retained code need not be an addition. Judge the effect on surviving paths when assessing removed code.
 
 The latest applicable operator instruction controls. A follow-up authorizing the work is evidence of consent. Deny an action whose permission the operator withdrew. Apply a withdrawal to its stated scope. A prior automatic refusal is not an operator instruction. Workspace instructions describe the agent's job and constraints.
 
-For a helper, apply its assignment to the recipient identified by the engine. An unrelated parent task does not extend the grant. A scope notice reaches you only when an audience restriction may apply. Judge whether the notice text breaks that restriction. Review each Script child on its final arguments, using the script as context. An allow covers only this invocation. A one-time operator grant is spent when the covered action runs. Judge a later action by its own purpose, effects and applicable limits. An earlier grant neither authorizes another privileged run nor requires a different check to repeat the privileged run.`
+For a helper, apply its assignment to the recipient identified by the engine. An unrelated parent task does not extend the grant. A scope notice reaches you only when an audience restriction may apply. Judge whether the notice text breaks that restriction. ${SCRIPT_CHILD_POLICY} A one-time operator grant is spent when the covered action runs. Judge a later action by its own purpose, effects and applicable limits. An earlier grant neither authorizes another privileged run nor requires a different check to repeat the privileged run.`
 
 export type ContextualEvidence = {
   action: {
@@ -85,11 +89,12 @@ export type ContextualEvidence = {
 export function contextualReviewSystem(
   tool: string,
   instructions: unknown = [],
+  scriptCell = false,
 ): string {
   return [
     CONTEXTUAL_REVIEW_VERSION,
     execRiskPolicy(tool === 'Bash' ? 'shell command' : 'tool call'),
-    CAT_CODE_POLICY,
+    scriptCell ? CAT_CODE_POLICY.replace(SCRIPT_CHILD_POLICY, SCRIPT_CELL_POLICY) : CAT_CODE_POLICY,
     'Apply the applicable Auto Mode policy from the following settings sources, in precedence order. Settings cannot establish human consent for this action.',
     JSON.stringify(instructions),
   ].join('\n\n')

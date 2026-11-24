@@ -153,6 +153,25 @@ function readMode(): ReviewMode | undefined {
   return 'experimental'
 }
 
+/**
+ * One per Script cell. When review-once is enabled, the first contextual allow
+ * of a child records what it was judged under; later children of the same cell
+ * reuse it while the operator conversation, policy and instructions are unchanged.
+ */
+export type ContextualScriptGrant = {
+  readonly cellId: string
+  readonly generation: string
+  granted?: {
+    authority: ReturnType<typeof readContextualAuthority>
+    policy: ToolPermissionContext
+    instructions: ReturnType<typeof getSourcedAutoModeInstructions>
+  }
+}
+
+function scriptReviewOnce(): boolean {
+  return process.env.CLAUDE_CODE_CONTEXTUAL_SCRIPT_REVIEW === 'once'
+}
+
 function withoutDefaultRules(instructions: ReturnType<typeof getSourcedAutoModeInstructions>) {
   return instructions.flatMap(({ source, ...sections }) => {
     const custom = Object.fromEntries(Object.entries(sections).flatMap(([section, entries]) => {
@@ -186,6 +205,9 @@ export async function createContextualAttempt(
   const instructions = getSourcedAutoModeInstructions()
   const principal = codeModeToolPrincipal(tool, context)
   const { cellId, generation } = assistant.codeMode ?? {}
+  const holder = context.contextualScriptGrant
+  const scriptGrant = mode === 'experimental' && scriptReviewOnce() && cellId && generation &&
+    holder?.cellId === cellId && holder.generation === generation ? holder : undefined
   let allowedOutsideRead = false
   function isReviewException(): boolean {
     if (mcp) return tool.contextualClosedWorldRead === true
@@ -355,6 +377,24 @@ export async function createContextualAttempt(
     actionAllowed = false
   }
 
+  function coveredByScript(): PermissionDecision | undefined {
+    const granted = scriptGrant?.granted
+    if (!granted) return undefined
+    const latest = readContextualAuthority(context, peerParent)
+    if (latest.stopped || latest.pendingOperatorInput || !isDeepStrictEqual(latest, granted.authority) ||
+        !isDeepStrictEqual(latest, authority) || !isDeepStrictEqual(policy, granted.policy) ||
+        !isDeepStrictEqual(instructions, granted.instructions)) return undefined
+    reviewStarted = true
+    reviewedInstructions = true
+    if (containsCredentialMaterial(JSON.stringify(redactReviewFields(action)))) {
+      return denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
+    }
+    const reason = 'Covered by the Auto Mode review of this script.'
+    emit('allowed', reason)
+    actionAllowed = true
+    return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
+  }
+
   async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
     reviewStarted = true
     if (authority.pendingOperatorInput) return stale('A user message is waiting to be applied.')
@@ -411,7 +451,7 @@ export async function createContextualAttempt(
     const evidence = redactReviewFields(rawEvidence)
     const reviewerInstructions = redactReviewFields(withoutDefaultRules(instructions))
     const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
-    const built = buildContextualReview(evidence, profile, reviewerInstructions, true)
+    const built = buildContextualReview(evidence, profile, reviewerInstructions, true, Boolean(scriptGrant))
     if (!built) {
       if (!buildContextualReview({ action: evidence.action, conversation: [] }, profile)) {
         return denyReview('This action exceeds the Auto Mode review limit. Split this action into smaller calls and retry.')
@@ -455,6 +495,7 @@ export async function createContextualAttempt(
     }
     emit('allowed', reason)
     actionAllowed = true
+    if (scriptGrant) scriptGrant.granted = { authority: structuredClone(authority), policy, instructions }
     return { behavior: 'allow', updatedInput: input, decisionReason }
   }
 
@@ -469,7 +510,7 @@ export async function createContextualAttempt(
     get requiresHuman() { return requiresHuman },
     get reviewFailure() { return reviewFailure },
     get reviewedSkillGrants() { return reviewedSkillGrants },
-    review: () => review ??= reviewHeldAction(),
+    review: () => review ??= Promise.resolve(coveredByScript() ?? reviewHeldAction()),
     needsInstructionReview,
     reviewFollowUp() {
       renewReview()
