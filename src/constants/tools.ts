@@ -52,6 +52,8 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   ...(process.env.USER_TYPE === 'ant' ? [] : [RESUME_AGENT_TOOL_NAME]),
   ASK_USER_QUESTION_TOOL_NAME,
   TASK_STOP_TOOL_NAME,
+  ENTER_WORKTREE_TOOL_NAME,
+  EXIT_WORKTREE_TOOL_NAME,
   // Prevent recursive workflow execution inside subagents.
   ...(feature('WORKFLOW_SCRIPTS') ? [WORKFLOW_TOOL_NAME] : []),
   // Desktop session tools, appended by the sidecar's session controller. They
@@ -102,8 +104,6 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   ASK_PARENT_SESSION_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
   TOOL_SEARCH_TOOL_NAME,
-  ENTER_WORKTREE_TOOL_NAME,
-  EXIT_WORKTREE_TOOL_NAME,
 ] as const
 
 /**

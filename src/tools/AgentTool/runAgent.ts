@@ -414,6 +414,7 @@ async function* runAgentInCleanupScope({
   mcpRuntimeSnapshot,
   worktreePath,
   cwd,
+  parentWorktreePath,
   seededMessagesForPersistence,
   resume,
   description,
@@ -503,8 +504,9 @@ async function* runAgentInCleanupScope({
    * snapshot itself; with no live MCP source at all, the parent's static
    * options are used as before. */
   mcpRuntimeSnapshot?: McpRuntimeSnapshot
-  /** Explicit cwd override. Persisted to metadata for resume restoration. */
+  /** Assigned cwd. Persisted to metadata for resume restoration. */
   cwd?: string
+  parentWorktreePath?: string
   /** Worktree path if the agent was spawned with isolation: "worktree".
    * Persisted to metadata so resume can restore the correct cwd. */
   worktreePath?: string
@@ -1205,6 +1207,7 @@ async function* runAgentInCleanupScope({
       provider: resolvedAgentProvider,
       agentName: workerName,
       ...(cwd && { assignedCwd: cwd }),
+      ...(parentWorktreePath && { parentWorktreePath }),
       ...(worktreePath && { worktreePath }),
       ...(description && { description }),
       parentSessionId: getSessionId(),

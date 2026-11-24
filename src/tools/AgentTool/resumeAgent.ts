@@ -17,6 +17,7 @@ import { assembleToolPool } from '../../tools.js'
 import { asAgentId } from '../../types/ids.js'
 import { runWithAgentContext } from '../../utils/agentContext.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
+import { getCurrentWorktreeSession } from '../../utils/worktree.js'
 import { logForDebugging } from '../../utils/debug.js'
 import {
   createUserMessage,
@@ -152,6 +153,10 @@ async function resumeAgentBackgroundLocked(
   ])
   if (!transcript) {
     throw new TranscriptNotFoundError(agentId)
+  }
+  if (meta?.parentWorktreePath !== undefined &&
+      (!meta.assignedCwd || meta.parentWorktreePath !== getCurrentWorktreeSession()?.worktreePath)) {
+    throw new Error('Resume the worker from the worktree where it started.')
   }
   const resumedMessages = filterWhitespaceOnlyAssistantMessages(
     filterOrphanedThinkingOnlyMessages(
@@ -357,6 +362,7 @@ async function resumeAgentBackgroundLocked(
     ...(isResumedFork && { useExactTools: true }),
     // Re-persist so metadata survives runAgent's writeAgentMetadata overwrite
     ...(resumedCwd !== undefined ? { cwd: resumedCwd } : {}),
+    parentWorktreePath: meta?.parentWorktreePath,
     worktreePath: resumedWorktreePath,
     description: meta?.description,
     agentName: meta?.agentName,

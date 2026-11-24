@@ -19,6 +19,7 @@ import {
   switchSession,
 } from '../../bootstrap/state.js'
 import { asAgentId, asSessionId } from '../../types/ids.js'
+import type { ToolUseContext } from '../../Tool.js'
 import {
   fileHistoryMakeSnapshot,
   fileHistoryRewind,
@@ -37,7 +38,7 @@ import {
 } from '../../utils/sessionStorage.js'
 import { setCwd } from '../../utils/Shell.js'
 import { getCwd } from '../../utils/cwd.js'
-import { setWorkspaceTransitionCoordinator } from '../../utils/workspaceTransition.js'
+import { beginWorkspaceToolUse, setWorkspaceTransitionCoordinator } from '../../utils/workspaceTransition.js'
 import { releaseActiveTranscriptLease } from '../../utils/transcriptLease.js'
 import { restoreWorktreeSession } from '../../utils/worktree.js'
 import { EnterWorktreeTool } from './EnterWorktreeTool.js'
@@ -132,6 +133,33 @@ describe('EnterWorktreeTool transcript path', () => {
     }
     rmSync(repoDir, { recursive: true, force: true })
     rmSync(configDir, { recursive: true, force: true })
+  })
+
+  test('worktree changes refuse workers and do not race with live tools or tasks', async () => {
+    let tasks = {}
+    const context = {
+      getAppState: () => ({ tasks }), abortController: new AbortController(),
+    } as ToolUseContext
+    const input = { name: 'transition-test' }
+    await expect(EnterWorktreeTool.call(input, { ...context, agentId: asAgentId('worker') })).rejects.toThrow('Only the main agent')
+    tasks = { worker: { type: 'local_agent', status: 'running' } }
+    await expect(EnterWorktreeTool.call(input, context)).rejects.toThrow('background work')
+    expect(getCwd()).toBe(repoDir)
+    tasks = {}
+    const release = beginWorkspaceToolUse()!
+    try {
+      await expect(EnterWorktreeTool.call(input, context)).rejects.toThrow('running tools')
+    } finally { release() }
+    setWorkspaceTransitionCoordinator({
+      begin: async () => { expect(beginWorkspaceToolUse()).toBeNull() },
+      finish: async () => {},
+    })
+    await EnterWorktreeTool.call(input, context)
+    const worktree = getCwd()
+    await expect(ExitWorktreeTool.call({ action: 'keep' }, { ...context, agentId: asAgentId('worker') })).rejects.toThrow('Only the main agent')
+    expect(getCwd()).toBe(worktree)
+    await ExitWorktreeTool.call({ action: 'keep' }, context)
+    expect(getCwd()).toBe(repoDir)
   })
 
   test('ExitWorktree cannot restore cwd or remove work before host admission', async () => {

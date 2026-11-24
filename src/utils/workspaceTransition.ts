@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getCwdState } from '../bootstrap/state.js'
+import type { ToolUseContext } from '../Tool.js'
 
 export type WorkspaceTransitionCoordinator = {
   begin(operationId: string): Promise<void>
@@ -7,6 +8,37 @@ export type WorkspaceTransitionCoordinator = {
 }
 
 let coordinator: WorkspaceTransitionCoordinator | null = null
+let worktreeChanging = false
+let activeTools = 0
+
+export const WORKTREE_BUSY = 'Wait for running tools and background work to finish before changing worktrees.'
+
+export function beginWorkspaceToolUse(): (() => void) | null {
+  if (worktreeChanging) return null
+  activeTools++
+  return () => { activeTools-- }
+}
+
+export async function withWorktreeTransition<T>(context: ToolUseContext | undefined, change: () => T | Promise<T>): Promise<T> {
+  if (context?.agentId) throw new Error('Only the main agent can change worktrees.')
+  const checkIdle = () => {
+    if (activeTools || Object.values(context?.getAppState().tasks ?? {}).some(
+      task => task.status === 'running' || task.status === 'pending',
+    )) throw new Error(WORKTREE_BUSY)
+    context?.abortController.signal.throwIfAborted()
+  }
+  if (worktreeChanging) throw new Error(WORKTREE_BUSY)
+  checkIdle()
+  worktreeChanging = true
+  try {
+    return await withWorkspaceTransition(() => {
+      checkIdle()
+      return change()
+    })
+  } finally {
+    worktreeChanging = false
+  }
+}
 
 export function setWorkspaceTransitionCoordinator(next: WorkspaceTransitionCoordinator | null): void {
   coordinator = next

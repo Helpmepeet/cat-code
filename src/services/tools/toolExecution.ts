@@ -38,6 +38,7 @@ import {
   getCodeEditToolDecisionCounter,
   getStatsStore,
 } from '../../bootstrap/state.js'
+import { beginWorkspaceToolUse, WORKTREE_BUSY } from '../../utils/workspaceTransition.js'
 import {
   buildCodeEditToolAttributes,
   isCodeEditingTool,
@@ -540,8 +541,20 @@ export async function* runToolUse(
     }) }
     return
   }
-  try { yield* runToolUseUnscheduled(toolUse, assistantMessage, canUseTool, toolUseContext) }
-  finally { release() }
+  const leaveWorkspace = control ? () => {} : beginWorkspaceToolUse()
+  try {
+    if (!leaveWorkspace) {
+      yield { message: createUserMessage({
+        content: [{ type: 'tool_result', tool_use_id: toolUse.id, content: WORKTREE_BUSY, is_error: true }],
+        sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+      }) }
+      return
+    }
+    yield* runToolUseUnscheduled(toolUse, assistantMessage, canUseTool, toolUseContext)
+  } finally {
+    leaveWorkspace?.()
+    release()
+  }
 }
 
 async function* runToolUseUnscheduled(

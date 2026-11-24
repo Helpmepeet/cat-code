@@ -11,7 +11,7 @@ import { findCanonicalGitRoot } from '../../utils/git.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { getPlanSlug, getPlansDirectory } from '../../utils/plans.js'
 import { setCwd } from '../../utils/Shell.js'
-import { withWorkspaceTransition } from '../../utils/workspaceTransition.js'
+import { withWorktreeTransition } from '../../utils/workspaceTransition.js'
 import {
   pinSessionProjectDir,
   saveWorktreeState,
@@ -79,13 +79,13 @@ export const EnterWorktreeTool: Tool<InputSchema, Output> = buildTool({
   },
   renderToolUseMessage,
   renderToolResultMessage,
-  async call(input) {
+  async call(input, context) {
     // Validate not already in a worktree created by this session
     if (getCurrentWorktreeSession()) {
       throw new Error('Already in a worktree session')
     }
 
-    return withWorkspaceTransition(async () => {
+    return withWorktreeTransition(context, async () => {
       // Resolve to main repo root so worktree creation works from within a worktree
       const mainRepoRoot = findCanonicalGitRoot(getCwd())
       if (mainRepoRoot && mainRepoRoot !== getCwd()) {

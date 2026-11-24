@@ -54,7 +54,7 @@ import { teleportToRemote } from '../../utils/teleport.js';
 import { getAssistantMessageContentLength } from '../../utils/tokens.js';
 import { getWorkerUsage, startWorkerUsage } from '../../utils/workerUsage.js';
 import { createAgentId } from '../../utils/uuid.js';
-import { createAgentWorktree, hasWorktreeChanges, removeAgentWorktree } from '../../utils/worktree.js';
+import { createAgentWorktree, getCurrentWorktreeSession, hasWorktreeChanges, removeAgentWorktree } from '../../utils/worktree.js';
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js';
 import { BackgroundHint } from '../BashTool/UI.js';
 import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js';
@@ -980,7 +980,9 @@ export const AgentTool = buildTool({
       };
     }
 
-    let validatedCwd: string | undefined = cwd
+    const parentWorktreePath = effectiveIsolation === 'worktree'
+      ? undefined : getCurrentWorktreeSession()?.worktreePath
+    let validatedCwd: string | undefined = cwd ?? parentWorktreePath
     if (validatedCwd !== undefined) {
       if (effectiveIsolation === 'worktree') {
         throw new Error(
@@ -1213,6 +1215,7 @@ export const AgentTool = buildTool({
         useExactTools: true
       }),
       cwd: validatedCwd,
+      parentWorktreePath,
       worktreePath: worktreeInfo?.worktreePath,
       description,
       agentName,

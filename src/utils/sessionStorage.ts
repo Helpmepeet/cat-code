@@ -467,9 +467,10 @@ export type AgentMetadata = {
   provider?: import('./model/providers.js').APIProvider
   /** Friendly system/user-facing name for targeting this subagent. */
   agentName?: string
-  /** Explicit cwd override assigned by AgentTool call (mutually exclusive with
-   * worktree isolation). */
+  /** Assigned cwd for this worker (mutually exclusive with worktree isolation). */
   assignedCwd?: string
+  /** The parent checkout this non-isolated worker was launched in. */
+  parentWorktreePath?: string
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a

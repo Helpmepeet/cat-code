@@ -18,7 +18,7 @@ import { lazySchema } from '../../utils/lazySchema.js'
 import { getPlansDirectory } from '../../utils/plans.js'
 import { setCwd } from '../../utils/Shell.js'
 import { saveWorktreeState } from '../../utils/sessionStorage.js'
-import { withWorkspaceTransition } from '../../utils/workspaceTransition.js'
+import { withWorktreeTransition } from '../../utils/workspaceTransition.js'
 import {
   cleanupWorktree,
   getCurrentWorktreeSession,
@@ -227,7 +227,7 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
   },
   renderToolUseMessage,
   renderToolResultMessage,
-  async call(input) {
+  async call(input, context) {
     const session = getCurrentWorktreeSession()
     if (!session) {
       // validateInput guards this, but the session is module-level mutable
@@ -261,7 +261,7 @@ export const ExitWorktreeTool: Tool<InputSchema, Output> = buildTool({
       originalHeadCommit,
     )) ?? { changedFiles: 0, commits: 0 }
 
-    return withWorkspaceTransition(async () => {
+    return withWorktreeTransition(context, async () => {
       if (input.action === 'keep') {
         await keepWorktree()
         restoreSessionToOriginalCwd(originalCwd, projectRootIsWorktree)
