@@ -355,6 +355,8 @@ export type ToolUseContext = {
    * re-inject the same instruction file dozens of times.
    */
   loadedNestedMemoryPaths?: Set<string>
+  /** Scoped rule paths in the current model's workspace instruction prefix. */
+  eagerProjectRulePaths?: ReadonlySet<string>
   dynamicSkillDirTriggers?: Set<string>
   /** Skill names surfaced via skill_discovery this session. Telemetry only (feeds was_discovered). */
   discoveredSkillNames?: Set<string>

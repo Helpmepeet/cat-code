@@ -1,5 +1,5 @@
 import { mock, spyOn } from 'bun:test'
-import { chmod, writeFile, mkdir, readFile, rmdir } from 'node:fs/promises'
+import { chmod, writeFile, mkdir, readFile, rmdir, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { UUID } from 'node:crypto'
 import type { TaskStateBase } from '../Task.js'
@@ -9,6 +9,29 @@ if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspac
 globalThis.fetch = (() => { throw new Error('Network forbidden') }) as unknown as typeof fetch
 ;(globalThis as any).MACRO = { VERSION: 'code-mode-test' }
 const scenario = process.env.CODE_MODE_TEST_SCENARIO ?? 'coding'
+const compactScopedRules = scenario === 'scoped-rules-compact'
+const oversizedScopedRules = scenario === 'scoped-rules-over-cap'
+if (compactScopedRules || oversizedScopedRules) {
+  await mkdir('.claude/rules', { recursive: true })
+  await mkdir('.cat-code/rules', { recursive: true })
+  await mkdir('src/app-runtime', { recursive: true })
+  await writeFile('src/app-runtime/before.txt', 'scoped-read-before-compact\n')
+  await writeFile('src/app-runtime/after.txt', 'scoped-read-after-compact\n')
+  const padding = oversizedScopedRules ? 'Rule padding.\n'.repeat(330) : ''
+  await writeFile('.claude/rules/migration.md', '---\npaths:\n  - src/app-runtime/**\n---\nSCOPED_MIGRATION_POLICY\n' + padding)
+  await writeFile('.cat-code/rules/docs.md', '---\npaths:\n  - docs/**\n---\nSCOPED_DOCS_POLICY\n' + padding)
+}
+if (compactScopedRules) {
+  await writeFile('src/app-runtime/mentioned.txt', 'File attached through the initial prompt.\n')
+  await mkdir('src/included')
+  await writeFile('src/included/sample.txt', 'scoped-read-with-explicit-include\n')
+  await writeFile('.claude/rules/included.md', '---\npaths:\n  - src/included/**\n---\nSCOPED_INCLUDED_POLICY\n')
+  await writeFile('CLAUDE.md', '@.claude/rules/included.md\n')
+  const externalRules = join(root, 'external-rules')
+  await mkdir(externalRules)
+  await writeFile(join(externalRules, 'external.md'), '---\npaths:\n  - unrelated/**\n---\nUNAPPROVED_EXTERNAL_POLICY\n')
+  await symlink(externalRules, '.claude/rules/linked', 'dir')
+}
 const shellExample = scenario === 'shell-example'
 const exampleVariant = process.env.CODE_MODE_EXAMPLE_VARIANT
 if (shellExample) {
@@ -312,7 +335,14 @@ mock.module('../services/api/client.js', () => ({
   getAnthropicClient: async () => ({ beta: { messages: { create: (body: any) => {
     modelBodies.push(JSON.parse(JSON.stringify(body)))
     const index = requests++
-    const script = shellExample ? index === 0
+    const scopedRead = index === 0 ? 'before' : compactScopedRules && index === 3 ? 'after' : undefined
+    const script = compactScopedRules || oversizedScopedRules
+      ? scopedRead && [
+        'output((await tools.call({name:"Read",input:{file_path:"src/app-runtime/' + scopedRead + '.txt"}})).data);',
+        ...(compactScopedRules && index === 0
+          ? ['output((await tools.call({name:"Read",input:{file_path:"src/included/sample.txt"}})).data);'] : []),
+      ].join('\n')
+      : shellExample ? index === 0
       ? body.tools.find((tool: { name: string }) => tool.name === 'REPL')?.description?.match(/Example:\n(const defs = [\s\S]*?)\nWrite patches/)?.[1] ?? (() => { throw new Error('Missing rendered REPL example') })()
       : undefined : isCodeFirstReopen ? undefined : scenario === 'code-first'
       ? index === 0 ? scripts[0] : undefined
@@ -346,11 +376,11 @@ mock.module('../services/api/client.js', () => ({
       : scenario === 'background-direct' && index === 2
         ? { name: 'Bash', input: { command: 'printf foreground >> effect-order.txt', work_lifetime: 'finite', run_in_background: false } }
         : script ? { name: 'REPL', input: { code: script, description: 'Run isolated coding fixture', ...(isBackground && index === 0 ? { run_in_background: true } : {}) } } : undefined
-    if (index > (isMidTurnQuota ? 18 : isRunningQuota ? 9 : scenario === 'background' ? 4 : 3)) throw new Error('Unexpected provider request')
+    if (index > (isMidTurnQuota ? 18 : isRunningQuota ? 9 : compactScopedRules ? 5 : scenario === 'background' ? 4 : 3)) throw new Error('Unexpected provider request')
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
       yield { type: 'content_block_start', index: 0, content_block: invocation ? { type: 'tool_use', id: `cell-${index}`, name: invocation.name, input: {} } : { type: 'text', text: '' } }
-      yield { type: 'content_block_delta', index: 0, delta: invocation ? { type: 'input_json_delta', partial_json: JSON.stringify(invocation.input) } : { type: 'text_delta', text: 'Finished.' } }
+      yield { type: 'content_block_delta', index: 0, delta: invocation ? { type: 'input_json_delta', partial_json: JSON.stringify(invocation.input) } : { type: 'text_delta', text: compactScopedRules && index === 2 ? '<summary>Read a synthetic fixture.</summary>' : 'Finished.' } }
       yield { type: 'content_block_stop', index: 0 }
       if (scenario === 'skill-queued' && index === 0) {
         yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'stale-script', name: 'REPL', input: {} } }
@@ -450,7 +480,8 @@ if (isCodeFirstReopen) {
   setSessionPersistenceDisabled(process.env.CODE_MODE_TEST_EPHEMERAL === '1')
 }
 const commands = isSkillCase
-  ? await (await import('../commands.js')).getCommands(process.cwd()) : []
+  ? await (await import('../commands.js')).getCommands(process.cwd())
+  : compactScopedRules ? [(await import('../commands/compact/index.js')).default] : []
 let state = getDefaultAppState()
 if (isBackgroundQuota) {
   const { getSessionId } = await import('../bootstrap/state.js')
@@ -612,12 +643,20 @@ let sawFence = false
 let fenceEntered!: () => void
 const fenced = new Promise<void>(resolve => { fenceEntered = resolve })
 const unsubscribe = effectsOwner.subscribe(() => { if (effectsOwner.blocked) { sawFence = true; fenceEntered() } })
-try { await controller.submit('Run the coding fixture.') }
+try {
+  await controller.submit(compactScopedRules
+    ? 'Run the coding fixture with @src/app-runtime/mentioned.txt'
+    : 'Run the coding fixture.')
+}
 catch (error) {
   if (scenario !== 'background-delivery-failure' || !(error instanceof Error) || !error.message.includes('Isolated receipt storage failure')) throw error
   storageTurnFailure = error.message
 }
 const firstTurnFenced = session.hasUnresolvedToolEffects()
+if (compactScopedRules) {
+  await controller.submit('/compact Force a model-generated summary.')
+  await controller.submit('Read the second synthetic file.')
+}
 firstTurnEnded = true
 const firstTurnTasks = JSON.parse(JSON.stringify(state.tasks))
 let shellTaskOutput: string | undefined

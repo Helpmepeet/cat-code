@@ -39,6 +39,38 @@ function scriptResultInRequest(messages: BetaMessageParam[], toolUseId: string):
   return result.content
 }
 
+test('workspace rules precede the first Script read and stay in the prefix through compaction', async () => {
+  await withCodingEvidence('scoped-rules-compact', async ({ modelBodies, transcript }) => {
+    expect(transcript).toContainEqual(expect.objectContaining({ type: 'system', subtype: 'compact_boundary' }))
+    for (const [request, marker] of [[0, 'before'], [3, 'after']] as const) {
+      const input = JSON.stringify(modelBodies[request].messages)
+      expect(input.match(/SCOPED_MIGRATION_POLICY/g)).toHaveLength(1)
+      expect(input.match(/SCOPED_INCLUDED_POLICY/g)).toHaveLength(1)
+      expect(input).toContain('SCOPED_DOCS_POLICY')
+      expect(input).not.toContain('UNAPPROVED_EXTERNAL_POLICY')
+      if (marker === 'before') expect(input).toContain('File attached through the initial prompt.')
+      const result = scriptResultInRequest(modelBodies[request + 1].messages, 'cell-' + request)
+      expect(result).toContain('scoped-read-' + marker + '-compact')
+      if (marker === 'before') expect(result).toContain('scoped-read-with-explicit-include')
+      expect(result).toContain('[Code Mode] completed')
+      expect(JSON.stringify(modelBodies[request + 1].messages).match(/SCOPED_MIGRATION_POLICY/g)).toHaveLength(1)
+    }
+  })
+}, 35_000)
+
+test('workspace rules above the combined cap still fence the first matching Script read', async () => {
+  await withCodingEvidence('scoped-rules-over-cap', async ({ modelBodies }) => {
+    expect(JSON.stringify(modelBodies[0].messages)).not.toContain('SCOPED_MIGRATION_POLICY')
+    expect(JSON.stringify(modelBodies[0].messages)).not.toContain('SCOPED_DOCS_POLICY')
+    const result = scriptResultInRequest(modelBodies[1].messages, 'cell-0')
+    expect(result).toContain('[Code Mode] yielded')
+    expect(result).not.toContain('scoped-read-before-compact')
+    const followUp = JSON.stringify(modelBodies[1].messages)
+    expect(followUp).toContain('SCOPED_MIGRATION_POLICY')
+    expect(followUp).not.toContain('SCOPED_DOCS_POLICY')
+  })
+}, 35_000)
+
 test('Script discovery ranks exact names and aliases above text matches', async () => {
   await withCodingEvidence('search-exact', async evidence => {
     const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode')?.toolUseResult

@@ -18,9 +18,14 @@ test('worktree transitions change main and reviewer instructions at the next mod
     git('config', 'user.email', 'fixture@example.invalid')
     git('config', 'user.name', 'Fixture')
     await writeFile(join(workspace, 'CLAUDE.md'), 'WORKTREE_POLICY: Ask before publishing the synthetic package.\n')
-    git('add', 'CLAUDE.md')
+    const rules = join(workspace, '.cat-code', 'rules')
+    await mkdir(rules, { recursive: true })
+    const scopedRule = join(rules, 'package.md')
+    await writeFile(scopedRule, '---\npaths:\n  - packages/**\n---\nWORKTREE_SCOPED_POLICY\n')
+    git('add', 'CLAUDE.md', '.cat-code/rules/package.md')
     git('commit', '-q', '-m', 'synthetic fixture')
     await writeFile(join(workspace, 'CLAUDE.md'), 'ROOT_POLICY: Ask before deleting the synthetic package.\n')
+    await writeFile(scopedRule, '---\npaths:\n  - packages/**\n---\nROOT_SCOPED_POLICY\n')
     const child = Bun.spawn([
       process.execPath, '--feature=TRANSCRIPT_CLASSIFIER', '--feature=AUTO_MODE_UPSTREAM_PORT',
       new URL('./worktreeInstructions.fixture.ts', import.meta.url).pathname,
@@ -51,6 +56,9 @@ test('worktree transitions change main and reviewer instructions at the next mod
       expect(request.prefix).toContain(expected)
       expect(request.prefix).not.toContain(absent)
       expect(request.prefix).toContain('CLAUDE.md')
+      expect(request.prefix).toContain(expected.replace('_POLICY', '_SCOPED_POLICY'))
+      expect(request.prefix).not.toContain(absent.replace('_POLICY', '_SCOPED_POLICY'))
+      expect(request.prefix).toContain('packages')
     }
     const worktree = evidence.models[1]!.cwd
     expect(worktree).not.toBe(workspace)

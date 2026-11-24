@@ -6,7 +6,12 @@ import type {
 } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { UUID } from 'node:crypto'
 import type { CanUseToolFn } from './hooks/useCanUseTool.js'
-import { getUserContext, getUserContextRevision } from './context.js'
+import {
+  eagerProjectRulePathsKey,
+  getUserContext,
+  getUserContextRevision,
+  type UserContext,
+} from './context.js'
 import { poolManagesCredentials } from './services/api/codexAccountPool.js'
 import {
   registerCodexLease,
@@ -325,7 +330,7 @@ function retainToolOutput(rows: Message[], message: Message): void {
 export type QueryParams = {
   messages: Message[]
   systemPrompt: SystemPrompt
-  userContext: { [k: string]: string }
+  userContext: UserContext
   systemContext: { [k: string]: string }
   canUseTool: CanUseToolFn
   toolUseContext: ToolUseContext
@@ -544,10 +549,18 @@ async function* queryLoop(
       // Keep per-run context such as coordinator state and the session date.
       // Only explicitly invalidated instruction files change between requests.
       const { claudeMd: _previousInstructions, ...otherContext } = userContext
-      userContext = { ...otherContext, ...(refreshed.claudeMd ? { claudeMd: refreshed.claudeMd } : {}) }
+      userContext = {
+        ...otherContext,
+        ...(refreshed.claudeMd ? { claudeMd: refreshed.claudeMd } : {}),
+        [eagerProjectRulePathsKey]: refreshed[eagerProjectRulePathsKey],
+      }
       userContextRevision = nextUserContextRevision
     }
-    toolUseContext = { ...toolUseContext, autoModeInstructionContext: userContext.claudeMd ?? null }
+    toolUseContext = {
+      ...toolUseContext,
+      autoModeInstructionContext: userContext.claudeMd ?? null,
+      eagerProjectRulePaths: userContext.claudeMd ? userContext[eagerProjectRulePathsKey] : undefined,
+    }
     const {
       messages,
       autoCompactTracking,

@@ -236,13 +236,17 @@ export const getSystemContext = memoize(
   },
 )
 
+export const eagerProjectRulePathsKey = Symbol('eagerProjectRulePaths')
+export type UserContext = Record<string, string> & {
+  // Keep the paths with the prefix snapshot without rendering them as a section.
+  [eagerProjectRulePathsKey]?: ReadonlySet<string>
+}
+
 /**
  * This context is prepended to each conversation, and cached for the duration of the conversation.
  */
 export const getUserContext = memoize(
-  async (): Promise<{
-    [k: string]: string
-  }> => {
+  async (): Promise<UserContext> => {
     const startTime = Date.now()
     logForDiagnosticsNoPII('info', 'user_context_started')
 
@@ -265,9 +269,10 @@ export const getUserContext = memoize(
       duration_ms: Date.now() - memoryFilesStart,
       memory_file_count: memoryFiles.length,
     })
+    const eagerProjectRulePaths = new Set<string>()
     const claudeMd = shouldDisableClaudeMd
       ? null
-      : getClaudeMds(memoryFiles)
+      : getClaudeMds(memoryFiles, eagerProjectRulePaths)
     // Cache for the auto-mode classifier (yoloClassifier.ts reads this
     // instead of importing claudemd.ts directly, which would create a
     // cycle through permissions/filesystem → permissions → yoloClassifier).
@@ -281,6 +286,7 @@ export const getUserContext = memoize(
 
     return {
       ...(claudeMd && { claudeMd }),
+      ...(eagerProjectRulePaths.size && { [eagerProjectRulePathsKey]: eagerProjectRulePaths }),
       currentDate: `Today's date is ${getLocalISODate()}.`,
       timezone: `Host local timezone: ${getTimeZone()}.`,
     }

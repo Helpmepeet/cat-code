@@ -51,16 +51,18 @@ async function until(read: () => boolean, timeout = 60_000) {
     await Bun.sleep(10)
   }
 }
-function sse(projectPath?: string, readPath?: string) {
-  const content = readPath ? { type: 'tool_use', id: 'baseline-read', name: 'Read', input: {} }
+function sse(projectPath?: string, readPath?: string, script?: { code: string; description: string }) {
+  const content = script ? { type: 'tool_use', id: 'destination-script', name: 'REPL', input: {} }
+    : readPath ? { type: 'tool_use', id: 'baseline-read', name: 'Read', input: {} }
     : projectPath ? { type: 'tool_use', id: 'baseline-jump', name: 'JumpToProject', input: {} } : { type: 'text', text: '' }
   const events = [
-    { type: 'message_start', message: { id: 'baseline-message', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
+    { type: 'message_start', message: { id: script ? 'baseline-script-message' : 'baseline-message', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
     { type: 'content_block_start', index: 0, content_block: content },
-    { type: 'content_block_delta', index: 0, delta: readPath ? { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: readPath }) }
+    { type: 'content_block_delta', index: 0, delta: script ? { type: 'input_json_delta', partial_json: JSON.stringify(script) }
+      : readPath ? { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: readPath }) }
       : projectPath ? { type: 'input_json_delta', partial_json: JSON.stringify({ destination: projectPath }) } : { type: 'text_delta', text: 'Fixture complete.' } },
     { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', delta: { stop_reason: projectPath ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } },
+    { type: 'message_delta', delta: { stop_reason: projectPath || script ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } },
     { type: 'message_stop' },
   ]
   return events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')
@@ -90,7 +92,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
   if (fixture === 'short' || retained) {
     const hook = join(root, 'resume-hook.ts')
     writeFileSync(hook, `console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'FRESH_HANDOFF_REQUIRED_RESUME_POLICY' } }))`)
-    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpToProject'] },
+    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: fixture === 'short' ? ['JumpToProject', 'Read'] : ['JumpToProject'] },
       hooks: { SessionStart: [{ matcher: 'resume', hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
   }
   writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n')
@@ -99,6 +101,11 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     writeFileSync(join(cwd, '.cat-code', 'project.json'), JSON.stringify({
       aliases: ['gaming lab'], description: 'A local gaming workspace',
     }))
+    mkdirSync(join(cwd, '.claude', 'rules'), { recursive: true })
+    writeFileSync(join(cwd, '.claude', 'rules', 'migration.md'),
+      '---\npaths:\n  - src/app-runtime/**\n---\nDESTINATION_MIGRATION_POLICY\n')
+    mkdirSync(join(cwd, 'src', 'app-runtime'), { recursive: true })
+    writeFileSync(join(cwd, 'src', 'app-runtime', 'sample.txt'), 'destination-script-read-succeeded\n')
   }
   if (queuedHuman) writeFileSync(join(root, 'queued-read.txt'), 'Read completed before the queued workspace request.\n')
   const hookLog = join(root, 'instructions.jsonl')
@@ -114,6 +121,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
   }
   let sourceRequests = 0, destinationRequests = 0, retainedReplayCount = 0, validationCalls = 0, readyFrames = 0
   const destinationCommands: string[] = []
+  const destinationModelInputs: string[] = []
   const peerRosterHolds: boolean[] = []
   let dropped = false, sawNullAdmission = false, destinationPermission = false, destinationReady = false
   let initialSnapshot: WorkspaceHandoffSnapshot | undefined
@@ -129,6 +137,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       content: [{ type: 'text', text: 'Fixture' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } })
     const destination = body.includes('BASELINE_DESTINATION_INSTRUCTIONS')
     if (fixture === 'short' && destination) {
+      destinationModelInputs.push(JSON.stringify(JSON.parse(body).messages))
       expect(body).toContain('Jump to P1_gaming')
       expect(body).toContain('Current project metadata')
       expect(body).toContain('P1_gaming')
@@ -160,7 +169,11 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     }
     if (queuedHuman && !destination && projectPath) expect(body).toContain(queuedText)
     await Bun.sleep(30)
-    return new Response(sse(destination ? undefined : projectPath), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline' } })
+    const script = fixture === 'short' && destination && destinationRequests === 1 ? {
+      code: 'output((await tools.call({name:"Read", input:{file_path:"src/app-runtime/sample.txt"}})).data);',
+      description: 'Read the migration fixture',
+    } : undefined
+    return new Response(sse(destination ? undefined : projectPath, undefined, script), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline' } })
   } })
   const blocker = join(root, 'network.ts')
   writeFileSync(blocker, `const original = globalThis.fetch; globalThis.fetch = (async (input, init) => { const url = String(input instanceof Request ? input.url : input); if (new URL(url).origin !== ${JSON.stringify(server.url.origin)}) throw new Error('External network disabled'); return original(input, init) }) as typeof fetch\n`)
@@ -342,7 +355,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       await until(() => queuedUuid !== undefined)
       releaseSource!()
     }
-    await until(() => destinationRequests === 1)
+    await until(() => destinationRequests >= 1)
     await until(() => coordinator!.snapshot(id)?.continuation.outcome === 'success')
     expect(supervisor.getSessionSocketPath(id)?.startsWith(`${join(root, 's')}/`)).toBe(true)
     await Promise.all(pending)
@@ -358,8 +371,13 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       expect(hooks.find(input => input.file_path === include)).toMatchObject({ load_reason: 'include', parent_file_path: join(cwd, 'CLAUDE.md') })
     }
     expect(sourceRequests).toBe(queuedHuman ? 2 : 1)
-    expect(destinationRequests).toBe(1)
-    expect(peerRosterHolds).toEqual([true])
+    expect(destinationRequests).toBe(fixture === 'short' ? 2 : 1)
+    if (fixture === 'short') {
+      expect(destinationModelInputs[0]).toContain('DESTINATION_MIGRATION_POLICY')
+      expect(destinationModelInputs[1]).toContain('destination-script-read-succeeded')
+      expect(destinationModelInputs[1]?.match(/DESTINATION_MIGRATION_POLICY/g)).toHaveLength(1)
+    }
+    expect(peerRosterHolds).toEqual(fixture === 'short' ? [true, false] : [true])
     expect(sawNullAdmission).toBe(true)
     expect(destinationCommands[0]).toBe('continue')
     expect(destinationCommands.filter(action => action === 'continue')).toHaveLength(fixture === 'lost_continue_command' || fixture === 'exhausted_snapshot_window' ? 2 : 1)
@@ -368,7 +386,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     expect(registry.findSession(id)?.cwd).toBe(cwd)
     const completed = timings.filter(record => record.fields?.outcome === 'completed')
     const providerResponses = completed.filter(record => record.fields?.phase === 'provider_request_to_response')
-    expect(providerResponses).toHaveLength(queuedHuman ? 3 : 2)
+    expect(providerResponses).toHaveLength(queuedHuman || fixture === 'short' ? 3 : 2)
     expect(Number(providerResponses.at(-1)?.fields?.durationMs)).toBeGreaterThanOrEqual(25)
     for (const phase of ['first_submit_to_catalog', 'first_submit_to_provider_response', 'accepted_to_source_boundary', 'park_to_clean_exit', 'relocation_worker', 'resume', 'controller', 'display_history', 'subagent_history', 'listening_to_ready_frame', 'ready_to_controls', 'admission_to_continuation', 'continuation_to_provider_request', 'provider_request_to_response', 'accepted_to_provider_request_observed', 'request_received_to_acceptance', 'request_received_to_provider_request_observed', 'startup_validation', 'runtime_initialize_body', 'replacement_to_runtime_init', 'listing_worker', 'worker_bootstrap_imports', 'build_metadata', 'build_provenance_git', 'configuration_prepare', 'trust_evaluation', 'relocation_module_load', 'relocation_work']) {
       // This stage observes the acknowledgement, deliberately absent in this fault case.

@@ -88,7 +88,7 @@ import { getSkillToolCommands, getMcpSkillCommands } from '../commands.js'
 import type { Command } from '../types/command.js'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { getProjectRoot } from '../bootstrap/state.js'
-import { getUserContext } from '../context.js'
+import { eagerProjectRulePathsKey, getUserContext } from '../context.js'
 import { formatCommandsWithinBudget } from '../tools/SkillTool/prompt.js'
 import { getContextWindowForModel } from './context.js'
 import type { DiscoverySignal } from '../services/skillSearch/signals.js'
@@ -1929,7 +1929,13 @@ export async function getNestedMemoryAttachmentsForFile(
       return attachments
     }
 
-    const processedPaths = new Set<string>()
+    // Before the first query, @mentions and IDE selection can discover
+    // instructions while assembling the input. During a query, use the
+    // exact prefix snapshot the model saw, even if compaction cleared caches.
+    const eagerPaths = toolUseContext.autoModeInstructionContext === undefined
+      ? (await getUserContext())[eagerProjectRulePathsKey]
+      : toolUseContext.eagerProjectRulePaths
+    const processedPaths = new Set(eagerPaths)
     const originalCwd = getOriginalCwd()
 
     // Phase 1: Process Managed and User conditional rules
