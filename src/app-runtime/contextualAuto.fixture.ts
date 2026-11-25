@@ -30,7 +30,11 @@ const oversizeAction = scenario === 'native-oversize-action'
 const compacted = scenario.startsWith('compacted-')
 const peerLocalFollowUp = scenario === 'delegated-local-follow-up-direct'
 const peerGitStatus = scenario === 'delegated-git-status-script'
-const workerRouting = scenario === 'native-subagent-routing'
+const workerScope = scenario.startsWith('native-subagent-scope-')
+const workerRouting = scenario === 'native-subagent-routing' || workerScope
+const refusedWorker = scenario === 'native-subagent-scope-refused'
+const globalWorkerRestriction = scenario === 'native-subagent-scope-global'
+const globalRestrictionText = 'Neither you nor the worker may append to effects.txt.'
 const rewrittenEdit = scenario === 'hook-edit'
 const hookAllowEdit = scenario === 'delegated-hook-allow-direct'
 const verifiedParentEdit = scenario === 'delegated-edit-parent-verified-script'
@@ -179,8 +183,9 @@ if (loadSkill) {
 }
 const action = (name: string) => ({ name: 'Edit', input: { file_path: join(cwd, name + '.txt'), old_string: 'old', new_string: 'new' } })
 const command = { name: 'Bash', input: { command: 'printf effect >> effects.txt', work_lifetime: 'finite', run_in_background: false } }
-const workerBrief = 'Worker fixture: update a.txt, remove both fixture build directories, and add one row to the local database.'
-const workerActions = [
+const workerBrief = workerScope ? 'Worker fixture: inspect the task. Do not append to effects.txt.'
+  : 'Worker fixture: update a.txt, remove both fixture build directories, and add one row to the local database.'
+const workerActions = workerScope ? [command] : [
   { name: 'Read', input: { file_path: join(cwd, 'a.txt') } },
   action('a'),
   { name: 'Bash', input: { command: 'rm -rf build' } },
@@ -390,8 +395,11 @@ mock.module('../services/api/client.js', () => ({
     const worker = workerRouting && body.messages.some((message: any) => message.role === 'user' &&
       JSON.stringify(message.content).includes(workerBrief))
     const index = worker ? workerModelCalls++ : modelCalls++
+        : workerScope && tool === 'Bash' ? (content.assignment?.text === workerBrief ||
+          [...content.conversation, ...(content.assignment?.parent ?? [])].some((entry: any) =>
+            entry.text === workerBrief || entry.text === globalRestrictionText)) ? 'deny' : 'allow'
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used' || reviewedReplacement) && index === 1
+    const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used' || reviewedReplacement || workerScope) && index === 1
     let check
     if (twoChecks && index > 0) {
       const first = { name: 'Bash', input: {
@@ -410,7 +418,7 @@ mock.module('../services/api/client.js', () => ({
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : reviewedReplacement ? index === 0 ? { name: 'Read', input: { file_path: protectedEditPath } } : submitted
       : index === 0 ? submitted
-      : questionReply ? command
+      : questionReply || workerScope ? command
       : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }))
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
@@ -523,6 +531,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
+  ...(refusedWorker && { alwaysDenyRules: { session: ['Agent'] } }),
   initialMessages: oversizeHistory ? [
     createUserMessage({ content: scriptCells ? 'Run the fixture scripts.' : earlyRestriction }),
     createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
@@ -826,6 +835,8 @@ if (surface === 'desktop') {
   } else {
     const { StructuredIO } = await import('../cli/structuredIO.js')
     const { Stream } = await import('../utils/stream.js')
+  else if (workerScope) await controller.submit(globalWorkerRestriction ? globalRestrictionText :
+    'Launch a worker to inspect the task. You may append to effects.txt yourself.')
     const incoming = new Stream<string>()
     const io = new StructuredIO(incoming)
     if (!scenario.endsWith('-nohost')) io.enableHumanOnlyPermissionPrompts()

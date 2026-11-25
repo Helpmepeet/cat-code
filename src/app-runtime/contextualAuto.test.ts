@@ -615,6 +615,29 @@ for (const [outcome, cause] of [
   ['invalid', 'invalid_response'],
   ['denied', undefined],
 ] as const) {
+for (const scope of ['accepted', 'refused', 'global']) {
+  test(`outbound worker restrictions do not govern the sender (${scope} launch)`, async () => {
+    const proof = await run(`native-subagent-scope-${scope}`)
+    const packets = proof.requests.filter((row: any) => row.tool === 'Bash').map((row: any) => row.content)
+    const [parent, worker] = [packets.find((packet: any) => packet.action.actor === 'main'),
+      packets.find((packet: any) => packet.assignment?.origin === 'worker-launch')]
+    const restriction = 'Worker fixture: inspect the task. Do not append to effects.txt.'
+    expect(parent?.conversation).not.toContainEqual(expect.objectContaining({ text: restriction }))
+    if (scope === 'refused') expect(worker).toBeUndefined()
+    else {
+      expect(worker?.action.input.command).toBe(parent.action.input.command)
+      expect(worker.assignment).toMatchObject({ text: restriction, sender: 'main' })
+    }
+    if (scope === 'global') {
+      const operator = expect.objectContaining({ origin: 'operator', text: 'Neither you nor the worker may append to effects.txt.' })
+      expect(parent.conversation).toContainEqual(operator)
+      expect(worker.assignment.parent).toContainEqual(operator)
+    }
+    expect(proof.effect).toBe(scope === 'global' ? null : 'effect')
+    expect(proof.prompts).toHaveLength(0)
+  }, 30_000)
+}
+
   test(`desktop fails closed without a prompt when review is ${outcome}`, async () => {
     const proof = await run(`direct-${outcome}`)
     expect(proof.requests).toHaveLength(1)

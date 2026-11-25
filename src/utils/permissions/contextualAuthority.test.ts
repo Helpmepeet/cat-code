@@ -6,7 +6,7 @@ import { createUserMessage } from '../messages.js'
 import { readContextualAuthority, workerAssignment } from './contextualAuthority.js'
 
 for (const tool of ['Agent', 'Task']) {
-  test(`${tool} commit restriction keeps its sender and intended worker`, () => {
+  test(`${tool} commit restriction appears only in the intended worker assignment`, () => {
     const job = 'Fix the layout and commit the verified change.'
     const grant = createUserMessage({ content: job })
     const brief = 'Fix layout.ts. Do not commit. I will inspect and commit.'
@@ -17,9 +17,7 @@ for (const tool of ['Agent', 'Task']) {
     }
     const parent = { messages: [grant, request], abortController: new AbortController() } as ToolUseContext
     const lead = readContextualAuthority(parent)
-    expect(lead.conversation).toContainEqual({
-      id: 'launch', origin: 'assistant', actor: lead.actor, recipient: 'requested worker', text: brief,
-    })
+    expect(lead.conversation).toEqual([{ id: grant.uuid, origin: 'operator', text: job }])
     expect(lead.assignment).toBeUndefined()
 
     const worker = readContextualAuthority({

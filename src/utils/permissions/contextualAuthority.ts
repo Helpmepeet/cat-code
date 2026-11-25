@@ -4,7 +4,6 @@ import { validateUuid } from '../uuid.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message, MessageOrigin } from '../../types/message.js'
 import type { Attachment } from '../attachments.js'
-import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
 import { SYNTHETIC_MODEL } from '../messages.js'
 import { getCommandQueueSnapshot } from '../messageQueueManager.js'
 import { wasTurnStopped } from '../abortController.js'
@@ -33,7 +32,7 @@ function isLiveAssistant(message: AssistantMessage): boolean {
 function conversationEvidence(
   messages: readonly Message[],
   worker?: Pick<ContextualWorkerAssignment, 'excluded' | 'history'>,
-  includeWorkerRequests = false,
+  includeCoordinator = false,
 ): ConversationEntry[] {
   const proposals = new Map<string, ReturnType<typeof readAssistantProposal>>()
   const askedQuestions = new Map<string, { assistantUuid: string; questions: unknown }>()
@@ -59,11 +58,6 @@ function conversationEvidence(
           if (!input || typeof input !== 'object') continue
           if (!message.codeMode && block.name === ASK_USER_QUESTION_TOOL_NAME && 'questions' in input) {
             askedQuestions.set(block.id, { assistantUuid: message.uuid, questions: input.questions })
-          }
-          if (includeWorkerRequests && (block.name === AGENT_TOOL_NAME || block.name === LEGACY_AGENT_TOOL_NAME) &&
-              'prompt' in input && typeof input.prompt === 'string') {
-            // The request records whom the assistant addressed, even if launch was refused or rewritten.
-            evidence.push({ origin: 'assistant', id: block.id, recipient: 'requested worker', text: input.prompt })
           }
         }
       }
@@ -98,7 +92,7 @@ function conversationEvidence(
         ...(source.kind === 'peer' && { actor: source.name }) })
       continue
     }
-    if (source?.kind === 'coordinator' && includeWorkerRequests) {
+    if (source?.kind === 'coordinator' && includeCoordinator) {
       evidence.push({ origin: 'assistant', id: message.uuid, actor: 'coordinator', text: content })
       continue
     }
