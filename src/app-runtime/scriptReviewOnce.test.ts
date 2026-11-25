@@ -208,7 +208,7 @@ for (const size of [32_000, 32_001]) {
       expect(generations).toHaveLength(1)
       const refusals = proof.reviewEvents.filter((event: any) => event.reason?.includes('32,000-character'))
       expect(refusals).toHaveLength(2)
-      expect(refusals[0].reason).toContain('Start a new chat')
+      expect(refusals[0].reason).toContain('The held action did not run. Resume the chat to reset the Script interpreter')
     } else {
       expect(generations).toHaveLength(3)
       expect(generations[0]).toBe(generations[1])
@@ -222,7 +222,22 @@ test('an oversized review sends no request and releases neither the held nor the
   expect(proof.effect).toBeNull()
   expect(proof.requests).toHaveLength(0)
   expect(proof.prompts).toHaveLength(0)
-  expect(proof.reviewEvents.filter((event: any) => event.reason?.includes('full Script review evidence'))).toHaveLength(2)
+  expect(proof.reviewEvents.filter((event: any) =>
+    event.reason?.includes('exceeded its size limit before reaching the reviewer. The held action did not run.'))).toHaveLength(2)
+}, 30_000)
+
+test('an oversized held action leaves the same Script interpreter eligible for later review', async () => {
+  const oversized = 'tools.call({name:"Write",input:{file_path:".vscode/settings.json",content:"x".repeat(60000)},nothrow:true})'
+  const proof = await run('native-oversize-action', cells(
+    `await Promise.all([${oversized}, ${bash('printf queued >> effects.txt')}]);`, write,
+  ))
+  expect(proof.sensitiveFileExists).toBe(false)
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
+  expect(proof.effect).toBe('effect')
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.scripts.map((script: any) => script.status)).toEqual(['blocked', 'completed'])
+  expect(proof.scripts[0].output).toContain('The held action did not run.')
+  expect(proof.requests[0].content.action.script.source).toContain(oversized)
 }, 30_000)
 
 test('an unavailable reviewer stops every queued effect without child fallback', async () => {

@@ -250,7 +250,7 @@ export async function createContextualAttempt(
   let coveringGrant: ContextualScriptGrant | undefined
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
-  let reviewFailure: 'unavailable' | 'invalid_response' | undefined
+  let reviewFailure: 'unavailable' | 'invalid_response' | 'context_limit' | undefined
   let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
   let boundProjection: { value: unknown } | undefined
   let reviewedSkillGrants: { value: Awaited<ReturnType<typeof getSkillGrantsForReview>> } | undefined
@@ -396,8 +396,9 @@ export async function createContextualAttempt(
     return denyReview(reason, 'inconclusive')
   }
 
-  function scriptUnavailable(reason: string): PermissionDecision {
-    return denyReview(`${reason} Start a new chat and rebuild any needed Script state with smaller cells and a focused request.`, 'inconclusive')
+  function scriptSizeLimit(reason: string): PermissionDecision {
+    reviewFailure = 'context_limit'
+    return denyReview(reason, 'inconclusive')
   }
 
   async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
@@ -407,7 +408,9 @@ export async function createContextualAttempt(
       return denyReview('Auto Mode could not establish review authority for this Script. Submit a new Script cell.', 'inconclusive')
     }
     wholeScriptAttempt = Boolean(scriptGrant)
-    if (scriptGrant?.history.unavailableReason) return scriptUnavailable(scriptGrant.history.unavailableReason)
+    if (scriptGrant?.history.unavailableReason) {
+      return scriptSizeLimit(`${scriptGrant.history.unavailableReason} The request could not reach the reviewer. The held action did not run. Resume the chat to reset the Script interpreter before continuing.`)
+    }
     if (authority.pendingOperatorInput) return scriptChild
       ? denyReview('A user message is waiting. Author a new Script after its instructions are applied.', 'inconclusive')
       : stale('A user message is waiting to be applied.')
@@ -470,9 +473,7 @@ export async function createContextualAttempt(
     const built = buildContextualReview(evidence, profile, reviewerInstructions, !scriptChild, scriptChild)
     if (!built) {
       if (scriptGrant) {
-        const reason = 'The full Script review evidence exceeds the Auto Mode review limit.'
-        scriptGrant.history.markUnavailable(reason)
-        return scriptUnavailable(reason)
+        return scriptSizeLimit('The Script review request exceeded its size limit before reaching the reviewer. The held action did not run. Report this blocker in chat.')
       }
       if (!buildContextualReview({ action: evidence.action, conversation: [] }, profile)) {
         return denyReview('This action exceeds the Auto Mode review limit. Split this action into smaller calls and retry.')

@@ -346,7 +346,7 @@ mock.module('../services/api/client.js', () => ({
         : scenario === 'native-script-mixed-review' &&
           (content?.action?.input?.command?.includes('fixtureProtected') ||
             (JSON.stringify(body.system).includes('Script review:') && content?.action?.script?.source?.includes('fixtureProtected'))) ? 'deny'
-        : scenario.includes('withdrawn') || staleParent || rewrittenEdit || questionReply || mainEdit || peerAction || directPatch || sensitiveWrite ? 'deny'
+        : scenario.includes('withdrawn') || staleParent || rewrittenEdit || questionReply || mainEdit || peerAction || directPatch || (sensitiveWrite && tool === 'Write') ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
         : scenario.startsWith('wait-') || scenario.startsWith('direct-') ? 'ask' : 'allow'
@@ -536,7 +536,9 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
     createUserMessage({ content: scriptCells ? 'Run the fixture scripts.' : earlyRestriction }),
     createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
       origin: { kind: 'coordinator' } }),
-  ] : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]
+  ] : oversizeAction && scriptCells ? [createUserMessage({ content: 'NEAR_LIMIT_CONTEXT ' + 'é'.repeat(100_000),
+    origin: { kind: 'coordinator' } })]
+    : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]
     : privateNoticeFollowUp ? [createUserMessage({ content: rosterPrivacyVeto })]
     : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,

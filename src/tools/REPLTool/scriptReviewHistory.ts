@@ -37,7 +37,7 @@ export class ScriptReviewHistory {
     this.characters = 0
   }
 
-  markUnavailable(reason: string): void {
+  private markUnavailable(reason: string): void {
     this.unavailableReason = reason
     this.clearSources()
   }
