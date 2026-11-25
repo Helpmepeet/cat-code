@@ -114,7 +114,7 @@ test('a pending review keeps the tool output visible', async () => {
 for (const [outcome, label, verdict] of [
   ['asking', 'Auto mode requested your decision', undefined],
   ['inconclusive', 'Auto mode review ended without a decision', undefined],
-  ['inconclusive', 'Auto mode decision expired before the action ran', 'allow'],
+  ['inconclusive', 'Action held after Auto mode review', 'allow'],
 ] as const) {
   test(`${label} appears above unchanged output`, async () => {
     const evidence: AutoModeReview = { ...review, outcome, ...(verdict && { reviewer: { kind: 'contextual', version: 'fixture', verdict } }) }

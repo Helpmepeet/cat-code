@@ -291,8 +291,9 @@ for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
     expect(proof.savedReviews).toContainEqual(expect.objectContaining(expected))
     if (script) {
       expect(proof.reviewUsage.ends.filter((end: any) => end.route === 'contextual')).toEqual([
-        expect.objectContaining({ raw_result: 'deny', disposition: 'operational_error', cause: 'review_expired' }),
+        expect.objectContaining({ raw_result: 'deny', disposition: 'operational_error' }),
       ])
+      expect(proof.reviewUsage.ends.find((end: any) => end.route === 'contextual')).not.toHaveProperty('cause')
       expect(proof.reviewUsage.outcomes).toMatchObject({ policy_blocked: 0, operational_error: 1 })
       const bash = proof.scripts.at(-1).calls.find((call: any) => call.name === 'Bash')
       expect(bash?.error).toContain('The reviewer allowed this action. The engine held the action')

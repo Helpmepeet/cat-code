@@ -12,7 +12,7 @@ export const AUTO_MODE_DECISION_LABELS = {
 } as const
 
 export function autoModeDecisionLabel(outcome: keyof typeof AUTO_MODE_DECISION_LABELS, reviewer?: AutoModeReview['reviewer']): string {
-  if (outcome === 'inconclusive' && reviewer?.verdict) return 'Auto mode decision expired before the action ran'
+  if (outcome === 'inconclusive' && reviewer?.verdict) return 'Action held after Auto mode review'
   return AUTO_MODE_DECISION_LABELS[outcome]
 }
 

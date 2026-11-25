@@ -92,9 +92,10 @@ export class CodeModeDispatch {
   get blockedReason(): string | undefined {
     if (this.fence) return this.fence
     const grant = this.context.contextualScriptGrant
-    if (grant?.releaseRefusal) {
+    const refusal = grant?.releaseExpiry?.reason ?? grant?.releaseRefusal
+    if (refusal) {
       this.permissionBlocked = true
-      this.stop(grant.releaseRefusal)
+      this.stop(refusal)
     } else if (grant?.granted && !grant.granted.isCurrent(this.context)) {
       this.permissionBlocked = true
       this.stop('Script authority or permissions changed. Author a new Script using the current instructions and permissions.')
@@ -340,19 +341,21 @@ export class CodeModeDispatch {
           if (paired?.type === 'tool_result') {
             received = true
             failed = Boolean(paired.is_error)
+            const releaseExpiry = this.context.contextualScriptGrant?.releaseExpiry
+            const expired = failed && releaseExpiry?.toolUseId === toolUseId ? releaseExpiry.reason : undefined
             const modelImages = tool === FileReadTool && !failed && Array.isArray(paired.content)
               ? paired.content.filter(block => block.type === 'image')
               : []
             // Effective content is produced after applicable PostToolUse replacement.
             // Never expose pre-hook data, MCP metadata, or host objects to the guest.
-            const content = typeof paired.content === 'string' ? paired.content :
+            const content = expired ?? (typeof paired.content === 'string' ? paired.content :
               (paired.content ?? []).map(block => block.type === 'text' ? { type: 'text', text: block.text } : ({
                 type: 'direct-only-content',
                 originalType: block.type,
                 reason: block.type === 'image' && modelImages.length
                   ? 'This image is sent separately to the model'
                   : 'This content requires direct tool delivery; media bytes are not exposed to the interpreter',
-              }))
+              })))
             const contentFits = Buffer.byteLength(JSON.stringify(content)) <= 96 * 1024
             const persistedPreview = typeof content === 'string' && content.includes(PERSISTED_OUTPUT_TAG)
             const errorExcerpt = failed && typeof content === 'string' && /\n\.\.\. \[\d+ characters truncated\] \.\.\.\n/.test(content)
@@ -371,7 +374,7 @@ export class CodeModeDispatch {
               dataComplete: false,
               dataUnavailable: 'Structured media is unavailable to the interpreter',
             }
-            if (!tool.isMcp && !mediaData && (typeof paired.content === 'string' || !(paired.content ?? []).some(block => block.type !== 'text')) && message.toolUseResult !== undefined) {
+            if (!expired && !tool.isMcp && !mediaData && (typeof paired.content === 'string' || !(paired.content ?? []).some(block => block.type !== 'text')) && message.toolUseResult !== undefined) {
               const data = projectGuestData(message.toolUseResult, 96 * 1024)
               const dataIncomplete = bashOutputIncomplete || (failed && (persistedPreview || errorExcerpt))
               result = {
@@ -396,7 +399,12 @@ export class CodeModeDispatch {
               await this.following({ ...message, message: { ...message.message, content: extra } })
             }
             const auditMessage = Object.assign({ ...message, isVirtual: true as const }, { codeMode: identity })
-            if ('permissionDecision' in message && message.permissionDecision) {
+            if (expired) {
+              call.error = expired
+              this.permissionFailures.set(call, expired)
+              this.permissionBlocked = true
+              this.stop(expired)
+            } else if ('permissionDecision' in message && message.permissionDecision) {
               const { outcome, contextual, humanDisposition } = message.permissionDecision
               const label = {
                 'rejected-by-user': humanDisposition === 'skip' ? 'Skipped by the user' : 'Declined by the user',

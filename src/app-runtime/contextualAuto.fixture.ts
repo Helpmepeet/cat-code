@@ -8,6 +8,7 @@ const root = process.env.CONTEXTUAL_AUTO_TEST_ROOT!
 const scenario = process.env.CONTEXTUAL_AUTO_TEST_SCENARIO!
 const legacyNotice = scenario.startsWith('legacy-notice-')
 const backgroundWithdrawal = scenario === 'background-withdrawal'
+const lateScriptRelease = scenario === 'native-script-late-release'
 const repeatedDenials = scenario.startsWith('native-denials-')
 const repeatedScriptDenials = scenario === 'native-denials-script'
 const captureScriptResults = repeatedScriptDenials || scenario === 'hook-edit' ||
@@ -149,7 +150,7 @@ if (scenario === 'native-script-cleanup') {
   await writeFile(join(cwd, 'dist', 'artifact'), 'disposable artifact')
 }
 
-const observeReviewUsage = backgroundWithdrawal || ['direct-unavailable', 'direct-invalid', 'direct-denied'].includes(scenario)
+const observeReviewUsage = backgroundWithdrawal || lateScriptRelease || ['direct-unavailable', 'direct-invalid', 'direct-denied'].includes(scenario)
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
 if (outsideSymbol) await writeFile(join(root, 'symbols.txt'), 'outside')
 const outsideDir = join(root, scenario === 'native-outside-read-credential' ? '.ssh' : 'logs')
@@ -706,6 +707,10 @@ const replies: Promise<void>[] = []
 let waitMs = 0
 let observedBeforeReply: string | null | undefined
 controller.subscribe(event => {
+  if (lateScriptRelease && event.type === 'tool.activity' && event.phase === 'executing' &&
+      requests.at(-1)?.content.action?.attempt === event.toolUseId) {
+    enqueueScriptInstruction({ mode: 'prompt', value: 'Stop. Leave the fixture marker unchanged.' })
+  }
   if (event.type === 'tool.review') reviewEvents.push(event)
   if (event.type === 'message' && event.message.type === 'result') sdkResults.push(event.message)
   if (event.type !== 'permission.requested') return
@@ -887,7 +892,7 @@ if (scenario.startsWith('measure-')) {
     .map(row => ({ id: row.tool_use_id, durationMs: row.duration_ms }))
 }
 let savedReviews: unknown[] = []
-if (lateCorrection || backgroundWithdrawal || scenario.startsWith('trial-')) {
+if (lateCorrection || backgroundWithdrawal || lateScriptRelease || scenario.startsWith('trial-')) {
   const { getTranscriptPath } = await import('../utils/sessionStorage.js')
   const { readAutoModeReviews } = await import('./autoModeReviewPersistence.js')
   savedReviews = readAutoModeReviews(getTranscriptPath())

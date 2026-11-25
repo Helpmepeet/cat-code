@@ -249,6 +249,28 @@ test('an unavailable reviewer stops every queued effect without child fallback',
   expect(proof.scripts[0].output).toContain('Submit a new Script cell when the reviewer is available')
 }, 30_000)
 
+test('a withdrawal at final release reports a hold after the initial allowance', async () => {
+  const proof = await run('native-script-late-release', cells(queued))
+  const [request] = proof.requests
+  expect(request.tool).toBe('Bash')
+  expect(proof.effect).toBeNull()
+  expect(proof.reviewUsage.ends).toContainEqual(expect.objectContaining({ route: 'contextual', disposition: 'allowed' }))
+  const held = 'The reviewer allowed this action. The engine held the action before it ran'
+  expect(proof.savedReviews).toContainEqual(expect.objectContaining({ toolUseId: request.content.action.attempt,
+    outcome: 'inconclusive', reviewer: expect.objectContaining({ verdict: 'allow' }), reason: expect.stringContaining(held) }))
+  expect(proof.scripts[0].calls[0]).toMatchObject({ status: 'blocked', error: expect.stringContaining(held),
+    result: expect.objectContaining({ isError: true, content: expect.stringContaining(held) }) })
+}, 30_000)
+
+test('a separate preflight hold keeps its reason after the reviewer allows the action', async () => {
+  const proof = await run('native-script-children', cells(`await ${bash('cd . && printf effect >> effects.txt')};`))
+  expect(proof.effect).toBeNull()
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
+  expect(proof.scripts[0].calls[0].error).toContain('Script Bash cannot preflight paths after a compound directory change')
+  expect(proof.reviewEvents.at(-1)).toMatchObject({ outcome: 'inconclusive',
+    reviewer: expect.objectContaining({ verdict: 'allow' }), reason: 'The reviewer allowed this action. The action did not run.' })
+}, 30_000)
+
 for (const changed of ['instruction', 'rules', 'mode']) {
   test(`a ${changed} change after release fences covered children and queued work`, async () => {
     const proof = await run('native-script-children', {

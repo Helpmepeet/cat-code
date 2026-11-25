@@ -42,7 +42,6 @@ export const AUTO_MODE_FAILURES = [
   'unavailable',
   'invalid_response',
   'context_limit',
-  'review_expired',
   'interrupted',
   'internal_error',
   'unknown',
@@ -61,7 +60,7 @@ export type AutoModeDispositionEvidence = {
    * A typed observed failure wins over a classifier's fail-closed verdict.
    * This avoids interpreting unavailable/invalid responses as policy blocks.
    */
-  failure?: AutoModeFailure
+  failure?: AutoModeFailure | 'review_expired'
   policy?: AutoModePolicyEvidence
 }
 
@@ -191,7 +190,6 @@ const OPERATIONAL_FAILURES = new Set<AutoModeFailure>([
   'unavailable',
   'invalid_response',
   'context_limit',
-  'review_expired',
   'internal_error',
 ])
 
@@ -203,35 +201,40 @@ export function mapAutoModeDisposition(
   result: AutoModeRawPermissionResult,
   evidence: Readonly<AutoModeDispositionEvidence> = {},
 ): AutoModeDispositionMetadata {
+  // Keep the persisted Usage row readable by older indexers. The review
+  // ledger and child receipt retain the specific reason for the host hold.
+  const expired = evidence.failure === 'review_expired'
+  const failure = evidence.failure === 'review_expired' ? undefined : evidence.failure
   if (result === 'allow') return { disposition: 'allowed' }
   if (result === 'ask') {
     return {
       disposition: 'review_required',
-      ...(evidence.failure ? { cause: evidence.failure } : {}),
+      ...(failure ? { cause: failure } : {}),
     }
   }
   if (result === 'deny') {
-    if (evidence.failure && OPERATIONAL_FAILURES.has(evidence.failure)) {
-      return { disposition: 'operational_error', cause: evidence.failure }
+    if (expired) return { disposition: 'operational_error' }
+    if (failure && OPERATIONAL_FAILURES.has(failure)) {
+      return { disposition: 'operational_error', cause: failure }
     }
-    if (evidence.failure === 'interrupted') {
-      return { disposition: 'cancelled', cause: evidence.failure }
+    if (failure === 'interrupted') {
+      return { disposition: 'cancelled', cause: failure }
     }
     if (evidence.policy) return { disposition: 'policy_blocked' }
     return {
       disposition: 'unknown_outcome',
-      ...(evidence.failure ? { cause: evidence.failure } : {}),
+      ...(failure ? { cause: failure } : {}),
     }
   }
-  if (evidence.failure && OPERATIONAL_FAILURES.has(evidence.failure)) {
-    return { disposition: 'operational_error', cause: evidence.failure }
+  if (failure && OPERATIONAL_FAILURES.has(failure)) {
+    return { disposition: 'operational_error', cause: failure }
   }
-  if (evidence.failure === 'interrupted') {
-    return { disposition: 'cancelled', cause: evidence.failure }
+  if (failure === 'interrupted') {
+    return { disposition: 'cancelled', cause: failure }
   }
   return {
     disposition: 'unknown_outcome',
-    ...(evidence.failure ? { cause: evidence.failure } : {}),
+    ...(failure ? { cause: failure } : {}),
   }
 }
 
@@ -266,7 +269,7 @@ export type CreateAutoModePermissionObserverOptions = {
 export type AutoModePermissionObservationContext = {
   readonly observer: AutoModePermissionObserver
   markRoute(route: AutoModeRoute): void
-  markFailure(failure: AutoModeFailure): void
+  markFailure(failure: NonNullable<AutoModeDispositionEvidence['failure']>): void
   markPolicy(policy: AutoModePolicyEvidence): void
   markCategory(category: AutoModePrimaryCategory | undefined): void
   enterStage(stage: AutoModeStage): void

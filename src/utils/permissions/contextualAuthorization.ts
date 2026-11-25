@@ -164,6 +164,7 @@ export type ContextualScriptGrant = {
   readonly generation: string
   readonly history: ScriptReviewHistory
   releaseRefusal?: string
+  releaseExpiry?: { toolUseId: string; reason: string }
   granted?: {
     isCurrent(context: ToolUseContext): boolean
   }
@@ -576,11 +577,15 @@ export async function createContextualAttempt(
         denyReview(reason)
         throw new Error(reason)
       }
-      if ((scriptGrant?.granted && !scriptGrant.granted.isCurrent(releasedContext)) ||
-          !current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : reviewStarted && !actionAllowed)) {
+      const matches = (!scriptGrant?.granted || scriptGrant.granted.isCurrent(releasedContext)) && current(candidate, releasedContext)
+      if (!matches || (requiresHuman ? !humanAllowed : reviewStarted && !actionAllowed)) {
         const reason = 'The approval no longer matches the current action, assignment or permissions.'
-        if (scriptGrant) scriptGrant.releaseRefusal = scriptStale().message
-        else stale(reason)
+        if (scriptGrant && !matches) {
+          scriptGrant.releaseExpiry = { toolUseId, reason: scriptStale().message }
+        } else {
+          if (scriptGrant) scriptGrant.releaseRefusal = 'The Script approval could not be verified before the action ran.'
+          stale(scriptGrant?.releaseRefusal ?? reason)
+        }
         return false
       }
       if (coveringGrant) {
@@ -604,11 +609,11 @@ export async function createContextualAttempt(
     },
     finishWithoutRelease() {
       if (used) return
-      if (wholeScriptAttempt && scriptGrant) {
+      if (wholeScriptAttempt && scriptGrant && !scriptGrant.releaseExpiry) {
         scriptGrant.releaseRefusal ??= 'This Script did not receive a covering approval. Author a new Script after resolving the refusal.'
       }
       if (lastOutcome === 'allowed') {
-        if (scriptChild) scriptStale()
+        if (scriptChild) emit('inconclusive', 'The reviewer allowed this action. The action did not run.')
         else stale('The approval expired before the action was released.')
       }
     },
