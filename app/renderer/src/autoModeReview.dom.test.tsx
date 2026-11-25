@@ -111,12 +111,14 @@ test('a pending review keeps the tool output visible', async () => {
   expect(tree.container.querySelector('[aria-label="Auto mode is reviewing this"]')).not.toBeNull()
 })
 
-for (const [outcome, label] of [
-  ['asking', 'Auto mode requested your decision'],
-  ['inconclusive', 'Auto mode review ended without a decision'],
+for (const [outcome, label, verdict] of [
+  ['asking', 'Auto mode requested your decision', undefined],
+  ['inconclusive', 'Auto mode review ended without a decision', undefined],
+  ['inconclusive', 'Auto mode decision expired before the action ran', 'allow'],
 ] as const) {
-  test(`${outcome} shows a plain shield and decision label above unchanged output`, async () => {
-    const tree = await harness.mount(<ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}><TranscriptRowsView rows={[tool('a', { ...review, outcome })]} /></ToolsExpandedContext.Provider>)
+  test(`${label} appears above unchanged output`, async () => {
+    const evidence: AutoModeReview = { ...review, outcome, ...(verdict && { reviewer: { kind: 'contextual', version: 'fixture', verdict } }) }
+    const tree = await harness.mount(<ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}><TranscriptRowsView rows={[tool('a', evidence)]} /></ToolsExpandedContext.Provider>)
     const field = tree.container.querySelector('.auto-mode-review-field')!
     expect(field.getAttribute('data-outcome')).toBe(outcome)
     expect(field.querySelector('.auto-mode-review-label')?.textContent).toBe(label)

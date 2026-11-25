@@ -50,6 +50,7 @@ export function isPermissionRequestCancelled(response: object): boolean {
 export function permissionRefusalOutcome(decision: PermissionDecision, toolUseId: string): PermissionDecisionContext['outcome'] {
   if (cancelledRequests.has(decision)) return 'unanswered'
   if (humanRefusals.has(decision)) return 'rejected-by-user'
+  if (decision.decisionReason?.type === 'other' && decision.decisionReason.scriptReviewExpired) return 'automode-expired'
   if (decision.decisionReason?.type === 'classifier') {
     const outcome = getRecordedAutoModeOutcome(toolUseId)?.outcome
     return outcome === 'automode-unavailable' || outcome === 'automode-parsing-error' || outcome === 'interrupted' ||
@@ -68,7 +69,7 @@ const permissionDecisionContextSchema = z.strictObject({
   humanDisposition: z.enum(['skip', 'correction']).optional(),
   humanFeedback: z.string().max(16_384).optional(),
   contextual: z.literal(true).optional(),
-  outcome: z.enum(['rejected-by-user', 'unanswered', 'blocked-by-permissions', 'automode-blocked', 'automode-unavailable', 'automode-parsing-error', 'interrupted']),
+  outcome: z.enum(['rejected-by-user', 'unanswered', 'blocked-by-permissions', 'automode-blocked', 'automode-unavailable', 'automode-parsing-error', 'automode-expired', 'interrupted']),
 })
 
 /** Engine-owned decision metadata, never inferred from result bodies or summaries. */

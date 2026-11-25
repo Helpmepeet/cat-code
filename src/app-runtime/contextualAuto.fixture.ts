@@ -148,7 +148,7 @@ if (scenario === 'native-script-cleanup') {
   await writeFile(join(cwd, 'dist', 'artifact'), 'disposable artifact')
 }
 
-const observeReviewUsage = ['direct-unavailable', 'direct-invalid', 'direct-denied'].includes(scenario)
+const observeReviewUsage = backgroundWithdrawal || ['direct-unavailable', 'direct-invalid', 'direct-denied'].includes(scenario)
 for (const name of ['a', 'b', 'c', 'hooked']) await writeFile(join(cwd, name + '.txt'), 'old')
 if (outsideSymbol) await writeFile(join(root, 'symbols.txt'), 'outside')
 const outsideDir = join(root, scenario === 'native-outside-read-credential' ? '.ssh' : 'logs')

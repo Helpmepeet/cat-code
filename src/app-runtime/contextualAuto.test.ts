@@ -280,7 +280,15 @@ for (const scenario of ['direct-late-correction', 'background-withdrawal']) {
       reviewer: expect.objectContaining({ verdict: script ? 'allow' : 'deny' }) }
     expect(proof.reviewEvents).toContainEqual(expect.objectContaining(expected))
     expect(proof.savedReviews).toContainEqual(expect.objectContaining(expected))
-    if (script) expect(proof.scripts.at(-1).output).toContain('Script authority or permissions changed.')
+    if (script) {
+      expect(proof.reviewUsage.ends.filter((end: any) => end.route === 'contextual')).toEqual([
+        expect.objectContaining({ raw_result: 'deny', disposition: 'operational_error', cause: 'review_expired' }),
+      ])
+      expect(proof.reviewUsage.outcomes).toMatchObject({ policy_blocked: 0, operational_error: 1 })
+      const bash = proof.scripts.at(-1).calls.find((call: any) => call.name === 'Bash')
+      expect(bash?.error).toContain('The reviewer allowed this action. The engine held the action')
+      expect(proof.scripts.at(-1).output).toContain('The reviewer allowed this action. The engine held the action')
+    }
   }, 30_000)
 }
 

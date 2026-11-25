@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { feature } from 'bun:bundle'
 import type { Tool, ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage } from '../../types/message.js'
-import type { PermissionDecision } from '../../types/permissions.js'
+import type { PermissionDecision, PermissionDenyDecision } from '../../types/permissions.js'
 import { recordToolReview } from '../../app-runtime/toolActivity.js'
 import { persistAutoModeReview } from '../../app-runtime/autoModeReviewPersistence.js'
 import type { AutoModeReview } from '../../app-runtime/autoModeReviewContract.js'
@@ -250,7 +250,7 @@ export async function createContextualAttempt(
   let coveringGrant: ContextualScriptGrant | undefined
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
-  let reviewFailure: 'unavailable' | 'invalid_response' | 'context_limit' | undefined
+  let reviewFailure: 'unavailable' | 'invalid_response' | 'context_limit' | 'review_expired' | 'interrupted' | undefined
   let reviewer: NonNullable<AutoModeReview['reviewer']> = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
   let boundProjection: { value: unknown } | undefined
   let reviewedSkillGrants: { value: Awaited<ReturnType<typeof getSkillGrantsForReview>> } | undefined
@@ -389,11 +389,22 @@ export async function createContextualAttempt(
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
   }
 
-  function scriptStale(): PermissionDecision {
-    const reason = context.abortController.signal.aborted
-      ? 'The Script review was cancelled.'
-      : 'Script authority or permissions changed. Author a new Script using the current instructions and permissions.'
-    return denyReview(reason, 'inconclusive')
+  function scriptStale(waitingForUser = false): PermissionDenyDecision {
+    const cancelled = context.abortController.signal.aborted
+    reviewFailure = cancelled ? 'interrupted' : 'review_expired'
+    const verdict = reviewer.verdict ? {
+      allow: 'The reviewer allowed this action. ',
+      deny: 'The reviewer denied this action. ',
+      ask: 'The reviewer requested your approval. ',
+    }[reviewer.verdict] : ''
+    const reason = verdict + (cancelled
+      ? 'The Script review was cancelled before the action ran.'
+      : waitingForUser
+        ? 'A user message is waiting. Author a new Script after its instructions are applied.'
+        : 'The engine held the action before it ran because its review was no longer current. Author a new Script using the current instructions and permissions.')
+    emit('inconclusive', reason)
+    return { behavior: 'deny', message: reason,
+      decisionReason: { type: 'other', reason, scriptReviewExpired: true } }
   }
 
   function scriptSizeLimit(reason: string): PermissionDecision {
@@ -412,7 +423,7 @@ export async function createContextualAttempt(
       return scriptSizeLimit(`${scriptGrant.history.unavailableReason} The request could not reach the reviewer. The held action did not run. Resume the chat to reset the Script interpreter before continuing.`)
     }
     if (authority.pendingOperatorInput) return scriptChild
-      ? denyReview('A user message is waiting. Author a new Script after its instructions are applied.', 'inconclusive')
+      ? scriptStale(true)
       : stale('A user message is waiting to be applied.')
     if (!refreshInstructions()) return scriptChild ? scriptStale() : stale('The assignment or action changed before review.')
     reviewedInstructions = true
@@ -568,8 +579,8 @@ export async function createContextualAttempt(
       if ((scriptGrant?.granted && !scriptGrant.granted.isCurrent(releasedContext)) ||
           !current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : reviewStarted && !actionAllowed)) {
         const reason = 'The approval no longer matches the current action, assignment or permissions.'
-        if (scriptGrant) scriptGrant.releaseRefusal = reason + ' Author a new Script using the current instructions and permissions.'
-        stale(reason)
+        if (scriptGrant) scriptGrant.releaseRefusal = scriptStale().message
+        else stale(reason)
         return false
       }
       if (coveringGrant) {
@@ -596,7 +607,10 @@ export async function createContextualAttempt(
       if (wholeScriptAttempt && scriptGrant) {
         scriptGrant.releaseRefusal ??= 'This Script did not receive a covering approval. Author a new Script after resolving the refusal.'
       }
-      if (lastOutcome === 'allowed') stale('The approval expired before the action was released.')
+      if (lastOutcome === 'allowed') {
+        if (scriptChild) scriptStale()
+        else stale('The approval expired before the action was released.')
+      }
     },
   }
 }

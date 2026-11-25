@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
-import { AUTO_MODE_DECISION_LABELS, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
+import { autoModeDecisionLabel, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
 import './autoModeReview.css'
 
 function useReviewTooltip<T extends HTMLElement>(visible: boolean, text: string | undefined, hide: () => void) {
@@ -104,17 +104,17 @@ export function PermissionReasonMark({ heading, reason }: { heading: string; rea
   </>
 }
 
-function ReviewVerdict({ outcome }: { outcome: keyof typeof AUTO_MODE_DECISION_LABELS }) {
+function ReviewVerdict({ outcome, reviewer }: { outcome: Parameters<typeof autoModeDecisionLabel>[0]; reviewer?: AutoModeReview['reviewer'] }) {
   return <span className="auto-mode-review-verdict">
     <ReviewShield outcome={outcome} size={12} />
-    <span className="auto-mode-review-label">{AUTO_MODE_DECISION_LABELS[outcome]}</span>
+    <span className="auto-mode-review-label">{autoModeDecisionLabel(outcome, reviewer)}</span>
   </span>
 }
 
 export function AutoModeReviewReason({ review }: { review?: AutoModeReview }) {
   if (!review || review.outcome === 'allowed' || review.outcome === 'reviewing' || !review.reason) return null
   return <div className="auto-mode-review-field" data-outcome={review.outcome}>
-    <ReviewVerdict outcome={review.outcome} />
+    <ReviewVerdict outcome={review.outcome} reviewer={review.reviewer} />
     <div className="auto-mode-review-value">{review.reason}</div>
   </div>
 }

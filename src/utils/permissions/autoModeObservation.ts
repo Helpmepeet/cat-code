@@ -42,6 +42,7 @@ export const AUTO_MODE_FAILURES = [
   'unavailable',
   'invalid_response',
   'context_limit',
+  'review_expired',
   'interrupted',
   'internal_error',
   'unknown',
@@ -190,6 +191,7 @@ const OPERATIONAL_FAILURES = new Set<AutoModeFailure>([
   'unavailable',
   'invalid_response',
   'context_limit',
+  'review_expired',
   'internal_error',
 ])
 

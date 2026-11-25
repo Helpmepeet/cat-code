@@ -19,4 +19,7 @@ test('a block hides the count and other timing, including still-running reviews'
 test('unfinished and inconclusive reviews never claim permission was granted', () => {
   expect(summarizeAutoModeReviews([{ ...allowed('a', 12000), outcome: 'reviewing', completedAt: undefined }])?.text).toBe('Auto mode is reviewing this')
   expect(summarizeAutoModeReviews([allowed('a', 12000), { ...allowed('b', 19000), outcome: 'inconclusive' }])).toEqual({ outcome: 'inconclusive', count: 2, text: 'Auto mode review ended without a decision' })
+  expect(summarizeAutoModeReviews([{
+    ...allowed('b', 19000), outcome: 'inconclusive', reviewer: { kind: 'contextual', version: 'fixture', verdict: 'allow' },
+  }])?.text).toBe('Auto mode decision expired before the action ran')
 })

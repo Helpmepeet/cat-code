@@ -11,6 +11,11 @@ export const AUTO_MODE_DECISION_LABELS = {
   inconclusive: 'Auto mode review ended without a decision',
 } as const
 
+export function autoModeDecisionLabel(outcome: keyof typeof AUTO_MODE_DECISION_LABELS, reviewer?: AutoModeReview['reviewer']): string {
+  if (outcome === 'inconclusive' && reviewer?.verdict) return 'Auto mode decision expired before the action ran'
+  return AUTO_MODE_DECISION_LABELS[outcome]
+}
+
 export function visibleAutoModeReason(review?: AutoModeReview): string | undefined {
   if (review?.outcome === 'allowed' || review?.outcome === 'reviewing') return undefined
   return review?.reason || undefined
@@ -28,7 +33,9 @@ export function summarizeAutoModeReviews(reviews: readonly (AutoModeReview | und
   if (blocked) return { outcome: 'blocked', count: 1, text: `Blocked after ${duration((blocked.completedAt ?? blocked.startedAt) - blocked.startedAt)}` }
   if (calls.some(review => review.outcome === 'reviewing')) return { outcome: 'reviewing', count: calls.length, text: 'Auto mode is reviewing this' }
   if (calls.some(review => review.outcome === 'asking')) return { outcome: 'asking', count: calls.length, text: AUTO_MODE_DECISION_LABELS.asking }
-  if (calls.some(review => review.outcome === 'inconclusive')) return { outcome: 'inconclusive', count: calls.length, text: AUTO_MODE_DECISION_LABELS.inconclusive }
+  const inconclusive = calls.find(review => review.outcome === 'inconclusive' && review.reviewer?.verdict) ??
+    calls.find(review => review.outcome === 'inconclusive')
+  if (inconclusive) return { outcome: 'inconclusive', count: calls.length, text: autoModeDecisionLabel('inconclusive', inconclusive.reviewer) }
   const elapsed = calls.reduce((sum, review) => sum + (review.completedAt ?? review.startedAt) - review.startedAt, 0)
   return { outcome: 'allowed', count: calls.length, text: calls.length > 1 ? `Reviewed ${calls.length} commands for ${duration(elapsed)}` : `Reviewed for ${duration(elapsed)}` }
 }

@@ -403,6 +403,7 @@ export class CodeModeDispatch {
                 'automode-blocked': 'Denied by Auto Mode',
                 'automode-unavailable': 'Auto Mode review failed',
                 'automode-parsing-error': 'Auto Mode review failed',
+                'automode-expired': 'Held before dispatch',
                 'blocked-by-permissions': 'Blocked by permissions',
                 unanswered: this.context.abortController.signal.aborted ? 'Cancelled' : 'Approval was not received',
                 interrupted: 'Cancelled',

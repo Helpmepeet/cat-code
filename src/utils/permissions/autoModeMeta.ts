@@ -11,6 +11,7 @@ export const AUTO_MODE_OUTCOME_CODES = [
   'automode-blocked',
   'automode-unavailable',
   'automode-parsing-error',
+  'automode-expired',
 ] as const
 
 export type AutoModeOutcomeCode = (typeof AUTO_MODE_OUTCOME_CODES)[number]
