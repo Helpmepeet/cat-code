@@ -47,16 +47,6 @@ async function run(scenario: string) {
   }
 }
 
-for (const state of ['matching', 'script', 'other-child', 'conflicting', 'no-anchor', 'no-creator', 'queued']) {
-  test(`legacy notice and workspace edit respect the ${state} parent state`, async () => {
-    const proof = await run(`legacy-notice-${state}`)
-    expect(proof.postedNotices).toHaveLength(state === 'queued' ? 0 : 1)
-    expect(proof.prompts).toHaveLength(0)
-    expect(proof.files.a).toBe(state === 'queued' ? 'old' : 'new')
-    expect(proof.requests).toHaveLength(0)
-  }, 30_000)
-}
-
 for (const state of ['host-identity', 'relay-marker']) {
   test(`a compacted chat with ${state} can make an ordinary edit without review`, async () => {
     const proof = await run(`compacted-${state}`)
@@ -70,7 +60,7 @@ for (const state of ['host-identity', 'relay-marker']) {
     const actor = state === 'host-identity' ? 'peer-session' : 'main'
     expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
     expect(proof.requests[0].content.action.actor).toBe(actor)
-    expect(proof.requests[0].content.assignment).toEqual(state === 'host-identity' ? { actor, origin: 'peer' } : undefined)
+    expect(proof.requests[0].content.assignment).toBeUndefined()
     expect(proof.effect).toBe('effect')
   }, 30_000)
 }
@@ -314,14 +304,14 @@ for (const contextual of [true, false]) {
   }, 30_000)
 }
 
-test('shadow preserves the main actor and peer correspondence while the legacy allowance releases the write', async () => {
+test('shadow records trusted peer instructions while the legacy allowance releases the write', async () => {
   const proof = await run('native-peer-write-shadow')
   const candidates = proof.requests.filter((request: any) => request.contextual)
   expect(candidates).toHaveLength(1)
   expect(JSON.stringify(candidates[0].system)).toContain('cat-code-contextual-review-v7')
   expect(candidates[0].content.action.actor).toBe('main')
   expect(candidates[0].content.assignment).toBeUndefined()
-  expect(candidates[0].content.conversation).toContainEqual(expect.objectContaining({ origin: 'peer', actor: 'Lead',
+  expect(candidates[0].content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator', actor: 'Lead',
     text: 'Update a.txt from old to new.' }))
   expect(proof.requests.some((request: any) => !request.contextual)).toBe(true)
   expect(proof.prompts).toHaveLength(0)
@@ -351,7 +341,7 @@ for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
       const { action, assignment, conversation } = proof.requests[0].content
       expect(action.actor).toBe('main')
       expect(assignment).toBeUndefined()
-      expect(conversation).toContainEqual(expect.objectContaining({ origin: 'peer', actor: 'Lead', text: 'Look up the sample record.' }))
+      expect(conversation).toContainEqual(expect.objectContaining({ origin: 'operator', actor: 'Lead', text: 'Look up the sample record.' }))
     }
     if (outcome === 'withdrawal') {
       expect(proof.requests.at(-1).content.conversation.at(-1)).toMatchObject({
@@ -525,29 +515,27 @@ test('desktop Auto holds a skill when its grants change during review', async ()
 for (const entry of ['direct', 'script']) {
   for (const tool of ['edit', 'bash']) {
     for (const source of ['verified', 'peer-only', 'withdrawn', 'stopped']) {
-      test(`${entry} ${tool} respects ${source} authority`, async () => {
-        const parentWithdrawal = tool === 'edit' && source === 'withdrawn'
+      const parentWithdrawal = tool === 'edit' && source === 'withdrawn'
+      test(`${entry} ${tool} with ${parentWithdrawal ? 'a creator withdrawal' : `${source} local evidence`}`, async () => {
         const proof = await run(`delegated-${tool}-${parentWithdrawal ? 'parent-' : ''}${source}-${entry}`)
-        const released = source === 'verified' || source === 'peer-only'
+        const released = source === 'verified' || source === 'peer-only' || parentWithdrawal
         expect(tool === 'edit' ? proof.files.a : proof.effect).toBe(
           tool === 'edit' ? released ? 'new' : 'old' : released ? 'effect' : null,
         )
         expect(proof.prompts).toHaveLength(0)
-        const reviewed = source !== 'stopped' && (tool === 'bash' || parentWithdrawal)
-        expect(proof.requests.map((row: any) => row.tool)).toEqual(reviewed ? [tool === 'edit' ? 'Edit' : 'Bash'] : [])
+        const reviewed = source !== 'stopped' && tool === 'bash'
+        expect(proof.requests.map((row: any) => row.tool)).toEqual(reviewed ? ['Bash'] : [])
         if (!reviewed) return
         const { action, conversation, assignment } = proof.requests[0].content
         expect(action.script !== undefined).toBe(entry === 'script')
         if (entry === 'script') expect(action.script.source).toContain('await tools.call')
-        if (parentWithdrawal) {
-          const [grant, withdrawal] = assignment.parent
-          expect(assignment.parentAnchor).toBe(grant.id)
-          expect(withdrawal).toMatchObject({ origin: 'operator', text: 'Stop this job. Leave all files as they are.' })
-          expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reviewer: expect.objectContaining({ verdict: 'deny' }) }))
-        } else if (source === 'peer-only') {
-          expect(assignment).toBeUndefined()
-          expect(conversation).toContainEqual(expect.objectContaining({ origin: 'peer', actor: 'Lead',
+        expect(assignment).toBeUndefined()
+        if (source === 'peer-only') {
+          expect(conversation).toContainEqual(expect.objectContaining({ origin: 'operator', actor: 'Lead',
             text: 'Append one effect marker to effects.txt.' }))
+        } else if (source === 'withdrawn') {
+          expect(conversation.at(-1)).toMatchObject({ origin: 'operator', actor: 'Lead', text: 'Stop this job. Leave all files as they are.' })
+          expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reviewer: expect.objectContaining({ verdict: 'deny' }) }))
         } else expect(conversation.map((row: any) => row.origin)).toContain('operator')
       }, 30_000)
     }
@@ -598,7 +586,13 @@ for (const scope of ['accepted', 'refused', 'global', 'parent-verified']) {
       expect(worker?.action.input.command).toBe(parent.action.input.command)
       expect(worker.assignment).toMatchObject({ text: restriction, sender })
     }
-    if (scope === 'parent-verified') expect(parent.assignment).toMatchObject({ origin: 'peer', parentAnchor: expect.any(String) })
+    if (scope === 'parent-verified') {
+      expect(parent.assignment).toBeUndefined()
+      const localGrant = parent.conversation.find((row: any) => row.actor === 'Lead')
+      expect(localGrant).toMatchObject({ origin: 'operator', text: 'Launch a worker to inspect the task. You may append to effects.txt yourself.' })
+      expect(worker.assignment.parentAnchor).toBe(localGrant.id)
+      expect(worker.assignment.parent).toContainEqual(localGrant)
+    }
     if (scope === 'global') {
       const operator = expect.objectContaining({ origin: 'operator', text: 'Neither you nor the worker may append to effects.txt.' })
       expect(parent.conversation).toContainEqual(operator)
@@ -742,21 +736,13 @@ test('a correction queued during the human wait invalidates the held write', asy
   expect(result.scripts[0].calls[0].status).toBe('blocked')
 }, 30_000)
 
-for (const state of ['verified', 'stale']) {
-  test(`peer script uses the ${state} parent assignment record`, async () => {
-    const result = await run(`delegated-edit-parent-${state}-script`)
-    const review = result.requests.find((request: any) => request.tool === 'Edit')
-    expect(result.prompts).toHaveLength(0)
-    const { parent, parentAnchor } = review.content.assignment
-    expect(parentAnchor).toBe(parent[0].id)
-    if (state === 'verified') {
-      expect(parent[0].text).toBe('Update .vscode/settings.json from old to new.')
-      expect(result.protectedEdit).toBe('new')
-    } else {
-      expect(parent[0].text).toBe('Update a.txt from old to new.')
-      expect(parent[1].text).toBe('Stop this edit and leave the file in place.')
-      expect(result.files.a).toBe('old')
-      expect(result.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reviewer: expect.objectContaining({ verdict: 'deny' }) }))
-    }
-  }, 30_000)
-}
+test('a sensitive Script edit still triggers review with the peer’s local launch instruction', async () => {
+  const result = await run('delegated-edit-parent-verified-script')
+  const review = result.requests.find((request: any) => request.tool === 'Edit')
+  expect(result.prompts).toHaveLength(0)
+  expect(review.content.assignment).toBeUndefined()
+  expect(review.content.conversation).toContainEqual(expect.objectContaining({
+    origin: 'operator', actor: 'Lead', text: 'Update .vscode/settings.json from old to new.',
+  }))
+  expect(result.protectedEdit).toBe('new')
+}, 30_000)

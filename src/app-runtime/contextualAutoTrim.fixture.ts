@@ -10,9 +10,11 @@ globalThis.fetch = Object.assign(async () => { throw new Error('Unexpected netwo
   preconnect: globalThis.fetch.preconnect,
 })
 
-const withdrawn = process.env.CONTEXTUAL_TRIM_WITHDRAWN === '1'
+const restriction = process.env.CONTEXTUAL_TRIM_RESTRICTION
+const withdrawn = restriction === 'operator'
 const grant = 'Should I append the two markers to effects.txt when you tell me to proceed?'
 const withdrawal = 'Should I leave effects.txt unchanged after all?'
+const teammateHold = 'Keep effects.txt unchanged while I am checking the fixture.'
 const script = 'const next = "printf second >> effects.txt"; await tools.call({name:"Bash",input:{command:"printf first >> effects.txt"}}); await tools.call({name:"Bash",input:{command:next}});'
 const marker = 'Unrelated observatory correspondence'
 const reviews: { bytes: number; omittedCorrespondence: boolean; wholeScript: boolean; evidence: ContextualEvidence }[] = []
@@ -37,7 +39,8 @@ mock.module('../services/api/client.js', () => ({
         wholeScript: system.includes('Script review:'), evidence })
       const confirmed = evidence.conversation.filter(row => row.origin === 'operator' && row.text === 'Yes, do that.')
       const allowed = confirmed.some(row => row.proposal?.text === grant) &&
-        !confirmed.some(row => row.proposal?.text === withdrawal)
+        !confirmed.some(row => row.proposal?.text === withdrawal) &&
+        !evidence.conversation.some(row => row.origin === 'peer' && row.text === teammateHold)
       return Promise.resolve({ ...message, content: [{ type: 'text', text: JSON.stringify({
         decision: allowed ? 'allow' : 'deny', risk: 'medium', rationale: 'Fixture decision based on the linked replies.',
       }) }], stop_reason: 'end_turn' })
@@ -82,9 +85,14 @@ const session = createQueryEngineSessionController(createQueryEngineAppSession({
   getAppState: () => state, setAppState: update => { state = update(state) },
   readFileCache: createFileStateCacheWithSizeLimit(20), userSpecifiedModel: 'claude-sonnet-5-5',
   recordTranscript: async () => null,
-  initialMessages: Array.from({ length: 4 }, (_, index) => createUserMessage({
-    content: `${marker} ${index}. ` + 'é'.repeat(35_000), origin: { kind: 'coordinator' },
-  })),
+  initialMessages: [
+    ...(restriction === 'teammate' ? [createUserMessage({ content: teammateHold,
+      origin: { kind: 'teammate', messages: [{ kind: 'teammate', from: 'Fixture teammate', text: teammateHold }] },
+    })] : []),
+    ...Array.from({ length: 4 }, (_, index) => createUserMessage({
+      content: `${marker} ${index}. ` + 'é'.repeat(35_000), origin: { kind: 'coordinator' },
+    })),
+  ],
 }))
 let prompts = 0
 session.subscribe(event => {
@@ -103,4 +111,4 @@ await session.submit('Run the fixture now, respecting my earlier decisions.')
 session.dispose()
 
 const effects = await Bun.file(join(cwd, 'effects.txt')).text().catch(() => null)
-console.log(JSON.stringify({ reviews, effects, prompts, script, grant, withdrawal }))
+console.log(JSON.stringify({ reviews, effects, prompts, script, grant, withdrawal, teammateHold }))

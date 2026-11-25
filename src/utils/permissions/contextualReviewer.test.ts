@@ -55,7 +55,7 @@ test('last-resort review trimming never separates an approval from its later wit
   const withdrawal = operator('withdrawal', 'Do not change marker.txt after all.')
   const followUp = operator('follow-up', 'Continue with the documentation.')
   const longChat = Array.from({ length: 100 }, (_, index): Entry => ({
-    origin: 'peer', id: `teammate-${index}`, text: 'Background notes: ' + 'w'.repeat(3_000),
+    origin: 'other', id: `background-${index}`, text: 'Background notes: ' + 'w'.repeat(3_000),
   }))
   const assignment = {
     actor: 'local-worker', origin: 'worker-launch' as const, parentAnchor: approval.id,

@@ -290,10 +290,6 @@ export type ToolUseContext = {
   getCurrentAutoModeMessages?: () => readonly Message[]
   /** Desktop registry identity, independent of what survives context compaction. */
   peerCreatorAppSessionId?: string | null
-  /** Desktop-owned identities for a peer created before assignment links were recorded. */
-  lookupLegacyPeerCreator?: (creatorAppSessionId: string) => Promise<
-    { parentSessionId: string; childAppSessionId: string } | undefined
-  >
   contextualWorkerAssignment?: import('./utils/permissions/contextualAuthority.js').ContextualWorkerAssignment
   /** One per Script cell: a contextual allow recorded here covers the cell's later children. */
   contextualScriptGrant?: import('./utils/permissions/contextualAuthorization.js').ContextualScriptGrant

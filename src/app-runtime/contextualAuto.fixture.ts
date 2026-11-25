@@ -6,7 +6,6 @@ import { dirname, join } from 'node:path'
 
 const root = process.env.CONTEXTUAL_AUTO_TEST_ROOT!
 const scenario = process.env.CONTEXTUAL_AUTO_TEST_SCENARIO!
-const legacyNotice = scenario.startsWith('legacy-notice-')
 const backgroundWithdrawal = scenario === 'background-withdrawal'
 const lateScriptRelease = scenario === 'native-script-late-release'
 const repeatedDenials = scenario.startsWith('native-denials-')
@@ -42,7 +41,7 @@ const rewrittenEdit = scenario === 'hook-edit'
 const hookAllowEdit = scenario === 'delegated-hook-allow-direct'
 const verifiedParentEdit = scenario === 'delegated-edit-parent-verified-script'
 const parentWithdrawal = scenario.includes('edit-parent-withdrawn')
-const staleParent = scenario.includes('-stale-')
+const actingWithdrawal = 'Stop this job. Leave all files as they are.'
 const mainEdit = scenario === 'native-edit' || scenario === 'native-edit-script'
 const mainEditScript = scenario === 'native-edit-script'
 const directPatch = scenario === 'native-patch'
@@ -352,7 +351,7 @@ mock.module('../services/api/client.js', () => ({
         : scenario === 'native-script-mixed-review' &&
           (content?.action?.input?.command?.includes('fixtureProtected') ||
             (JSON.stringify(body.system).includes('Script review:') && content?.action?.script?.source?.includes('fixtureProtected'))) ? 'deny'
-        : scenario.includes('withdrawn') || staleParent || rewrittenEdit || questionReply || mainEdit || peerAction || directPatch || (sensitiveWrite && tool === 'Write') ? 'deny'
+        : operatorText.includes(actingWithdrawal) || rewrittenEdit || questionReply || mainEdit || peerAction || directPatch || (sensitiveWrite && tool === 'Write') ? 'deny'
         : lateCorrection ? 'allow'
         : scenario.startsWith('skip-') ? (String(content?.action?.input?.file_path).endsWith('/b.txt') ? 'ask' : 'allow')
         : scenario.startsWith('wait-') || scenario.startsWith('direct-') ? 'ask' : 'allow'
@@ -402,7 +401,7 @@ mock.module('../services/api/client.js', () => ({
       JSON.stringify(message.content).includes(workerBrief))
     const index = worker ? workerModelCalls++ : modelCalls++
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used' || reviewedReplacement || workerScope) && index === 1
+    const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || questionReply || scenario === 'mcp-browser-used' || reviewedReplacement || workerScope) && index === 1
     let check
     if (twoChecks && index > 0) {
       const first = { name: 'Bash', input: {
@@ -417,9 +416,8 @@ mock.module('../services/api/client.js', () => ({
     }
     const main = scriptCells ? { name: 'REPL', input: { description: 'Run isolated cell', ...scriptCells[index] } }
       : worker ? workerActions[index] : check ?? (scenario === 'mcp-browser-used' ? (index === 0
-      ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? (repeatedScriptDenials ? submitted : command) : cleanupCall || (legacyNotice
-      ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
-      : reviewedReplacement ? index === 0 ? { name: 'Read', input: { file_path: protectedEditPath } } : submitted
+      ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? (repeatedScriptDenials ? submitted : command) : cleanupCall || (reviewedReplacement
+      ? index === 0 ? { name: 'Read', input: { file_path: protectedEditPath } } : submitted
       : index === 0 ? submitted
       : questionReply || workerScope ? command
       : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }))
@@ -486,7 +484,6 @@ const assignment = verifiedParentEdit ? 'Update .vscode/settings.json from old t
   : candidate.name === 'Edit' ? 'Update a.txt from old to new.' : 'Append one effect marker to effects.txt.'
 const initial = routed && !scenario.includes('peer-only') && !scenario.includes('-parent-') ? [
   createUserMessage({ content: assignment }),
-  ...(scenario.includes('withdrawn') ? [createUserMessage({ content: 'Stop this job. Leave all files as they are.' })] : []),
   ...(scenario.includes('stopped') ? [createUserMessage({ content: 'Interrupted by user', origin: { kind: 'interruption' } })] : []),
 ] : []
 let parentReference: { parentSessionId: string; userMessageId: string } | undefined
@@ -500,10 +497,7 @@ if (scenario.includes('-parent-')) {
   const entry = (message: ReturnType<typeof createUserMessage>, parentUuid: string | null) =>
     JSON.stringify({ ...message, parentUuid, sessionId: parentSessionId, cwd, isSidechain: false, userType: 'external' }) + '\n'
   await writeFile(path, entry(grant, null))
-  if (staleParent || parentWithdrawal) {
-    const content = parentWithdrawal ? 'Stop this job. Leave all files as they are.' : 'Stop this edit and leave the file in place.'
-    await appendFile(path, entry(createUserMessage({ content }), grant.uuid))
-  }
+  if (parentWithdrawal) await appendFile(path, entry(createUserMessage({ content: actingWithdrawal }), grant.uuid))
 }
 let transcript: readonly any[] = []
 const runtimeLimits = scenario.startsWith('wait-') ? { foregroundMs: 900, backgroundMs: 900, runtimeMs: 900 }
@@ -550,6 +544,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   ...(scenario.startsWith('compacted-host-identity') && { peerCreatorAppSessionId: randomUUID() }),
 }
 const creatorAppId = randomUUID()
+if (parentReference) config.peerCreatorAppSessionId = creatorAppId
 const postedNotices: unknown[] = []
 let browserCalls = 0
 if (webSearch) {
@@ -655,43 +650,6 @@ if (helperRead) {
   config.tools = [...config.tools, GetGoalTool, LSPTool]
   config.peerCreatorAppSessionId = creatorAppId
 }
-if (legacyNotice) {
-  const { getTranscriptPathForSession } = await import('../utils/sessionStorage.js')
-  const { createAnnounceTool } = await import('../../app/sidecar/announceTool.js')
-  const parentSessionId = randomUUID()
-  const childAppSessionId = randomUUID()
-  const parentFile = getTranscriptPathForSession(parentSessionId)
-  const grant = createUserMessage({ content: 'Have a helper inspect a.txt. Leave it untouched.' })
-  const callId = randomUUID()
-  const script = scenario === 'legacy-notice-script' ? { isVirtual: true as const, codeMode: { cellId: 'fixture-cell', generation: 'fixture-generation' } } : {}
-  const create = { type: 'assistant', uuid: randomUUID(), ...script, message: { role: 'assistant', content: [
-    { type: 'tool_use', name: 'CreatePeer', id: callId, input: { prompt: 'Inspect a.txt.' } },
-  ] } }
-  const receipt = { ...createUserMessage({ content: [{ type: 'tool_result', tool_use_id: callId, content: 'Created peer' }],
-    sourceToolAssistantUUID: create.uuid, toolUseResult: { ok: true,
-      appSessionId: scenario === 'legacy-notice-other-child' ? randomUUID() : childAppSessionId } }), ...script }
-  const rows = [grant, create, receipt]
-  if (scenario === 'legacy-notice-conflicting') {
-    rows.push({ ...receipt, uuid: randomUUID(), toolUseResult: { ok: true, appSessionId: randomUUID() } })
-  }
-  if (scenario === 'legacy-notice-no-anchor') rows.push(rows.shift()!)
-  await mkdir(dirname(parentFile), { recursive: true })
-  await writeFile(parentFile, rows.map((row, i) => JSON.stringify({ ...row, parentUuid: rows[i - 1]?.uuid ?? null,
-    sessionId: parentSessionId, cwd, isSidechain: false, userType: 'external' })).join('\n') + '\n')
-  if (scenario === 'legacy-notice-queued') await appendFile(parentFile, JSON.stringify({
-    type: 'queue-operation', operation: 'enqueue', queueVersion: 2, mode: 'prompt',
-    sessionId: parentSessionId, uuid: randomUUID(), timestamp: new Date().toISOString(),
-    content: 'Stop the helper job.',
-  }) + '\n')
-  config.peerCreatorAppSessionId = creatorAppId
-  config.lookupLegacyPeerCreator = async creator => creator === creatorAppId && scenario !== 'legacy-notice-no-creator'
-    ? { parentSessionId, childAppSessionId } : undefined
-  config.tools = [...config.tools, createAnnounceTool(async (verb, args) => {
-    if (verb !== 'peer.announce') throw new Error('Unexpected fixture host request')
-    postedNotices.push(args)
-    return { ok: true, value: { postedAt: Date.now() } } as never
-  })]
-}
 const { createAssistantMessage } = await import('../utils/messages.js')
 if (cleanup) {
   const proposal = createAssistantMessage({ content: 'Remove the leftover /commercial page and check the cleanup, or plan the edit-table flattening?' })
@@ -786,18 +744,17 @@ if (surface === 'desktop') {
     ? browserRead ? 'Read the browser page.' : browserScroll ? 'Scroll down in the browser.' : 'Click Save in the browser.'
     : 'Update a.txt from old to new.',
     browserPeer ? { origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId } } : undefined)
-  else if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {
-    kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
-  } })
   else if (peerLocalFollowUp) await controller.submit('Also update the docs.')
   else if (workerScope) await controller.submit(globalWorkerRestriction ? globalRestrictionText :
     'Launch a worker to inspect the task. You may append to effects.txt yourself.', parentReference ? {
       origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true, assignment: parentReference },
     } : undefined)
-  else await controller.submit(routed || mainEdit ? assignment : loadSkill ? 'Use the fixture-auto-skill.' :
+  else await controller.submit(routed || mainEdit
+    ? scenario.startsWith('delegated-bash-withdrawn-') ? actingWithdrawal : assignment
+    : loadSkill ? 'Use the fixture-auto-skill.' :
     peerAction ? 'Inspect a.txt yourself. Do not create or contact another session.' :
     'Run the isolated action and report the result.', routed ? {
-      origin: { kind: 'peer', name: 'Lead', appSessionId: 'fixture-lead', creationPrompt: true, ...(parentReference && { assignment: parentReference }) },
+      origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true, ...(parentReference && { assignment: parentReference }) },
     } : compacted ? { isMeta: true } : undefined)
   if (backgroundWithdrawal) {
     await backgroundReview.promise

@@ -22,10 +22,12 @@ export function contextualReviewerProfile(configuredModel: string) {
 function trimConversation(evidence: ContextualEvidence, budget: number): string | undefined {
   const { assignment, conversation } = evidence
   const parent = assignment?.parent ?? []
+  const localWorker = assignment?.origin === 'worker-launch'
   // Operator instructions can limit later work even when they predate the
-  // current task. Keep replies, their proposals and any selected option intact.
+  // current task. Keep linked replies and correspondence that can narrow scope.
   const optional = (entries: ContextualEvidence['conversation']) => entries.filter((row, index) =>
-    row.origin !== 'operator' && !row.recipient && !row.proposal &&
+    row.origin !== 'operator' && row.origin !== 'peer' && !row.recipient && !row.proposal &&
+    !(localWorker && (row.actor === 'coordinator' || row.actor === 'worker history')) &&
     !(assignment?.parentAnchor && row.id === assignment.parentAnchor) &&
     !(row.origin === 'assistant' && entries[index - 1]?.proposal))
   const removable = [...optional(parent), ...optional(conversation)]

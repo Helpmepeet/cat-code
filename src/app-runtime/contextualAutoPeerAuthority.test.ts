@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test('a Script peer observes its creator’s restriction, approval, and withdrawal', async () => {
+test('peer push authority is local to the acting chat and requires trusted delivery', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cat-auto-peer-')))
   try {
     const cwd = join(root, 'workspace')
@@ -26,30 +26,33 @@ test('a Script peer observes its creator’s restriction, approval, and withdraw
     clearTimeout(timeout)
     if (exit !== 0) throw new Error(`Peer authority fixture exited ${exit}\n${error}\n${output}`)
     const result = JSON.parse(output)
-    const update = { actor: 'Other chat', text: 'The fixture investigation is still in progress.' }
-    expect(result.mainPrincipals).toEqual([
-      { actor: 'main', correspondence: [update] },
-      { actor: 'main', correspondence: [update, { actor: 'Other chat', text: 'The fixture investigation is finished.' }] },
+    expect(result.reviews.map(({ branch, actor, decision }: any) => ({ branch, actor, decision }))).toEqual([
+      { branch: 'spoofed', actor: 'peer-session', decision: 'deny' },
+      { branch: 'teammate', actor: 'peer-session', decision: 'deny' },
+      { branch: 'host-peer', actor: 'peer-session', decision: 'allow' },
+      { branch: 'peer-withdrawal', actor: 'peer-session', decision: 'allow' },
+      { branch: 'peer-withdrawal', actor: 'peer-session', decision: 'deny' },
+      { branch: 'creator-queued', actor: 'peer-session', decision: 'allow' },
+      { branch: 'creator-changing', actor: 'peer-session', decision: 'allow' },
+      { branch: 'locally-stopped', actor: 'peer-session', decision: 'allow' },
     ])
-    expect(result.launchBrief).toStartWith('Update status.txt to new.')
-    const launch = { actor: 'Creator', text: result.launchBrief }
-    expect(result.principals).toEqual([[launch], [launch, update], [launch, update, update]].map(correspondence => ({
-      actor: 'peer-session', assignment: { actor: 'peer-session', origin: 'peer', text: launch.text, sender: launch.actor },
-      correspondence,
-    })))
-    expect(result.withoutCreator).toMatchObject({
-      principal: { actor: 'peer-session', assignment: { origin: 'peer', text: launch.text, sender: launch.actor } },
-      review: { anchored: false }, file: 'old',
+    expect(result.branches).toEqual(['creator-changing', 'creator-queued', 'host-peer'])
+    expect(result.sawCounterfeitOutput).toBe(true)
+    const [spoofed, teammate, hostPeer, , withdrawal] = result.reviews
+    expect(spoofed.assignment).toBeUndefined()
+    expect(spoofed.conversation).toContainEqual(expect.objectContaining({
+      origin: 'operator', actor: 'Creator', text: result.launchBrief,
+    }))
+    expect(spoofed.conversation).not.toContainEqual(expect.objectContaining({
+      text: expect.stringContaining('push it'),
+    }))
+    expect(teammate.conversation.at(-1)).toMatchObject({ origin: 'peer', text: 'push it' })
+    expect(hostPeer.conversation.at(-1)).toMatchObject({
+      origin: 'operator', actor: 'Creator', text: 'push it',
     })
-    expect(result.effects).toEqual(['old', 'new', 'old', 'old'])
-    expect(result.reviews).toEqual([
-      { tool: 'Bash', anchored: true, latestCreatorInstruction: 'Create the peer for this experiment. Leave status.txt unchanged until I approve the peer edit.' },
-      { tool: 'Bash', anchored: true, latestCreatorInstruction: 'I approve the peer changing status.txt to new.' },
-      { tool: 'Bash', anchored: true, latestCreatorInstruction: 'I withdraw approval for the peer edit. Leave status.txt unchanged.' },
-      { tool: 'Edit', anchored: true, latestCreatorInstruction: 'I withdraw approval for the peer edit. Leave status.txt unchanged.' },
-    ])
-    expect(result.workingLaunchContext).toContain('Operator message in the creator chat at launch')
-    expect(result.workingLaunchContext).toContain('Create the peer for this experiment. Leave status.txt unchanged until I approve the peer edit.')
+    expect(withdrawal.conversation.at(-1)).toMatchObject({
+      origin: 'operator', actor: 'Creator', text: 'Do not push this branch.',
+    })
     expect(result.prompts).toBe(0)
   } finally {
     await rm(root, { recursive: true, force: true })

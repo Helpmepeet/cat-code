@@ -28,7 +28,7 @@ import { expandPath } from '../path.js'
 import { getSourcedAutoModeInstructions } from '../settings/settings.js'
 import { buildContextualReview, contextualReviewerProfile, sendContextualReview } from './contextualReviewer.js'
 import { CONTEXTUAL_REVIEW_VERSION } from './contextualReviewPrompt.js'
-import { readContextualAuthority, recentShellRuns, resolveContextualPeerParent } from './contextualAuthority.js'
+import { readContextualAuthority, recentShellRuns } from './contextualAuthority.js'
 import { createDenialTrackingState, DENIAL_LIMITS, persistDenialState, recordDenial, recordSuccess } from './denialTracking.js'
 import type { ContextualEvidence } from './contextualReviewPrompt.js'
 import { recordAutoModeOutcome } from './autoModeMeta.js'
@@ -197,8 +197,7 @@ export async function createContextualAttempt(
   if (!mcp && tool.name === ASK_USER_QUESTION_TOOL_NAME) return undefined
   const snapshot = structuredClone(input)
   const action = projectAction(tool, snapshot, context)
-  const peerParent = await resolveContextualPeerParent(context, context.lookupLegacyPeerCreator)
-  let authority = readContextualAuthority(context, peerParent)
+  let authority = readContextualAuthority(context)
   const policy: ToolPermissionContext = structuredClone(context.getAppState().toolPermissionContext)
   const instructions = getSourcedAutoModeInstructions()
   const principal = codeModeToolPrincipal(tool, context)
@@ -220,13 +219,12 @@ export async function createContextualAttempt(
       (mcp || tool.name !== 'REPL') && !isReviewException()
   }
 
-  function needsDelegatedScopeReview(): boolean {
+  function needsWorkerScopeReview(): boolean {
     if (!delegatedStateChange()) return false
     const { parent, parentAnchor } = authority.assignment ?? {}
     const anchor = parent?.findIndex(row => row.id === parentAnchor) ?? -1
     if (anchor >= 0 && parent?.some((row, index) => index > anchor && row.origin === 'operator')) return true
-    // A peer can see the operator's messages in its own conversation.
-    return Boolean(context.agentId && authority.conversation.filter(row => row.origin === 'operator').length > 1)
+    return authority.conversation.filter(row => row.origin === 'operator').length > 1
   }
   const latestOperator = authority.conversation.findLast(row => row.origin === 'operator' && row.id)
   const newOperatorTurn = latestOperator && !context.messages.some(row => row.uuid === latestOperator.id)
@@ -274,7 +272,7 @@ export async function createContextualAttempt(
   }
 
   function current(candidate: Input, releasedContext: ToolUseContext): boolean {
-    const latest = readContextualAuthority(releasedContext, peerParent)
+    const latest = readContextualAuthority(releasedContext)
     return !latest.stopped && !latest.pendingOperatorInput && isDeepStrictEqual(latest, authority) &&
       unchangedAction(candidate, releasedContext)
   }
@@ -282,7 +280,7 @@ export async function createContextualAttempt(
   // Only the operator's words can be refreshed. A change of tool, principal,
   // policy or assignment still invalidates the attempt.
   function refreshInstructions(): boolean {
-    const latest = readContextualAuthority(context, peerParent)
+    const latest = readContextualAuthority(context)
     if (latest.stopped || latest.pendingOperatorInput || !unchangedAction(input, context) ||
         latest.actor !== authority.actor || latest.verifiedSource !== authority.verifiedSource ||
         !isDeepStrictEqual(latest.assignment, authority.assignment) ||
@@ -301,7 +299,7 @@ export async function createContextualAttempt(
     // A busy prompt drains at the end of the tool round. Reads already allowed
     // under this snapshot may finish it; later authority changes still fence release.
     return (!reviewedInstructions && (mayAffectRead || mayChangeState(tool, snapshot) && followUps.length > 0)) ||
-      !isDeepStrictEqual(readContextualAuthority(context, peerParent), authority)
+      !isDeepStrictEqual(readContextualAuthority(context), authority)
   }
 
   function emit(outcome: AutoModeReview['outcome'], reason?: string) {
@@ -554,7 +552,7 @@ export async function createContextualAttempt(
     get delegated() { return authority.delegated },
     get mayChangeState() { return mayChangeState(tool, snapshot) },
     get delegatedStateChange() { return delegatedStateChange() },
-    needsDelegatedScopeReview,
+    needsWorkerScopeReview,
     recordAllowedOutsideRead() { allowedOutsideRead = true },
     get requiresHuman() { return requiresHuman },
     get reviewFailure() { return reviewFailure },
@@ -602,7 +600,7 @@ export async function createContextualAttempt(
         const approvedAuthority = structuredClone(authority)
         coveringGrant.granted = {
           isCurrent: liveContext => {
-            const latest = readContextualAuthority(liveContext, peerParent)
+            const latest = readContextualAuthority(liveContext)
             return contextualAutoReviewMode() === 'experimental' &&
               !latest.stopped && !latest.pendingOperatorInput && isDeepStrictEqual(latest, approvedAuthority) &&
               isDeepStrictEqual(liveContext.getAppState().toolPermissionContext, policy) &&

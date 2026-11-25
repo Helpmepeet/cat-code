@@ -177,7 +177,6 @@ const snipProjection = feature('HISTORY_SNIP')
 
 export type QueryEngineConfig = {
   peerCreatorAppSessionId?: ToolUseContext['peerCreatorAppSessionId']
-  lookupLegacyPeerCreator?: ToolUseContext['lookupLegacyPeerCreator']
   pendingQuestionRuntime?: PendingQuestionRuntime
   /** A structured-input session owns its interpreter and restores history once. */
   codeModeHost?: CodeModeHost
@@ -806,7 +805,6 @@ export class QueryEngine {
       messages: this.mutableMessages,
       getCurrentAutoModeMessages: () => this.mutableMessages,
       peerCreatorAppSessionId: this.config.peerCreatorAppSessionId,
-      lookupLegacyPeerCreator: this.config.lookupLegacyPeerCreator,
       // Slash commands that mutate the message array (e.g. /force-snip)
       // call setMessages(fn).  In interactive mode this writes back to
       // AppState; in print mode we write back to mutableMessages so the
@@ -1151,7 +1149,6 @@ export class QueryEngine {
       messages,
       getCurrentAutoModeMessages: () => this.mutableMessages,
       peerCreatorAppSessionId: this.config.peerCreatorAppSessionId,
-      lookupLegacyPeerCreator: this.config.lookupLegacyPeerCreator,
       setMessages: () => {},
       onChangeAPIKey: () => {},
       handleElicitation: this.config.handleElicitation,
