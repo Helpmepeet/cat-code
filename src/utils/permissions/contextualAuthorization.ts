@@ -246,9 +246,9 @@ export async function createContextualAttempt(
   let reviewStarted = false
   let wholeScriptAttempt = false
   let actionAllowed = false
-  let oversizeHumanApproval = false
   let requiresHuman = false
   let humanAllowed = false
+  let oversizeHumanApproval = false
   let coveringGrant: ContextualScriptGrant | undefined
   let used = false
   let lastOutcome: AutoModeReview['outcome'] | undefined
@@ -412,6 +412,8 @@ export async function createContextualAttempt(
   function scriptSizeLimit(reason: string): PermissionDecision {
     reviewFailure = 'context_limit'
     return denyReview(reason, 'inconclusive')
+  }
+
   function askOnceForOversizeReview(reviewedAction: ContextualEvidence['action']): PermissionDecision {
     reviewFailure = 'context_limit'
     const reason = 'Auto Mode could not review this action because the request was too large.'
@@ -426,8 +428,6 @@ export async function createContextualAttempt(
       : execution?.resolvedAction !== undefined ? `Target ${JSON.stringify(execution.resolvedAction)}.`
       : `Working directory ${JSON.stringify(reviewedAction.cwd)}.`
     return ask(`${reason} ${target} Approval applies to this action only.`, `Allow ${tool.name} once?`)
-  }
-
   }
 
   async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
@@ -500,11 +500,11 @@ export async function createContextualAttempt(
     const reviewerInstructions = redactReviewFields(withoutDefaultRules(instructions))
     if (containsCredentialMaterial(JSON.stringify(evidence)) ||
         containsCredentialMaterial(JSON.stringify(reviewerInstructions))) {
+      return denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
+    }
     const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
     const built = buildContextualReview(evidence, profile, reviewerInstructions, scriptChild)
     if (!built) return askOnceForOversizeReview(evidence.action)
-      return denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
-    }
     reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION, profile: { provider: profile.provider, model: profile.model,
       effort: profile.effort, promptDigest: built.promptDigest } }
     emit('reviewing')
@@ -561,9 +561,9 @@ export async function createContextualAttempt(
     get reviewedSkillGrants() { return reviewedSkillGrants },
     review: () => review ??= Promise.resolve(coveredByScript() ?? reviewHeldAction()),
     needsInstructionReview,
-      if (oversizeHumanApproval) return stale('The action changed after approval. Review the current action in chat.')
     async reviewFollowUp() {
       if ((scriptChild && (reviewStarted || requiresHuman || scriptGrant?.granted)) || (scriptWrapper && mode === 'experimental')) return scriptStale()
+      if (oversizeHumanApproval) return stale('The action changed after approval. Review the current action in chat.')
       renewReview()
       return reviewHeldAction()
     },

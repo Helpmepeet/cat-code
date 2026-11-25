@@ -937,6 +937,8 @@ await writeFile(join(root, 'evidence.json'), JSON.stringify({
   ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),
   ...(browserAction && { browserCalls }),
   ...(sensitiveWrite && { sensitiveFileExists: await Bun.file(join(cwd, sensitiveWrite)).exists() }),
+  ...(oversizeAction && { sensitiveFileSize: await readFile(protectedEditPath).then(bytes => bytes.length, () => 0),
+    queuedFileExists: existsSync(join(cwd, '.vscode', 'launch.json')), changedFileExists: existsSync(join(cwd, 'different.txt')) }),
   ...(reviewedReplacement && { replacement: await readFile(protectedEditPath, 'utf8') }),
   ...((rewrittenEdit || verifiedParentEdit) && { protectedEdit: await readFile(protectedEditPath, 'utf8') }),
   ...(workerRouting && {
@@ -953,5 +955,3 @@ await writeFile(join(root, 'evidence.json'), JSON.stringify({
 controller.dispose()
 await cleanupMcp?.()
 if (helperSymbol) await (await import('../services/lsp/manager.js')).shutdownLspServerManager()
-  ...(oversizeAction && { sensitiveFileSize: await readFile(protectedEditPath).then(bytes => bytes.length, () => 0),
-    queuedFileExists: existsSync(join(cwd, '.vscode', 'launch.json')), changedFileExists: existsSync(join(cwd, 'different.txt')) }),
