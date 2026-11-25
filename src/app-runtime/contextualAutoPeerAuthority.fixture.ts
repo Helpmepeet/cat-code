@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mock } from 'bun:test'
-import { appendFile, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { HostResultMessage, PeerDeliverMessage } from '../../app/shared/protocol.js'
 import type { PeerHostRequester } from '../../app/sidecar/peerHostRequester.js'
@@ -184,5 +184,9 @@ for (const [index, instruction] of [null, approval, withdrawal].entries()) {
 nextAction = { name: 'REPL', input: { code: editScript, description: 'Update fixture status with Edit' } }
 await peer.submit(openingBrief, { origin })
 effects.push(await readFile(file, 'utf8'))
-console.log(JSON.stringify({ effects, reviews, prompts, workingLaunchContext, mainPrincipals, principals, launchBrief: delivery.text }))
+await rename(creatorPath, `${creatorPath}.unavailable`)
+nextAction = { name: 'REPL', input: { code: bashScript, description: 'Update fixture status without creator transcript' } }
+await peer.submit(statusUpdate, { origin: statusOrigin })
+const withoutCreator = { principal: principals.pop(), review: reviews.pop(), file: await readFile(file, 'utf8') }
+console.log(JSON.stringify({ effects, reviews, prompts, workingLaunchContext, mainPrincipals, principals, withoutCreator, launchBrief: delivery.text }))
 process.exit(0)

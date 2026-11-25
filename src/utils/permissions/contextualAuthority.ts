@@ -235,13 +235,8 @@ function legacyLaunchAnchor(messages: readonly Message[], childId: string, openi
   return conversationEvidence(messages.slice(0, index)).findLast(row => row.origin === 'operator' && row.id)?.id
 }
 
-export async function resolveContextualPeerParent(
-  context: ToolUseContext,
-  lookupLegacyCreator?: ToolUseContext['lookupLegacyPeerCreator'],
-): Promise<PeerParentEvidence | undefined> {
-  if (context.agentId) return undefined
-  const current = context.getCurrentAutoModeMessages?.() ?? context.messages
-  const origin = current.flatMap(message => {
+function peerCreationMessage(messages: readonly Message[], creatorId: ToolUseContext['peerCreatorAppSessionId']) {
+  const launches = messages.flatMap(message => {
     const attachment = message.type === 'attachment' ? message.attachment as Attachment : undefined
     const source = message.type === 'user' ? message.origin
       : queuedCommandOrigin(attachment)
@@ -255,9 +250,20 @@ export async function resolveContextualPeerParent(
     const brief = typeof input === 'string' ? input : onlyBlock?.type === 'text' ? onlyBlock.text : undefined
     return [{ source, brief }]
   })
-  if (origin.length !== 1) return undefined
-  const { source, brief } = origin[0]!
-  if (context.peerCreatorAppSessionId !== undefined && context.peerCreatorAppSessionId !== source.appSessionId) return undefined
+  const launch = launches.length === 1 ? launches[0] : undefined
+  if (launch && (creatorId === undefined || creatorId === launch.source.appSessionId)) return launch
+  return undefined
+}
+
+export async function resolveContextualPeerParent(
+  context: ToolUseContext,
+  lookupLegacyCreator?: ToolUseContext['lookupLegacyPeerCreator'],
+): Promise<PeerParentEvidence | undefined> {
+  if (context.agentId) return undefined
+  const current = context.getCurrentAutoModeMessages?.() ?? context.messages
+  const launch = peerCreationMessage(current, context.peerCreatorAppSessionId)
+  if (!launch) return undefined
+  const { source, brief } = launch
   const linked = source.assignment
   try {
     const legacy = !linked && brief && validateUuid(source.appSessionId) ? await lookupLegacyCreator?.(source.appSessionId) : undefined
@@ -341,10 +347,16 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
   const anchor = worker?.anchor ?? peerParent?.reference.userMessageId
   const parent = anchor && parentEvidence?.some(record => record.id === anchor && record.origin === 'operator')
     ? parentEvidence : undefined
+  // The host can establish who gave the peer its brief even if the creator's
+  // transcript cannot substantiate an operator grant.
+  const creation = !worker && !peerParent?.launch && context.peerCreatorAppSessionId
+    ? peerCreationMessage(messages, context.peerCreatorAppSessionId) : undefined
+  const launch = peerParent?.launch ?? (creation?.brief !== undefined
+    ? { text: creation.brief, sender: creation.source.name } : undefined)
   const delegated = Boolean(context.agentId || peerSession)
   const assignment: ContextualEvidence['assignment'] = delegated ? {
     actor, origin: worker ? 'worker-launch' : 'peer',
-    ...(worker ? { text: worker.text, sender: worker.sender } : peerParent?.launch),
+    ...(worker ? { text: worker.text, sender: worker.sender } : launch),
     ...(parent && { parent, parentAnchor: anchor }),
   } : undefined
   // Keep the operator's actual follow-up available while the main query is

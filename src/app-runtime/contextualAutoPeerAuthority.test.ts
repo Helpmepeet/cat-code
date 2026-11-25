@@ -37,6 +37,10 @@ test('a Script peer observes its creator’s restriction, approval, and withdraw
       actor: 'peer-session', assignment: { actor: 'peer-session', origin: 'peer', text: launch.text, sender: launch.actor },
       correspondence,
     })))
+    expect(result.withoutCreator).toMatchObject({
+      principal: { actor: 'peer-session', assignment: { origin: 'peer', text: launch.text, sender: launch.actor } },
+      review: { anchored: false }, file: 'old',
+    })
     expect(result.effects).toEqual(['old', 'new', 'old', 'old'])
     expect(result.reviews).toEqual([
       { tool: 'Bash', anchored: true, latestCreatorInstruction: 'Create the peer for this experiment. Leave status.txt unchanged until I approve the peer edit.' },
