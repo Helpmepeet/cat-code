@@ -29,7 +29,7 @@ test('a Script peer observes its creator’s restriction, approval, and withdraw
     const update = { actor: 'Other chat', text: 'The fixture investigation is still in progress.' }
     expect(result.mainPrincipals).toEqual([
       { actor: 'main', correspondence: [update] },
-      { actor: 'main', correspondence: [update] },
+      { actor: 'main', correspondence: [update, { actor: 'Other chat', text: 'The fixture investigation is finished.' }] },
     ])
     expect(result.launchBrief).toStartWith('Update status.txt to new.')
     const launch = { actor: 'Creator', text: result.launchBrief }

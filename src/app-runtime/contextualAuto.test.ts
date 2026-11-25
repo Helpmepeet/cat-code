@@ -306,12 +306,15 @@ for (const contextual of [true, false]) {
   }, 30_000)
 }
 
-test('shadow reviews a peer write with v7 while the legacy allowance releases it', async () => {
+test('shadow preserves the main actor and peer correspondence while the legacy allowance releases the write', async () => {
   const proof = await run('native-peer-write-shadow')
   const candidates = proof.requests.filter((request: any) => request.contextual)
   expect(candidates).toHaveLength(1)
   expect(JSON.stringify(candidates[0].system)).toContain('cat-code-contextual-review-v7')
-  expect(candidates[0].content.assignment).toMatchObject({ origin: 'peer' })
+  expect(candidates[0].content.action.actor).toBe('main')
+  expect(candidates[0].content.assignment).toBeUndefined()
+  expect(candidates[0].content.conversation).toContainEqual(expect.objectContaining({ origin: 'peer', actor: 'Lead',
+    text: 'Update a.txt from old to new.' }))
   expect(proof.requests.some((request: any) => !request.contextual)).toBe(true)
   expect(proof.prompts).toHaveLength(0)
   expect(proof.effect).toBe('effect')
@@ -337,8 +340,10 @@ for (const outcome of ['allow', 'deny', 'withdrawal', 'peer-only']) {
       }) }),
     }))
     if (outcome === 'peer-only') {
-      expect(proof.requests[0].content.assignment).toMatchObject({ origin: 'peer', text: 'Look up the sample record.' })
-      expect(proof.requests[0].content.assignment.parentAnchor).toBeUndefined()
+      const { action, assignment, conversation } = proof.requests[0].content
+      expect(action.actor).toBe('main')
+      expect(assignment).toBeUndefined()
+      expect(conversation).toContainEqual(expect.objectContaining({ origin: 'peer', actor: 'Lead', text: 'Look up the sample record.' }))
     }
     if (outcome === 'withdrawal') {
       expect(proof.requests.at(-1).content.conversation.at(-1)).toMatchObject({

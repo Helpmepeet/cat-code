@@ -153,7 +153,7 @@ const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loade
 creator.dispose()
 const resumedCreator = controllerFor([BashTool], null, active.messages)
 nextAction = shellAction
-await resumedCreator.submit('Run the resumed fixture action.', { isMeta: true })
+await resumedCreator.submit('The fixture investigation is finished.', { origin: statusOrigin })
 resumedCreator.dispose()
 const mainPrincipals = principals.splice(0)
 reviews.length = 0
