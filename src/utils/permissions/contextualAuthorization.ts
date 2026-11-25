@@ -436,7 +436,7 @@ export async function createContextualAttempt(
     const path = !mcp && tool.name === 'Write' && typeof input.file_path === 'string'
       ? expandPath(input.file_path, action.cwd) : undefined
     const previous = path && context.readFileState.get(path)
-    const changedLines = path && previous && isCompleteUnboundedRead(previous) && typeof input.content === 'string'
+    const proposedChanges = path && previous && isCompleteUnboundedRead(previous) && typeof input.content === 'string'
       ? getPatchFromContents({ filePath: path, oldContent: previous.content, newContent: input.content }).flatMap(hunk => hunk.lines)
       : undefined
     const conversation = [...authority.conversation, ...authority.pendingConversation]
@@ -448,9 +448,9 @@ export async function createContextualAttempt(
       action: { ...action, effect, attempt: toolUseId, actor: authority.actor,
         execution: { ...action.execution,
           ...(reviewedSkillGrants?.value && { skillGrants: reviewedSkillGrants.value }),
-          ...(changedLines?.length && { changeSinceCompleteRead: {
-            addedLines: changedLines.filter(line => line.startsWith('+')).length,
-            removedLines: changedLines.filter(line => line.startsWith('-')).length,
+          ...(proposedChanges?.length && { proposedChangesFromLastCompleteRead: {
+            addedLines: proposedChanges.filter(line => line.startsWith('+')).length,
+            removedLines: proposedChanges.filter(line => line.startsWith('-')).length,
           } }),
           ...(boundProjection && { resolvedAction: boundProjection.value }) },
         tool: tool.name, ...(scriptGrant && { script: {

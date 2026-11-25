@@ -449,6 +449,22 @@ for (const target of ['git-hook', 'claude-settings', 'editor-settings']) {
   }, 30_000)
 }
 
+test('the Write reviewer receives proposed changes relative to the complete read', async () => {
+  const proof = await run('native-write-complete-read')
+  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Write'])
+  const [review] = proof.requests
+  expect(review.content.action.execution).toMatchObject({
+    operation: 'overwrite',
+    proposedChangesFromLastCompleteRead: { addedLines: 1, removedLines: 1 },
+  })
+  expect(review.content.action.execution).not.toHaveProperty('changeSinceCompleteRead')
+  expect(JSON.stringify(review.system)).toContain(
+    'These counts do not establish that another writer changed the file.',
+  )
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.replacement).toBe('{ "editor.tabSize": 4 }\n')
+}, 30_000)
+
 test('desktop Auto Mode loads an ordinary skill without optional arguments or a review', async () => {
   const proof = await run('native-skill')
   expect(proof.requests).toHaveLength(0)

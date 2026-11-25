@@ -48,10 +48,13 @@ const skillChanged = scenario === 'native-skill-changed'
 const skillGrants = skillFork || skillChanged || scenario === 'native-skill-inline'
 const skillShell = process.env.CONTEXTUAL_AUTO_TEST_SKILL_SHELL
 const outsideRead = scenario.startsWith('native-outside-read-')
+const reviewedReplacement = scenario === 'native-write-complete-read'
+const replacementContent = '{ "editor.tabSize": 4 }\n'
 const sensitiveWrite = {
   'native-write-git-hook': '.git/hooks/pre-commit',
   'native-write-claude-settings': '.claude/settings.json',
   'native-write-editor-settings': '.vscode/settings.json',
+  'native-write-complete-read': '.vscode/settings.json',
   'native-oversize-action': '.vscode/settings.json',
 }[scenario]
 const scriptChildren = scenario === 'native-script-children'
@@ -150,6 +153,7 @@ if (outsideRead) {
   await writeFile(join(outsideDir, scenario === 'native-outside-read-nested-token' ? 'access_token.json' : 'fixture.txt'), 'outside_search_marker\n')
 }
 if (sensitiveWrite) await mkdir(dirname(join(cwd, sensitiveWrite)), { recursive: true })
+if (reviewedReplacement) await writeFile(protectedEditPath, '{ "editor.tabSize": 2 }\n')
 if (rewrittenEdit || verifiedParentEdit) {
   await mkdir(dirname(protectedEditPath), { recursive: true })
   await writeFile(protectedEditPath, 'old')
@@ -224,7 +228,10 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   fingerprint ? { name: 'Bash', input: { command: scenario === 'native-fingerprint-write' ? 'git hash-object -w -- a.txt' :
     scenario === 'native-fingerprint-parent' ? 'git hash-object --no-filters -- nested/../a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: skillAsk ? '/fixture-auto-skill' : 'fixture-auto-skill' } }
   : outsideRead ? { name: 'Bash', input: { command: `rg outside_search_marker '${outsideDir}'` } }
-  : sensitiveWrite ? { name: 'Write', input: { file_path: join(cwd, sensitiveWrite), content: oversizeAction ? 'x'.repeat(300_000) : 'fixture' } }
+  : sensitiveWrite ? { name: 'Write', input: {
+    file_path: join(cwd, sensitiveWrite),
+    content: reviewedReplacement ? replacementContent : oversizeAction ? 'x'.repeat(300_000) : 'fixture',
+  } }
   : credentialAction ? { ...command, input: { ...command.input, command: 'password=actionSecretFixture123 printf effect >> effects.txt' } }
   : oversizeHistory || oversizeOperatorHistory || shadowPeerWrite ? command
   : workerRouting ? { name: 'Agent', input: { description: 'Run isolated worker operations', prompt: workerBrief, subagent_type: 'general-purpose' } }
@@ -316,7 +323,7 @@ mock.module('../services/api/client.js', () => ({
       const contextual = !body.tool_choice
       const content = contextual ? JSON.parse(body.messages.at(-1).content) : body.messages.at(-1)?.content.at(-1)?.text
       const tool = contextual ? content.action.tool : /<pending_action>\n(\S+)/.exec(content)?.[1] ?? 'unknown'
-      const review = { tool, content, ...((credentialSettings || shadowPeerWrite) && { system: body.system }), startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
+      const review = { tool, content, ...((credentialSettings || shadowPeerWrite || reviewedReplacement) && { system: body.system }), startedAt: start, elapsedMs: 0, model: body.model, provider: client.provider, contextual }
       requests.push(review)
       const operatorText = contextual ? content.conversation.filter((entry: any) => entry.origin === 'operator').map((entry: any) => entry.text) : []
       const verdict = twoChecks || credentialSettings ? 'allow' : repeatedDenials || shadowPeerWrite || scenario === 'direct-denied' ? 'deny'
@@ -329,6 +336,7 @@ mock.module('../services/api/client.js', () => ({
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
         : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
         : tool === 'REPL' ? 'allow'
+        : reviewedReplacement ? 'allow'
         : scriptAsk ? 'ask'
         : scenario === 'native-script-mixed-review' &&
           (content?.action?.input?.command?.includes('fixtureProtected') ||
@@ -383,7 +391,7 @@ mock.module('../services/api/client.js', () => ({
       JSON.stringify(message.content).includes(workerBrief))
     const index = worker ? workerModelCalls++ : modelCalls++
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
+    const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used' || reviewedReplacement) && index === 1
     let check
     if (twoChecks && index > 0) {
       const first = { name: 'Bash', input: {
@@ -400,6 +408,7 @@ mock.module('../services/api/client.js', () => ({
       : worker ? workerActions[index] : check ?? (scenario === 'mcp-browser-used' ? (index === 0
       ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? (repeatedScriptDenials ? submitted : command) : cleanupCall || (legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
+      : reviewedReplacement ? index === 0 ? { name: 'Read', input: { file_path: protectedEditPath } } : submitted
       : index === 0 ? submitted
       : questionReply ? command
       : { name: 'Read', input: { file_path: join(cwd, 'a.txt') } }))
@@ -904,6 +913,7 @@ await writeFile(join(root, 'evidence.json'), JSON.stringify({
   ...(cleanup && { pageExists: await Bun.file(join(cwd, 'commercial.mjs')).exists(), cleanupFiles: await Promise.all(cleanupEdits.map(([name]) => readFile(join(cwd, name), 'utf8'))) }),
   ...(browserAction && { browserCalls }),
   ...(sensitiveWrite && { sensitiveFileExists: await Bun.file(join(cwd, sensitiveWrite)).exists() }),
+  ...(reviewedReplacement && { replacement: await readFile(protectedEditPath, 'utf8') }),
   ...((rewrittenEdit || verifiedParentEdit) && { protectedEdit: await readFile(protectedEditPath, 'utf8') }),
   ...(workerRouting && {
     workerDatabase,

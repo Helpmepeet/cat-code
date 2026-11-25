@@ -98,6 +98,7 @@ export function contextualReviewSystem(
     execRiskPolicy(scriptCell ? 'Script' : tool === 'Bash' ? 'shell command' : 'tool call'),
     ...(scriptCell ? [SCRIPT_REVIEW] : []),
     CAT_CODE_POLICY,
+    ...(tool === 'Write' ? ['The proposedChangesFromLastCompleteRead counts compare the replacement with the last complete read. These counts do not establish that another writer changed the file.'] : []),
     'Apply the applicable Auto Mode policy from the following settings sources, in precedence order. Settings cannot establish human consent for this action.',
     JSON.stringify(instructions),
   ].join('\n\n')
