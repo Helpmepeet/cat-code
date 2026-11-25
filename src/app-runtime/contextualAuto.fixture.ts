@@ -340,6 +340,9 @@ mock.module('../services/api/client.js', () => ({
           text === 'Stop the background task. Leave the file untouched.' ||
           text === 'Leave the file untouched. Only inspect it.') ? 'deny'
         : privateNoticePolicy || privateNoticeWorkspace || privateNoticeInstructions[scenario] || scenario === 'mcp-deny' ? 'deny'
+        : workerScope && tool === 'Bash' ? (content.assignment?.text === workerBrief ||
+          [...content.conversation, ...(content.assignment?.parent ?? [])].some((entry: any) =>
+            entry.text === workerBrief || entry.text === globalRestrictionText)) ? 'deny' : 'allow'
         : tool === 'REPL' ? 'allow'
         : reviewedReplacement ? 'allow'
         : scriptAsk ? 'ask'
@@ -395,9 +398,6 @@ mock.module('../services/api/client.js', () => ({
     const worker = workerRouting && body.messages.some((message: any) => message.role === 'user' &&
       JSON.stringify(message.content).includes(workerBrief))
     const index = worker ? workerModelCalls++ : modelCalls++
-        : workerScope && tool === 'Bash' ? (content.assignment?.text === workerBrief ||
-          [...content.conversation, ...(content.assignment?.parent ?? [])].some((entry: any) =>
-            entry.text === workerBrief || entry.text === globalRestrictionText)) ? 'deny' : 'allow'
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
     const invocation = scriptCells ? index < scriptCells.length : worker ? index < workerActions.length : twoChecks || repeatedScriptDenials ? index < 3 : repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used' || reviewedReplacement || workerScope) && index === 1
     let check
@@ -476,6 +476,7 @@ state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mod
     alwaysDenyRules: { session: ['Read(./a.txt)', 'Edit(./a.txt)'] },
   }),
   ...(scenario === 'native-script-no-human' && { shouldAvoidPermissionPrompts: true }),
+  ...(refusedWorker && { alwaysDenyRules: { session: ['Agent'] } }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
 } }
 const assignment = verifiedParentEdit ? 'Update .vscode/settings.json from old to new.'
@@ -531,7 +532,6 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
-  ...(refusedWorker && { alwaysDenyRules: { session: ['Agent'] } }),
   initialMessages: oversizeHistory ? [
     createUserMessage({ content: scriptCells ? 'Run the fixture scripts.' : earlyRestriction }),
     createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
@@ -782,6 +782,8 @@ if (surface === 'desktop') {
     kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true,
   } })
   else if (peerLocalFollowUp) await controller.submit('Also update the docs.')
+  else if (workerScope) await controller.submit(globalWorkerRestriction ? globalRestrictionText :
+    'Launch a worker to inspect the task. You may append to effects.txt yourself.')
   else await controller.submit(routed || mainEdit ? assignment : loadSkill ? 'Use the fixture-auto-skill.' :
     peerAction ? 'Inspect a.txt yourself. Do not create or contact another session.' :
     'Run the isolated action and report the result.', routed ? {
@@ -837,8 +839,6 @@ if (surface === 'desktop') {
   } else {
     const { StructuredIO } = await import('../cli/structuredIO.js')
     const { Stream } = await import('../utils/stream.js')
-  else if (workerScope) await controller.submit(globalWorkerRestriction ? globalRestrictionText :
-    'Launch a worker to inspect the task. You may append to effects.txt yourself.')
     const incoming = new Stream<string>()
     const io = new StructuredIO(incoming)
     if (!scenario.endsWith('-nohost')) io.enableHumanOnlyPermissionPrompts()
