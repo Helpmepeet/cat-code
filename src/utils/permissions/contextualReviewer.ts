@@ -29,8 +29,38 @@ function reviewHistory(entries: ContextualEvidence['conversation']) {
   })
 }
 
+function trimEarlierScriptCells(action: ContextualEvidence['action'], overflow: number): ContextualEvidence['action'] {
+  if (!action.script) return action
+  const { earlierSources = [], earlierCells = [], ...current } = action.script
+  const total = earlierSources.length + earlierCells.length
+  if (!total) return action
+  const scriptBudget = Buffer.byteLength(JSON.stringify(action.script)) - overflow
+
+  function trim(count: number) {
+    // Source goes first. A receipt can still establish what actually ran.
+    const sourcesDropped = Math.min(count, earlierSources.length)
+    const receiptsDropped = count - sourcesDropped
+    return {
+      ...current,
+      ...(sourcesDropped < earlierSources.length && { earlierSources: earlierSources.slice(sourcesDropped) }),
+      ...(sourcesDropped > 0 && { earlierSourcesOmitted: sourcesDropped }),
+      ...(receiptsDropped < earlierCells.length && { earlierCells: earlierCells.slice(receiptsDropped) }),
+      ...(receiptsDropped > 0 && { earlierCellsOmitted: true as const }),
+    }
+  }
+
+  let min = 1
+  let max = total
+  while (min < max) {
+    const count = Math.floor((min + max) / 2)
+    if (Buffer.byteLength(JSON.stringify(trim(count))) <= scriptBudget) max = count
+    else min = count + 1
+  }
+  return { ...action, script: trim(min) }
+}
+
 function fitReviewEvidence(evidence: ContextualEvidence, budget: number): string | undefined {
-  const { workspaceInstructions, assignment, action, toolDescription, agentStatedPurpose,
+  const { workspaceInstructions, assignment, toolDescription, agentStatedPurpose,
     recentShellRuns, priorDecisions } = evidence
   const parent = reviewHistory(assignment?.parent ?? [])
   const conversation = reviewHistory(evidence.conversation)
@@ -40,17 +70,25 @@ function fitReviewEvidence(evidence: ContextualEvidence, budget: number): string
     parentRows: ContextualEvidence['conversation'],
     rows: ContextualEvidence['conversation'],
     omittedHistoryEntries: number,
+    action: ContextualEvidence['action'],
   ) {
     return JSON.stringify({
       workspaceInstructions: workspaceInstructions ?? '',
+      conversation: rows,
+      omittedHistoryEntries,
       assignment: assignment?.parent ? { ...assignment, parent: parentRows } : assignment,
       action, toolDescription, agentStatedPurpose,
-      conversation: rows, omittedHistoryEntries, recentShellRuns, priorDecisions,
+      recentShellRuns, priorDecisions,
     })
   }
 
+  const full = serialize(parent, conversation, 0, evidence.action)
+  const overflow = Buffer.byteLength(full) - budget
+  if (overflow <= 0) return full
+
+  const action = trimEarlierScriptCells(evidence.action, overflow)
   let omitted = entries.length
-  let remaining = budget - Buffer.byteLength(serialize([], [], omitted))
+  let remaining = budget - Buffer.byteLength(serialize([], [], omitted, action))
   if (remaining < 0) return undefined
 
   const retained = new Set<number>()
@@ -81,6 +119,7 @@ function fitReviewEvidence(evidence: ContextualEvidence, budget: number): string
     parent.filter((_, index) => retained.has(index)),
     conversation.filter((_, index) => retained.has(parent.length + index)),
     omitted,
+    action,
   )
 }
 

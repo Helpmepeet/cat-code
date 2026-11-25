@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CONTEXTUAL_REVIEW_MAX_BYTES, type ContextualEvidence } from '../utils/permissions/contextualReviewPrompt.js'
@@ -31,7 +31,7 @@ for (const [restriction, name] of [
       const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
       clearTimeout(timeout)
       if (exit !== 0) throw new Error(`Trim fixture exited ${exit}\n${error}\n${output}`)
-      const result = JSON.parse(output) as {
+      const result = JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8')) as {
         reviews: { bytes: number; omittedCorrespondence: boolean; wholeScript: boolean;
           evidence: ContextualEvidence & { omittedHistoryEntries: number } }[]
         effects: string | null; prompts: number; script: string; grant: string; withdrawal: string; teammateHold: string

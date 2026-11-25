@@ -178,17 +178,13 @@ for (const verdict of ['allow', 'approve']) {
       ...(verdict === 'approve' && { CONTEXTUAL_AUTO_TEST_SCRIPT_ASK: verdict }),
     })
     expect(proof.effect).toBe('effecteffecteffect')
-    const sources = proof.requests.map((r: any) => r.content.action.script.source)
-    expect(sources).toHaveLength(2)
-    const [combined, next] = sources
-    const sections = combined.split(/Script \d+ of 3\b/).slice(1)
-    expect(sections).toHaveLength(3)
-    expect(sections[0]).toContain(helper)
-    expect(sections[1]).toContain(patch)
-    expect(sections[2]).toContain(usePatch)
-    expect(next).toContain(usePatch + write)
-    expect(next).toContain(patch)
-    expect(next).toContain(helper)
+    const scripts = proof.requests.map((r: any) => r.content.action.script)
+    expect(scripts).toHaveLength(2)
+    const [first, next] = scripts
+    const setup = [{ cell: 1, source: helper }, { cell: 2, source: patch }]
+    expect(first).toMatchObject({ cell: 3, source: usePatch, earlierSources: setup })
+    expect(next).toMatchObject({ cell: 4, source: usePatch + write,
+      earlierSources: [...setup, { cell: 3, source: usePatch }] })
   }, 30_000)
 }
 
@@ -207,8 +203,8 @@ test('a later Script review sees the surviving helper and the earlier child outc
   expect(proof.requests).toHaveLength(2)
   expect(proof.scripts[0].calls[2].error).toContain('Blocked by permissions')
   const evidence = proof.requests[1].content.action.script
-  expect(evidence.source).toContain(earlier)
-  expect(evidence.source).toContain(later)
+  expect(evidence.earlierSources).toEqual([{ cell: 1, source: earlier }])
+  expect(evidence.source).toBe(later)
   expect(evidence.earlierCells).toEqual([{
     cell: 1,
     children: [
@@ -219,29 +215,21 @@ test('a later Script review sees the surviving helper and the earlier child outc
   }])
 }, 30_000)
 
-for (const size of [32_000, 32_001]) {
-  test(`combined source of ${size} characters controls coverage until reset`, async () => {
-    const setup = '//'.padEnd(size - twoWrites.length, 'x')
-    const overBudget = size > 32_000
-    const proof = await run('native-script-children', cells(
-      setup, twoWrites, { code: twoWrites, run_in_background: true },
-      // An undrained guest promise ends this generation.
-      'var pending = Promise.race([]);', twoWrites,
-    ))
-    expect(proof.effect).toBe('effect'.repeat(overBudget ? 2 : 6))
-    const generations = proof.requests.map((r: any) => r.content.action.script.generation)
-    if (overBudget) {
-      expect(generations).toHaveLength(1)
-      const refusals = proof.reviewEvents.filter((event: any) => event.reason?.includes('32,000-character'))
-      expect(refusals).toHaveLength(2)
-      expect(refusals[0].reason).toContain('The held action did not run. Resume the chat to reset the Script interpreter')
-    } else {
-      expect(generations).toHaveLength(3)
-      expect(generations[0]).toBe(generations[1])
-      expect(generations[2]).not.toBe(generations[0])
-    }
-  }, 30_000)
-}
+test('more than 32,000 characters of earlier Script source stay reviewable in the same generation', async () => {
+  const setup = 'var retainedFixture = true;\n//' + 'x'.repeat(38_000)
+  const proof = await run('native-script-children', cells(
+    setup, twoWrites, { code: twoWrites, run_in_background: true },
+    // An undrained guest promise ends this generation.
+    'var pending = Promise.race([]);', twoWrites,
+  ))
+  expect(proof.effect).toBe('effect'.repeat(6))
+  const scripts = proof.requests.map((r: any) => r.content.action.script)
+  expect(scripts).toHaveLength(3)
+  expect(scripts[0].earlierSources).toEqual([{ cell: 1, source: setup }])
+  expect(scripts[1].generation).toBe(scripts[0].generation)
+  expect(scripts[2].generation).not.toBe(scripts[0].generation)
+  expect(proof.prompts).toHaveLength(0)
+}, 30_000)
 
 test('a trimmed Script review covers queued and later children in the same cell', async () => {
   const proof = await run('native-oversize-history', cells(queued, twoWrites))
@@ -249,7 +237,7 @@ test('a trimmed Script review covers queued and later children in the same cell'
   expect(proof.requests).toHaveLength(2)
   const { action, conversation, omittedHistoryEntries } = proof.requests[0].content
   expect(Object.keys(proof.requests[0].content).slice(0, 4))
-    .toEqual(['workspaceInstructions', 'action', 'conversation', 'omittedHistoryEntries'])
+    .toEqual(['workspaceInstructions', 'conversation', 'omittedHistoryEntries', 'action'])
   expect(action.script.source).toContain(queued)
   expect(omittedHistoryEntries).toBe(1)
   expect(JSON.stringify(conversation)).not.toContain('OVERSIZE_EARLIER_CONTEXT')
@@ -257,7 +245,7 @@ test('a trimmed Script review covers queued and later children in the same cell'
 }, 30_000)
 
 for (const reply of ['approve', 'decline', 'unavailable', 'changed']) {
-  test(`Script review overflow handles ${reply} without extending approval to other actions`, async () => {
+  test(`an oversized current Script review handles ${reply} without extending approval to other actions`, async () => {
     const oversized = 'tools.call({name:"Write",input:{file_path:".vscode/settings.json",content:"x".repeat(60000)},nothrow:true})'
     const queuedWrite = 'tools.call({name:"Write",input:{file_path:".vscode/launch.json",content:"queued"},nothrow:true})'
     const proof = await run('native-oversize-action', {
@@ -280,6 +268,7 @@ for (const reply of ['approve', 'decline', 'unavailable', 'changed']) {
     expect(proof.queuedFileExists).toBe(false)
     expect(proof.changedFileExists).toBe(false)
     expect(proof.requests.map((request: any) => request.tool)).toEqual(approved ? ['Write', 'Bash'] : ['Bash'])
+    expect(proof.requests[0].content.workspaceInstructions).toContain('Fixture workspace notes.')
     if (approved) expect(proof.requests[0].content.action.input.file_path).toEndWith('/.vscode/launch.json')
     expect(proof.effect).toBe('effect')
     expect(proof.requests.at(-1).content.action.script.generation).toBe(proof.scripts[0].generation)

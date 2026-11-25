@@ -5,8 +5,9 @@ import { lazySchema } from '../../utils/lazySchema.js'
 import { SCRIPT_BASH_DIRECTORY_GUIDANCE } from '../BashTool/prompt.js'
 import { consumeCodeModeWrapperApproval } from './codeModeAdmission.js'
 import { getScriptToolConcurrency, isReplModeEnabled, REPL_TOOL_NAME } from './constants.js'
-import { MAX_AUTO_SCRIPT_REVIEW_CHARS } from './scriptReviewHistory.js'
 import type { CodeModeResult } from './codeModeHost.js'
+
+const MAX_LEGACY_AUTO_SCRIPT_REVIEW_CHARS = 32_000
 
 // eslint-disable-next-line custom-rules/no-process-env-top-level -- Match the fixed Bash background schema for this process.
 const backgroundTasksDisabled = isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)
@@ -74,7 +75,7 @@ State resets on restart, resume, fork, workspace transition, cancellation that d
       const reviewed = /[\r\n\v\f\u0085\u2028\u2029<]/.test(input.code)
         ? JSON.stringify(input.code).replace(/</g, '\\u003c').replace(/\u0085/g, '\\u0085').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
         : input.code
-      if (reviewed.length > MAX_AUTO_SCRIPT_REVIEW_CHARS) return {
+      if (reviewed.length > MAX_LEGACY_AUTO_SCRIPT_REVIEW_CHARS) return {
         result: false, errorCode: 2,
         message: 'This script is too large for one automatic review. Split it into smaller cells. No script code ran.',
       }

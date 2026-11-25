@@ -1,9 +1,8 @@
-import { randomUUID } from 'node:crypto'
 import { parse } from 'acorn'
 import type { ContextualScriptGrant } from '../../utils/permissions/contextualAuthorization.js'
 import type { CodeModeCall } from './codeModeDispatch.js'
 
-export const MAX_AUTO_SCRIPT_REVIEW_CHARS = 32_000
+export type ScriptCellSource = { cell: number; source: string }
 
 export type ScriptCellReceipt = {
   cell: number
@@ -21,29 +20,15 @@ function isInertSource(source: string): boolean {
 
 // The host serializes whole cells, including background cells, in evaluation order.
 export class ScriptReviewHistory {
-  private sources: { cell: number; source: string; characters: number; stateful?: true }[] = []
-  private receipts: { value: ScriptCellReceipt; characters: number }[] = []
-  private sourceCharacters = 0
-  private receiptCharacters = 0
+  private sources: { value: ScriptCellSource; inert: boolean }[] = []
+  private receipts: ScriptCellReceipt[] = []
+  private current: ScriptCellSource | undefined
   private cell = 0
-  private earlierCellsOmitted = false
-  unavailableReason?: string
 
   constructor(readonly generation: string) {}
 
   startCell(cellId: string, source: string): ContextualScriptGrant {
-    if (!this.unavailableReason) {
-      const characters = Math.max(1, source.length)
-      if (this.sourceCharacters + characters > MAX_AUTO_SCRIPT_REVIEW_CHARS) {
-        this.unavailableReason = 'The current Script and retained cell source exceed the 32,000-character Auto Mode review limit.'
-        this.sources = []
-        this.receipts = []
-      } else {
-        this.sources.push({ cell: ++this.cell, source, characters })
-        this.sourceCharacters += characters
-        this.fitReceipts()
-      }
-    }
+    this.current = { cell: ++this.cell, source }
     return { cellId, generation: this.generation, history: this }
   }
 
@@ -53,53 +38,30 @@ export class ScriptReviewHistory {
     completed: ReadonlySet<string>,
     permissionFailures: ReadonlyMap<CodeModeCall, string>,
   ): void {
-    if (this.unavailableReason) return
+    const current = this.current!
+    const inert = isInertSource(current.source)
     if (covered) {
       // Prior coverage says nothing about what the interpreter still holds.
-      this.sources = this.sources.filter(entry => {
-        if (entry.stateful) return true
-        if (!isInertSource(entry.source)) {
-          entry.stateful = true
-          return true
-        }
-        this.sourceCharacters -= entry.characters
-        return false
-      })
+      this.sources = this.sources.filter(entry => !entry.inert)
     }
+    if (!covered || !inert) this.sources.push({ value: current, inert })
+    this.current = undefined
     if (!calls.length) return
-    const value: ScriptCellReceipt = {
-      cell: this.cell,
+    this.receipts.push({
+      cell: current.cell,
       children: calls.map(call => ({
         tool: call.name,
         ...(call.line === undefined ? {} : { line: call.line }),
         outcome: completed.has(call.toolUseId) ? 'completed' : permissionFailures.has(call) ? 'refused' : 'unknown',
       })),
-    }
-    const characters = JSON.stringify(value).length + 1
-    this.receipts.push({ value, characters })
-    this.receiptCharacters += characters
-    this.fitReceipts()
+    })
   }
 
-  reviewEvidence(): { source: string; earlierCells?: ScriptCellReceipt[]; earlierCellsOmitted?: true } {
-    const nonce = randomUUID()
-    const count = this.sources.length
-    const source = this.sources.map((entry, i) => {
-      const role = i + 1 === count ? 'current cell' : 'earlier cell'
-      return `[${nonce} Script ${i + 1} of ${count}; notebook cell ${entry.cell}; ${role}]\n${entry.source}`
-    }).join('\n')
+  reviewEvidence() {
     return {
-      source,
-      ...(this.receipts.length && { earlierCells: this.receipts.map(receipt => receipt.value) }),
-      ...(this.earlierCellsOmitted && { earlierCellsOmitted: true }),
-    }
-  }
-
-  private fitReceipts(): void {
-    while (this.sourceCharacters + this.receiptCharacters > MAX_AUTO_SCRIPT_REVIEW_CHARS) {
-      const oldest = this.receipts.shift()!
-      this.receiptCharacters -= oldest.characters
-      this.earlierCellsOmitted = true
+      ...this.current!,
+      ...(this.sources.length && { earlierSources: this.sources.map(entry => entry.value) }),
+      ...(this.receipts.length && { earlierCells: this.receipts.slice() }),
     }
   }
 }

@@ -189,11 +189,11 @@ test('typed desktop question answers reach the reviewer as operator evidence wit
   expect(proof.effect).toBeNull()
 }, 30_000)
 
-test('v8 sends only custom Auto Mode rules and redacts credentials in them', async () => {
+test('v9 sends only custom Auto Mode rules and redacts credentials in them', async () => {
   const proof = await run('direct-credential-settings')
   expect(proof.requests).toHaveLength(1)
   const system = proof.requests[0].system.at(-1).text
-  expect(system).toStartWith('cat-code-contextual-review-v8')
+  expect(system).toStartWith('cat-code-contextual-review-v9')
   expect(JSON.parse(system.slice(system.lastIndexOf('\n\n') + 2))).toEqual([{
     source: 'userSettings',
     allow: ['Synthetic example password = […]'],
@@ -254,7 +254,7 @@ test('an oversize action alone offers the exact input and resolved target for ap
   const proof = await run('native-oversize-action')
   expect(proof.requests).toHaveLength(0)
   expect(proof.prompts).toEqual([expect.objectContaining({
-    human_only: true, input: expect.objectContaining({ content: 'x'.repeat(300_000) }),
+    human_only: true, input: expect.objectContaining({ content: 'x'.repeat(2_100_000) }),
     decision_reason: expect.stringMatching(/could not review this action.*\.vscode\/settings\.json/),
   })])
   expect(proof.sensitiveFileExists).toBe(false)
@@ -307,7 +307,7 @@ test('shadow records trusted peer instructions while the legacy allowance releas
   const proof = await run('native-peer-write-shadow')
   const candidates = proof.requests.filter((request: any) => request.contextual)
   expect(candidates).toHaveLength(1)
-  expect(JSON.stringify(candidates[0].system)).toContain('cat-code-contextual-review-v8')
+  expect(JSON.stringify(candidates[0].system)).toContain('cat-code-contextual-review-v9')
   expect(candidates[0].content.action.actor).toBe('main')
   expect(candidates[0].content.assignment).toBeUndefined()
   expect(candidates[0].content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator', actor: 'Lead',

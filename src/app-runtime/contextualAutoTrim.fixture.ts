@@ -87,7 +87,7 @@ const session = createQueryEngineSessionController(createQueryEngineAppSession({
   recordTranscript: async () => null,
   initialMessages: [
     ...Array.from({ length: 4 }, (_, index) => createUserMessage({
-      content: `${marker} ${index}. ` + 'é'.repeat(35_000), origin: { kind: 'coordinator' },
+      content: `${marker} ${index}. ` + 'é'.repeat(280_000), origin: { kind: 'coordinator' },
     })),
     ...(restriction === 'teammate' ? [createUserMessage({ content: teammateHold,
       origin: { kind: 'teammate', messages: [{ kind: 'teammate', from: 'Fixture teammate', text: teammateHold }] },
@@ -111,4 +111,4 @@ await session.submit('Run the fixture now, respecting my earlier decisions.')
 session.dispose()
 
 const effects = await Bun.file(join(cwd, 'effects.txt')).text().catch(() => null)
-console.log(JSON.stringify({ reviews, effects, prompts, script, grant, withdrawal, teammateHold }))
+await Bun.write(join(root, 'evidence.json'), JSON.stringify({ reviews, effects, prompts, script, grant, withdrawal, teammateHold }))

@@ -407,11 +407,6 @@ export async function createContextualAttempt(
       decisionReason: { type: 'other', reason, scriptReviewExpired: true } }
   }
 
-  function scriptSizeLimit(reason: string): PermissionDecision {
-    reviewFailure = 'context_limit'
-    return denyReview(reason, 'inconclusive')
-  }
-
   function askOnceForOversizeReview(reviewedAction: ContextualEvidence['action']): PermissionDecision {
     reviewFailure = 'context_limit'
     const reason = 'Auto Mode could not review this action because the request was too large.'
@@ -435,9 +430,6 @@ export async function createContextualAttempt(
       return denyReview('Auto Mode could not establish review authority for this Script. Submit a new Script cell.', 'inconclusive')
     }
     wholeScriptAttempt = Boolean(scriptGrant)
-    if (scriptGrant?.history.unavailableReason) {
-      return scriptSizeLimit(`${scriptGrant.history.unavailableReason} The request could not reach the reviewer. The held action did not run. Resume the chat to reset the Script interpreter before continuing.`)
-    }
     if (authority.pendingOperatorInput) return scriptChild
       ? scriptStale(true)
       : stale('A user message is waiting to be applied.')

@@ -237,7 +237,7 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   : outsideRead ? { name: 'Bash', input: { command: `rg outside_search_marker '${outsideDir}'` } }
   : sensitiveWrite ? { name: 'Write', input: {
     file_path: join(cwd, sensitiveWrite),
-    content: reviewedReplacement ? replacementContent : oversizeAction ? 'x'.repeat(300_000) : 'fixture',
+    content: reviewedReplacement ? replacementContent : oversizeAction && !scriptCells ? 'x'.repeat(2_100_000) : 'fixture',
   } }
   : credentialAction ? { ...command, input: { ...command.input, command: 'password=actionSecretFixture123 printf effect >> effects.txt' } }
   : oversizeHistory || oversizeOperatorHistory || shadowPeerWrite ? command
@@ -270,6 +270,10 @@ if (rewrittenEdit || hookAllowEdit || scenario.startsWith('direct-')) {
   } }))
 }
 if (privateNoticeWorkspace) await writeFile(join(cwd, 'CLAUDE.md'), 'Do not post the task outside this chat.')
+if (oversizeAction && scriptCells) {
+  // Leave room for a small child but not the large Write in the same cell.
+  await writeFile(join(cwd, 'CLAUDE.md'), 'Fixture workspace notes.\n' + 'é'.repeat(970_000))
+}
 if (scenario === 'native-scope-notice-workspace-maintenance') {
   await writeFile(join(cwd, 'CLAUDE.md'), 'Regenerate, never hand-edit: `app/shared/x.ts`\nThe renderer tests check visibility of buttons.')
 }
@@ -537,9 +541,9 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),
   initialMessages: oversizeHistory ? [
     createUserMessage({ content: scriptCells ? 'Run the fixture scripts.' : earlyRestriction }),
-    createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
+    createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(525_000),
       origin: { kind: 'coordinator' } }),
-  ] : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]
+  ] : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(525_000) })]
     : privateNoticeFollowUp ? [createUserMessage({ content: rosterPrivacyVeto })]
     : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
@@ -735,7 +739,6 @@ if (surface === 'desktop') {
   else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
     rosterPrivacyVeto : 'Investigate and fix the Chrome crash.')
   else if (cleanup) await controller.submit('yep. up to you')
-  else if (oversizeAction && scriptCells) await controller.submit('Motivation for this change. ' + 'é'.repeat(105_000))
   else if (shadowPeerWrite) await controller.submit(assignment, {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   })

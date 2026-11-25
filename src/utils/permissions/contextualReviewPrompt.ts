@@ -1,10 +1,10 @@
 import { z } from 'zod/v4'
 import { AUTO_MODE_NO_EXPLANATION } from '../../app-runtime/autoModeReviewContract.js'
-import type { ScriptCellReceipt } from '../../tools/REPLTool/scriptReviewHistory.js'
+import type { ScriptCellReceipt, ScriptCellSource } from '../../tools/REPLTool/scriptReviewHistory.js'
 
-export const CONTEXTUAL_REVIEW_VERSION = 'cat-code-contextual-review-v8'
+export const CONTEXTUAL_REVIEW_VERSION = 'cat-code-contextual-review-v9'
 export const CONTEXTUAL_REVIEW_MAX_OUTPUT = 1024
-export const CONTEXTUAL_REVIEW_MAX_BYTES = 256_000
+export const CONTEXTUAL_REVIEW_MAX_BYTES = 2_000_000
 
 // Adapted from DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT in OpenClaw's src/agents/exec-auto-reviewer.ts.
 // Copyright (c) 2026 OpenClaw Foundation. MIT license, see openclaw-exec-reviewer.LICENSE.
@@ -38,8 +38,8 @@ Rules:
 }
 
 const SCRIPT_REVIEW = `Script review:
-- action.script.source contains the complete current Script and retained earlier cells in execution order. Earlier cells can leave helpers, patched built-ins, and other live state. Read their source to understand the current Script. action.input and action.effect describe the held child with its final arguments.
-- action.script.earlierCells contains host-recorded child outcomes in submission order. Match each cell number to the source header and each line to that cell when provided. Completed means the tool returned successfully, refused means the child was held, and unknown means the host cannot certify the effect. Infer earlier external effects from receipts, since source describes what could run. Receipts can be missing, including when earlierCellsOmitted is true.
+- action.script.source contains the complete current Script. action.script.earlierSources lists retained earlier cell source in execution order, indexed by notebook cell number. Earlier cells can leave helpers, patched built-ins, and other live state. earlierSourcesOmitted counts earlier sources removed to fit the review. action.input and action.effect describe the held child with its final arguments.
+- action.script.earlierCells contains host-recorded child outcomes in submission order. Match the cell numbers and line numbers to earlierSources when available. Completed means the tool returned successfully, refused means the child was held, and unknown means the host cannot certify the effect. Infer earlier external effects from receipts, since source describes what could run. Receipts can be missing, including when earlierCellsOmitted is true.
 - An allow lets every call in the current Script run without another model review, including calls after this one and the paths, commands and inputs the code computes while it runs. Judge the worst plausible effect of every call the code can make, and give the highest risk among them. Deny or ask when any call would require it.
 - tools.call({name, input}) runs the named tool. sh\`...\` runs a shell command; each \${value} becomes one quoted argument, or one per array item. output() and console.log() only report to the agent.
 - Each call still goes through permission rules, hooks, mandatory confirmations and the engine's critical-removal check. They do not replace your judgment of what the code does.`
@@ -61,7 +61,10 @@ export type ContextualEvidence = {
     script?: {
       cellId: string
       generation: string
+      cell?: number
       source?: string
+      earlierSources?: readonly ScriptCellSource[]
+      earlierSourcesOmitted?: number
       earlierCells?: readonly ScriptCellReceipt[]
       earlierCellsOmitted?: true
     }
