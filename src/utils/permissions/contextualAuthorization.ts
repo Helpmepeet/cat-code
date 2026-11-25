@@ -470,7 +470,7 @@ export async function createContextualAttempt(
           ...(boundProjection && { resolvedAction: boundProjection.value }) },
         tool: tool.name, ...(scriptGrant && { script: {
           cellId: scriptGrant.cellId, generation: scriptGrant.generation,
-          source: scriptGrant.history.reviewSource(),
+          ...scriptGrant.history.reviewEvidence(),
         } }) },
       assignment: authority.assignment,
       conversation,

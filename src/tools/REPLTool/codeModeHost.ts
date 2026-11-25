@@ -9,6 +9,7 @@ import { ScriptReviewHistory } from './scriptReviewHistory.js'
 import { CodeModeDispatch, type CodeModeCall } from './codeModeDispatch.js'
 import { buildCodeModeShellCommand } from './codeModeShell.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
+import type { Out as BashOutput } from '../BashTool/BashTool.js'
 import { codeModeChangedFilePaths } from './codeModeChangedFiles.js'
 import { captureCodeModeToolPrincipals } from './codeModeTools.js'
 import { backgroundCodeModeCell, closeCodeModeOwner, type CodeModeOwner, type CodeModeHostCompletion } from './codeModeBackground.js'
@@ -567,6 +568,7 @@ export class CodeModeHost {
       this.scriptReviewHistory = new ScriptReviewHistory(this.generation)
     }
     const scriptGrant = this.scriptReviewHistory.startCell(cellId, input.code)
+    const completedReviewChildren = new Set<string>()
     const cellContext = {
       ...context, abortController: controller, codeModeBackgroundCell: background,
       launchingTurnSignal: context.launchingTurnSignal ?? context.abortController.signal,
@@ -580,6 +582,8 @@ export class CodeModeHost {
           const paired = message.message.content.find(block => block.type === 'tool_result')
           const call = paired?.type === 'tool_result' ? dispatch.calls.find(call => call.toolUseId === paired.tool_use_id) : undefined
           if (paired?.type === 'tool_result' && !paired.is_error && call) {
+            const bash = call.name === BASH_TOOL_NAME ? message.toolUseResult as BashOutput | undefined : undefined
+            if (!bash?.backgroundTaskId && !bash?.interrupted) completedReviewChildren.add(call.toolUseId)
             changedPaths = codeModeChangedFilePaths(call.name, message.toolUseResult)
             for (const path of changedPaths) {
               changedFiles.set(path, { path })
@@ -707,7 +711,7 @@ export class CodeModeHost {
       this.runtime = undefined
       this.generation = randomUUID()
     } finally {
-      if (scriptGrant.granted) scriptGrant.history.clearSources()
+      scriptGrant.history.finishCell(Boolean(scriptGrant.granted), dispatch.calls, completedReviewChildren, dispatch.permissionFailures)
       dispatch.stop('Cell execution ended')
       result.calls = structuredClone(dispatch.calls)
       result.changedFiles = [...changedFiles.values()]

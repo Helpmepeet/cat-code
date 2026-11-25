@@ -169,12 +169,12 @@ test('computed commands and targets remain covered across the cell', async () =>
 }, 30_000)
 
 for (const verdict of ['allow', 'approve']) {
-  test(`a covering ${verdict} clears carried foreground helpers and background patched built-ins`, async () => {
+  test(`a covering ${verdict} preserves evidence for foreground helpers and background patched built-ins`, async () => {
     const helper = 'const run = async () => { ' + write + ' };'
     const patch = 'String.prototype.fixtureRun = function () { return run(); };'
     const usePatch = 'await "fixture".fixtureRun();'
     const proof = await run('native-script-children', {
-      ...cells(helper, { code: patch, run_in_background: true }, usePatch, twoWrites),
+      ...cells(helper, { code: patch, run_in_background: true }, usePatch, usePatch + write),
       ...(verdict === 'approve' && { CONTEXTUAL_AUTO_TEST_SCRIPT_ASK: verdict }),
     })
     expect(proof.effect).toBe('effecteffecteffect')
@@ -186,12 +186,38 @@ for (const verdict of ['allow', 'approve']) {
     expect(sections[0]).toContain(helper)
     expect(sections[1]).toContain(patch)
     expect(sections[2]).toContain(usePatch)
-    expect(next).toContain(twoWrites)
-    expect(next).not.toContain(patch)
-    expect(next).not.toContain(helper)
-    expect(next).not.toContain(usePatch)
+    expect(next).toContain(usePatch + write)
+    expect(next).toContain(patch)
+    expect(next).toContain(helper)
   }, 30_000)
 }
+
+test('a later Script review sees the surviving helper and the earlier child outcomes', async () => {
+  const helper = 'const fromHelper = async () => { ' + write + ' };'
+  const earlier = [
+    helper,
+    `await ${bash('printf completed >> effects.txt')};`,
+    `await ${bash('printf partial >> effects.txt; false')};`,
+    `await ${bash('printf blocked >> effects.txt')};`,
+  ].join('\n')
+  const later = 'await fromHelper();'
+  const proof = await run('native-script-deny-rule', cells(earlier, later))
+  expect(proof.effect).toBe('completedpartialeffect')
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.requests).toHaveLength(2)
+  expect(proof.scripts[0].calls[2].error).toContain('Blocked by permissions')
+  const evidence = proof.requests[1].content.action.script
+  expect(evidence.source).toContain(earlier)
+  expect(evidence.source).toContain(later)
+  expect(evidence.earlierCells).toEqual([{
+    cell: 1,
+    children: [
+      { tool: 'Bash', line: 2, outcome: 'completed' },
+      { tool: 'Bash', line: 3, outcome: 'unknown' },
+      { tool: 'Bash', line: 4, outcome: 'refused' },
+    ],
+  }])
+}, 30_000)
 
 for (const size of [32_000, 32_001]) {
   test(`combined source of ${size} characters controls coverage until reset`, async () => {

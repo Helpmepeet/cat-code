@@ -20,7 +20,7 @@ test('a Script cell review judges the whole script, whatever tool triggered it',
     expect(cell).toContain('- "allow": the Script may run once now.')
     expect(cell).not.toContain('pending shell command')
     expect(cell).not.toContain('An allow covers only this invocation.')
-    expect(cell).toContain('action.script.source contains the complete current Script and earlier uncovered cells')
+    expect(cell).toContain('action.script.source contains the complete current Script')
     expect(cell).toContain('An allow lets every call in the current Script run without another model review')
     expect(cell).toContain('give the highest risk among them')
     expect(cell).toContain('sh`...` runs a shell command; each ${value} becomes one quoted argument')
