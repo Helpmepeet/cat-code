@@ -111,17 +111,23 @@ test('a pending review keeps the tool output visible', async () => {
   expect(tree.container.querySelector('[aria-label="Auto mode is reviewing this"]')).not.toBeNull()
 })
 
-for (const [outcome, label, verdict] of [
+for (const [outcome, label, verdict, scriptStopped] of [
   ['asking', 'Auto mode requested your decision', undefined],
   ['inconclusive', 'Auto mode review ended without a decision', undefined],
   ['inconclusive', 'Action held after Auto mode review', 'allow'],
+  ['inconclusive', 'Script stopped because the permission mode changed.', undefined, true],
 ] as const) {
   test(`${label} appears above unchanged output`, async () => {
-    const evidence: AutoModeReview = { ...review, outcome, ...(verdict && { reviewer: { kind: 'contextual', version: 'fixture', verdict } }) }
+    const evidence: AutoModeReview = { ...review, outcome, reason: scriptStopped ? label : reason,
+      ...(verdict && { reviewer: { kind: 'contextual', version: 'fixture', verdict } }) }
     const tree = await harness.mount(<ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}><TranscriptRowsView rows={[tool('a', evidence)]} /></ToolsExpandedContext.Provider>)
     const field = tree.container.querySelector('.auto-mode-review-field')!
     expect(field.getAttribute('data-outcome')).toBe(outcome)
     expect(field.querySelector('.auto-mode-review-label')?.textContent).toBe(label)
+    if (scriptStopped) {
+      expect(field.textContent).toBe(label)
+      expect(tree.container.querySelector('.auto-mode-review')?.getAttribute('aria-label')).toBe(label)
+    }
     expect(field.querySelectorAll('svg path')).toHaveLength(1)
     expect(field.nextElementSibling?.textContent).toContain('Raw output stays intact')
   })

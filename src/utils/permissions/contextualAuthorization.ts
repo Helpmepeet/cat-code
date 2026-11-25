@@ -8,7 +8,7 @@ import type { AssistantMessage } from '../../types/message.js'
 import type { PermissionDecision, PermissionDenyDecision } from '../../types/permissions.js'
 import { recordToolReview } from '../../app-runtime/toolActivity.js'
 import { persistAutoModeReview } from '../../app-runtime/autoModeReviewPersistence.js'
-import type { AutoModeReview } from '../../app-runtime/autoModeReviewContract.js'
+import { SCRIPT_APPROVAL_STOP_REASONS, type AutoModeReview, type ScriptApprovalStopReason } from '../../app-runtime/autoModeReviewContract.js'
 import { redactSecrets, scanForSecrets } from '../../services/teamMemorySync/secretScanner.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import { isFilePatchToolName, FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
@@ -19,6 +19,7 @@ import { getBashExecutionSettings, type BashToolInput } from '../../tools/BashTo
 import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
 import { codeModeToolPrincipal } from '../../tools/REPLTool/codeModeTools.js'
 import type { ScriptReviewHistory } from '../../tools/REPLTool/scriptReviewHistory.js'
+import { wasTurnStopped } from '../abortController.js'
 import { workspaceInstructionsForReview } from '../claudemd.js'
 import { getPatchFromContents } from '../diff.js'
 import { isCompleteUnboundedRead } from '../fileStateCache.js'
@@ -33,6 +34,7 @@ import { createDenialTrackingState, DENIAL_LIMITS, persistDenialState, recordDen
 import type { ContextualEvidence } from './contextualReviewPrompt.js'
 import { recordAutoModeOutcome } from './autoModeMeta.js'
 import { collectPermissionDecisionContexts } from './permissionDecisionContext.js'
+import { getEffectiveAutoMode } from './permissions.js'
 import { getConfiguredAutoModeModel } from './yoloClassifier.js'
 
 type Input = Record<string, unknown>
@@ -155,10 +157,7 @@ export function contextualAutoReviewMode(): ReviewMode | undefined {
   return 'experimental'
 }
 
-/**
- * One per Script cell. The first whole-Script allowance binds all later
- * children to the same authority, policy and instructions.
- */
+/** A whole-Script allowance covers later children for the same turn and mode. */
 export type ContextualScriptGrant = {
   readonly cellId: string
   readonly generation: string
@@ -166,7 +165,7 @@ export type ContextualScriptGrant = {
   releaseRefusal?: string
   releaseExpiry?: { toolUseId: string; reason: string }
   granted?: {
-    isCurrent(context: ToolUseContext): boolean
+    stopReason(context: ToolUseContext): ScriptApprovalStopReason | undefined
   }
 }
 
@@ -295,7 +294,7 @@ export async function createContextualAttempt(
   }
 
   function needsInstructionReview(): boolean {
-    if (scriptGrant?.granted) return !scriptGrant.granted.isCurrent(context)
+    if (scriptGrant?.granted) return Boolean(scriptGrant.granted.stopReason(context))
     // A busy prompt drains at the end of the tool round. Reads already allowed
     // under this snapshot may finish it; later authority changes still fence release.
     return (!reviewedInstructions && (mayAffectRead || mayChangeState(tool, snapshot) && followUps.length > 0)) ||
@@ -381,7 +380,8 @@ export async function createContextualAttempt(
   function coveredByScript(): PermissionDecision | undefined {
     const granted = scriptGrant?.granted
     if (!granted) return undefined
-    if (!granted.isCurrent(context)) return scriptStale()
+    const stopReason = granted.stopReason(context)
+    if (stopReason) return scriptStale(false, stopReason)
     reviewStarted = true
     reviewedInstructions = true
     const reason = 'Covered by the Auto Mode review of this script.'
@@ -389,15 +389,15 @@ export async function createContextualAttempt(
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
   }
 
-  function scriptStale(waitingForUser = false): PermissionDenyDecision {
-    const cancelled = context.abortController.signal.aborted
+  function scriptStale(waitingForUser = false, stopReason?: ScriptApprovalStopReason): PermissionDenyDecision {
+    const cancelled = stopReason === SCRIPT_APPROVAL_STOP_REASONS.turnStopped || context.abortController.signal.aborted
     reviewFailure = cancelled ? 'interrupted' : 'review_expired'
     const verdict = reviewer.verdict ? {
       allow: 'The reviewer allowed this action. ',
       deny: 'The reviewer denied this action. ',
       ask: 'The reviewer requested your approval. ',
     }[reviewer.verdict] : ''
-    const reason = verdict + (cancelled
+    const reason = stopReason ?? verdict + (cancelled
       ? 'The Script review was cancelled before the action ran.'
       : waitingForUser
         ? 'A user message is waiting. Author a new Script after its instructions are applied.'
@@ -560,7 +560,9 @@ export async function createContextualAttempt(
     review: () => review ??= Promise.resolve(coveredByScript() ?? reviewHeldAction()),
     needsInstructionReview,
     async reviewFollowUp() {
-      if ((scriptChild && (reviewStarted || requiresHuman || scriptGrant?.granted)) || (scriptWrapper && mode === 'experimental')) return scriptStale()
+      if ((scriptChild && (reviewStarted || requiresHuman || scriptGrant?.granted)) || (scriptWrapper && mode === 'experimental')) {
+        return scriptStale(false, scriptGrant?.granted?.stopReason(context))
+      }
       if (oversizeHumanApproval) return stale('The action changed after approval. Review the current action in chat.')
       renewReview()
       return reviewHeldAction()
@@ -585,11 +587,12 @@ export async function createContextualAttempt(
         denyReview(reason)
         throw new Error(reason)
       }
-      const matches = (!scriptGrant?.granted || scriptGrant.granted.isCurrent(releasedContext)) && current(candidate, releasedContext)
+      const stopReason = scriptGrant?.granted?.stopReason(releasedContext)
+      const matches = !stopReason && current(candidate, releasedContext)
       if (!matches || (requiresHuman ? !humanAllowed : reviewStarted && !actionAllowed)) {
         const reason = 'The approval no longer matches the current action, assignment or permissions.'
         if (scriptGrant && !matches) {
-          scriptGrant.releaseExpiry = { toolUseId, reason: scriptStale().message }
+          scriptGrant.releaseExpiry = { toolUseId, reason: scriptStale(false, stopReason).message }
         } else {
           if (scriptGrant) scriptGrant.releaseRefusal = 'The Script approval could not be verified before the action ran.'
           stale(scriptGrant?.releaseRefusal ?? reason)
@@ -597,14 +600,20 @@ export async function createContextualAttempt(
         return false
       }
       if (coveringGrant) {
-        const approvedAuthority = structuredClone(authority)
+        const approvedMode = policy.mode
         coveringGrant.granted = {
-          isCurrent: liveContext => {
-            const latest = readContextualAuthority(liveContext)
-            return contextualAutoReviewMode() === 'experimental' &&
-              !latest.stopped && !latest.pendingOperatorInput && isDeepStrictEqual(latest, approvedAuthority) &&
-              isDeepStrictEqual(liveContext.getAppState().toolPermissionContext, policy) &&
-              isDeepStrictEqual(getSourcedAutoModeInstructions(), instructions)
+          stopReason: liveContext => {
+            const livePolicy = liveContext.getAppState().toolPermissionContext
+            const turn = liveContext.launchingTurnSignal
+            const workerParent = liveContext.contextualWorkerAssignment?.parentSignal
+            if (liveContext.abortController.signal.aborted ||
+                (turn && wasTurnStopped(turn)) || (workerParent && wasTurnStopped(workerParent))) {
+              return SCRIPT_APPROVAL_STOP_REASONS.turnStopped
+            }
+            if (livePolicy.mode !== approvedMode) return SCRIPT_APPROVAL_STOP_REASONS.modeChanged
+            if (getEffectiveAutoMode(livePolicy) === null || contextualAutoReviewMode() !== 'experimental') {
+              return SCRIPT_APPROVAL_STOP_REASONS.autoModeOff
+            }
           },
         }
       }

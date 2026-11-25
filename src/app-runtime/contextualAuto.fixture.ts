@@ -457,7 +457,7 @@ const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
 const { createUserMessage } = await import('../utils/messages.js')
 enableConfigs()
 const hasBackgroundScript = scriptCells?.some(cell => cell.run_in_background)
-if (hasBackgroundScript || scriptAuthorityChange === 'instruction' || (routed && scenario.endsWith('-direct')) || workerRouting || loadSkill || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
+if (hasBackgroundScript || scriptAuthorityChange || (routed && scenario.endsWith('-direct')) || workerRouting || loadSkill || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || scenario.startsWith('trial-')) {
   const { getSessionId, switchSession } = await import('../bootstrap/state.js')
   switchSession(getSessionId())
 }
@@ -511,9 +511,15 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
     if (scriptAuthorityChange && !scriptAuthorityChanged && existsSync(join(cwd, 'effects.txt'))) {
       scriptAuthorityChanged = true
       if (scriptAuthorityChange === 'instruction') enqueueScriptInstruction({ mode: 'prompt', value: 'Stop. Keep the remaining files untouched.' })
+      else if (scriptAuthorityChange === 'peer') enqueueScriptInstruction({
+        mode: 'task-notification', value: 'The fixture check is complete.', uuid: randomUUID(),
+        origin: { kind: 'peer', name: 'Fixture peer', appSessionId: randomUUID() },
+      })
+      else if (scriptAuthorityChange === 'stop') controller.abort()
+      else if (scriptAuthorityChange === 'auto-off') process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE = 'legacy'
       else state = { ...state, toolPermissionContext: { ...state.toolPermissionContext,
         ...(scriptAuthorityChange === 'mode' ? { mode: 'default' as const }
-          : { alwaysDenyRules: { session: ['Bash(printf after:*)'] } }),
+          : { alwaysDenyRules: { session: ['Bash(printf blocked >> effects.txt)'] } }),
       } }
     }
     return state
@@ -525,7 +531,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
   recordTranscript: async messages => {
     transcript = structuredClone(messages)
     return (scenario.startsWith('measure-') || scenario.startsWith('wait-') || surface !== 'desktop' ||
-      hasBackgroundScript || scriptAuthorityChange === 'instruction' || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || observeReviewUsage || scenario.startsWith('trial-'))
+      hasBackgroundScript || scriptAuthorityChange || backgroundWithdrawal || lateCorrection || mcpWithdrawal || cleanup || queuedBrowserRead || observeReviewUsage || scenario.startsWith('trial-'))
       ? (await import('../utils/sessionStorage.js')).recordTranscript(messages) : null
   },
   ...(runtimeLimits && { codeModeHost: new CodeModeHost(runtimeLimits) }),

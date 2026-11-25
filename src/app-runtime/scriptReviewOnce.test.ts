@@ -327,8 +327,23 @@ test('a separate preflight hold keeps its reason after the reviewer allows the a
     reviewer: expect.objectContaining({ verdict: 'allow' }), reason: 'The reviewer allowed this action. The action did not run.' })
 }, 30_000)
 
-for (const changed of ['instruction', 'rules', 'mode']) {
-  test(`a ${changed} change after release fences covered children and queued work`, async () => {
+for (const [changed, label] of [['instruction', 'typed message'], ['peer', 'peer message']]) {
+  test(`a ${label} during a covered Script leaves later steps covered`, async () => {
+    const proof = await run('native-script-children', {
+      ...cells(queued + write), CONTEXTUAL_AUTO_TEST_SCRIPT_AUTHORITY: changed,
+    })
+    expect(proof.scriptAuthorityChanged).toBe(true)
+    expect(proof.requests).toHaveLength(1)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.effect).toBe('effectqueuedeffect')
+    expect(proof.scripts[0].status).toBe('completed')
+  }, 30_000)
+}
+
+for (const [changed, label] of [
+  ['mode', 'the permission mode changed'], ['auto-off', 'Auto mode was turned off'],
+]) {
+  test(`a covered Script stops when ${label}`, async () => {
     const proof = await run('native-script-children', {
       ...cells(queued + write), CONTEXTUAL_AUTO_TEST_SCRIPT_AUTHORITY: changed,
     })
@@ -337,8 +352,30 @@ for (const changed of ['instruction', 'rules', 'mode']) {
     expect(proof.prompts).toHaveLength(0)
     expect(proof.effect).toBe('effect')
     expect(proof.scripts[0].status).toBe('blocked')
+    expect(proof.scripts[0].output).toContain(`Script stopped because ${label}`)
   }, 30_000)
 }
+
+test('stopping the turn prevents later steps in a covered Script', async () => {
+  const proof = await run('native-script-children', {
+    ...cells(queued + write), CONTEXTUAL_AUTO_TEST_SCRIPT_AUTHORITY: 'stop',
+  })
+  expect(proof.scriptAuthorityChanged).toBe(true)
+  expect(proof.requests).toHaveLength(1)
+  expect(proof.effect).toBe('effect')
+}, 30_000)
+
+test('a new hard rule blocks the matching covered step after a permitted step runs', async () => {
+  const proof = await run('native-script-children', {
+    ...cells(queued + `await ${bash('printf blocked >> effects.txt')};`),
+    CONTEXTUAL_AUTO_TEST_SCRIPT_AUTHORITY: 'rules',
+  })
+  expect(proof.scriptAuthorityChanged).toBe(true)
+  expect(proof.requests).toHaveLength(1)
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effectqueued')
+  expect(proof.scripts[0].calls[2].error).toContain('Blocked by permissions')
+}, 30_000)
 
 for (const command of [
   'rm -rf "$HOME"',

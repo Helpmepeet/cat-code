@@ -104,17 +104,14 @@ export function PermissionReasonMark({ heading, reason }: { heading: string; rea
   </>
 }
 
-function ReviewVerdict({ outcome, reviewer }: { outcome: Parameters<typeof autoModeDecisionLabel>[0]; reviewer?: AutoModeReview['reviewer'] }) {
-  return <span className="auto-mode-review-verdict">
-    <ReviewShield outcome={outcome} size={12} />
-    <span className="auto-mode-review-label">{autoModeDecisionLabel(outcome, reviewer)}</span>
-  </span>
-}
-
 export function AutoModeReviewReason({ review }: { review?: AutoModeReview }) {
   if (!review || review.outcome === 'allowed' || review.outcome === 'reviewing' || !review.reason) return null
+  const label = autoModeDecisionLabel(review.outcome, review.reviewer, review.reason)
   return <div className="auto-mode-review-field" data-outcome={review.outcome}>
-    <ReviewVerdict outcome={review.outcome} reviewer={review.reviewer} />
-    <div className="auto-mode-review-value">{review.reason}</div>
+    <span className="auto-mode-review-verdict">
+      <ReviewShield outcome={review.outcome} size={12} />
+      <span className="auto-mode-review-label">{label}</span>
+    </span>
+    {label !== review.reason && <div className="auto-mode-review-value">{review.reason}</div>}
   </div>
 }

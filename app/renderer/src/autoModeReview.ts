@@ -1,5 +1,5 @@
 import { createContext } from 'react'
-import { AUTO_MODE_REJECTION_PREFIX, type AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
+import { AUTO_MODE_REJECTION_PREFIX, SCRIPT_APPROVAL_STOP_REASONS, type AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
 import { duration } from './focusedLive.js'
 
 export const AutoModeReviewContext = createContext<AutoModeReview | undefined>(undefined)
@@ -11,8 +11,13 @@ export const AUTO_MODE_DECISION_LABELS = {
   inconclusive: 'Auto mode review ended without a decision',
 } as const
 
-export function autoModeDecisionLabel(outcome: keyof typeof AUTO_MODE_DECISION_LABELS, reviewer?: AutoModeReview['reviewer']): string {
-  if (outcome === 'inconclusive' && reviewer?.verdict) return 'Action held after Auto mode review'
+const scriptStopReasons: ReadonlySet<string> = new Set(Object.values(SCRIPT_APPROVAL_STOP_REASONS))
+
+export function autoModeDecisionLabel(outcome: keyof typeof AUTO_MODE_DECISION_LABELS, reviewer?: AutoModeReview['reviewer'], reason?: string): string {
+  if (outcome === 'inconclusive') {
+    if (reason && scriptStopReasons.has(reason)) return reason
+    if (reviewer?.verdict) return 'Action held after Auto mode review'
+  }
   return AUTO_MODE_DECISION_LABELS[outcome]
 }
 
@@ -35,7 +40,7 @@ export function summarizeAutoModeReviews(reviews: readonly (AutoModeReview | und
   if (calls.some(review => review.outcome === 'asking')) return { outcome: 'asking', count: calls.length, text: AUTO_MODE_DECISION_LABELS.asking }
   const inconclusive = calls.find(review => review.outcome === 'inconclusive' && review.reviewer?.verdict) ??
     calls.find(review => review.outcome === 'inconclusive')
-  if (inconclusive) return { outcome: 'inconclusive', count: calls.length, text: autoModeDecisionLabel('inconclusive', inconclusive.reviewer) }
+  if (inconclusive) return { outcome: 'inconclusive', count: calls.length, text: autoModeDecisionLabel('inconclusive', inconclusive.reviewer, inconclusive.reason) }
   const elapsed = calls.reduce((sum, review) => sum + (review.completedAt ?? review.startedAt) - review.startedAt, 0)
   return { outcome: 'allowed', count: calls.length, text: calls.length > 1 ? `Reviewed ${calls.length} commands for ${duration(elapsed)}` : `Reviewed for ${duration(elapsed)}` }
 }

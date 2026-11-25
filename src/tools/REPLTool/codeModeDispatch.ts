@@ -92,13 +92,10 @@ export class CodeModeDispatch {
   get blockedReason(): string | undefined {
     if (this.fence) return this.fence
     const grant = this.context.contextualScriptGrant
-    const refusal = grant?.releaseExpiry?.reason ?? grant?.releaseRefusal
+    const refusal = grant?.releaseExpiry?.reason ?? grant?.releaseRefusal ?? grant?.granted?.stopReason(this.context)
     if (refusal) {
       this.permissionBlocked = true
       this.stop(refusal)
-    } else if (grant?.granted && !grant.granted.isCurrent(this.context)) {
-      this.permissionBlocked = true
-      this.stop('Script authority or permissions changed. Author a new Script using the current instructions and permissions.')
     }
     return this.fence
   }

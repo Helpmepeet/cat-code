@@ -1,5 +1,12 @@
 export const AUTO_MODE_NO_EXPLANATION = 'The reviewer returned no explanation.'
 export const AUTO_MODE_REJECTION_PREFIX = 'Permission for this action has been denied. Reason: '
+export const SCRIPT_APPROVAL_STOP_REASONS = {
+  turnStopped: 'Script stopped because the turn was stopped.',
+  autoModeOff: 'Script stopped because Auto mode was turned off.',
+  modeChanged: 'Script stopped because the permission mode changed.',
+} as const
+
+export type ScriptApprovalStopReason = typeof SCRIPT_APPROVAL_STOP_REASONS[keyof typeof SCRIPT_APPROVAL_STOP_REASONS]
 
 export type AutoModeReview = {
   type: 'tool.review'
