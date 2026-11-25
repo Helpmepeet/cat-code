@@ -532,7 +532,8 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
     : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
       ...(scenario === 'compacted-relay-marker' && { summarizedRelayedInput: true }) }),
-  ] : initial,
+  ] : workerRouting ? [createUserMessage({ content: 'An unrelated chat reports that its checks passed.',
+    origin: { kind: 'peer', name: 'Other chat', appSessionId: randomUUID() } })] : initial,
   ...(scenario === 'compacted-host-identity' && { peerCreatorAppSessionId: randomUUID() }),
 }
 const creatorAppId = randomUUID()

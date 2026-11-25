@@ -524,8 +524,9 @@ for (const entry of ['direct', 'script']) {
           expect(withdrawal).toMatchObject({ origin: 'operator', text: 'Stop this job. Leave all files as they are.' })
           expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reviewer: expect.objectContaining({ verdict: 'deny' }) }))
         } else if (source === 'peer-only') {
-          expect(assignment).toMatchObject({ origin: 'peer', text: 'Append one effect marker to effects.txt.' })
-          expect(assignment.parentAnchor).toBeUndefined()
+          expect(assignment).toBeUndefined()
+          expect(conversation).toContainEqual(expect.objectContaining({ origin: 'peer', actor: 'Lead',
+            text: 'Append one effect marker to effects.txt.' }))
         } else expect(conversation.map((row: any) => row.origin)).toContain('operator')
       }, 30_000)
     }
@@ -555,7 +556,7 @@ test('a subagent runs base-allowed edits and reviews an outside deletion and dat
   const [remove, database] = reviews.map((row: any) => row.content)
   expect(remove.action.input.command).toMatch(/^rm -rf '.*\/outside-build'$/)
   expect(database.action.input.command).toMatch(/^sqlite3 fixture\.db /)
-  expect(remove.assignment).toMatchObject({ origin: 'worker-launch', parentAnchor: expect.any(String) })
+  expect(remove.assignment).toMatchObject({ origin: 'worker-launch', sender: 'main', parentAnchor: expect.any(String) })
   expect(proof.files.a).toBe('new')
   expect(proof.buildExists).toBe(false)
   expect(proof.outsideBuildExists).toBe(false)

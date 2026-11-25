@@ -26,6 +26,17 @@ test('a Script peer observes its creator’s restriction, approval, and withdraw
     clearTimeout(timeout)
     if (exit !== 0) throw new Error(`Peer authority fixture exited ${exit}\n${error}\n${output}`)
     const result = JSON.parse(output)
+    const update = { actor: 'Other chat', text: 'The fixture investigation is still in progress.' }
+    expect(result.mainPrincipals).toEqual([
+      { actor: 'main', correspondence: [update] },
+      { actor: 'main', correspondence: [update] },
+    ])
+    expect(result.launchBrief).toStartWith('Update status.txt to new.')
+    const launch = { actor: 'Creator', text: result.launchBrief }
+    expect(result.principals).toEqual([[launch], [launch, update], [launch, update, update]].map(correspondence => ({
+      actor: 'peer-session', assignment: { actor: 'peer-session', origin: 'peer', text: launch.text, sender: launch.actor },
+      correspondence,
+    })))
     expect(result.effects).toEqual(['old', 'new', 'old', 'old'])
     expect(result.reviews).toEqual([
       { tool: 'Bash', anchored: true, latestCreatorInstruction: 'Create the peer for this experiment. Leave status.txt unchanged until I approve the peer edit.' },

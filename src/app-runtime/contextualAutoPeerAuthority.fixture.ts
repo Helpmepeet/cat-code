@@ -25,6 +25,7 @@ let nextAction: { name: string; input: Record<string, string> } | undefined = {
 let calls = 0
 const host: { delivery?: PeerDeliverMessage; result?: HostResultMessage } = {}
 const reviews: { tool: string; anchored: boolean; latestCreatorInstruction: string | undefined }[] = []
+const principals: { actor: string; assignment: unknown; correspondence: unknown[] }[] = []
 let workingLaunchContext: string | undefined
 
 mock.module('../services/api/client.js', () => ({
@@ -39,6 +40,11 @@ mock.module('../services/api/client.js', () => ({
         anchored: packet.assignment?.parentAnchor === launchUserMessageId,
         latestCreatorInstruction,
       })
+      if (packet.action.tool === 'Bash') {
+        const { parent, parentAnchor, ...assignment } = packet.assignment ?? {}
+        principals.push({ actor: packet.action.actor, assignment: packet.assignment && assignment,
+          correspondence: packet.conversation.filter(entry => entry.origin === 'peer').map(({ actor, text }) => ({ actor, text })) })
+      }
       const decision = packet.action.tool === 'CreatePeer' || latestCreatorInstruction === approval ? 'allow' : 'deny'
       return Promise.resolve({ id: 'fixture-review', type: 'message', role: 'assistant', model: body.model,
         content: [{ type: 'text', text: JSON.stringify({ decision, risk: 'medium', rationale: 'Fixture creator scope.' }) }],
@@ -116,13 +122,14 @@ const requestHost: PeerHostRequester = async (verb, args) => {
   return { ok: true, value: host.result.value as never }
 }
 let prompts = 0
-function controllerFor(tools: import('../Tool.js').Tools, peerCreatorAppSessionId?: string) {
+function controllerFor(tools: import('../Tool.js').Tools, peerCreatorAppSessionId: string | null,
+  initialMessages?: import('../types/message.js').Message[]) {
   let state = getDefaultAppState()
   state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto', isAutoModeAvailable: true } }
   const controller = createQueryEngineSessionController(createQueryEngineAppSession({
     cwd, tools, commands: [], mcpClients: [], agents: [], getAppState: () => state,
     setAppState: update => { state = update(state) }, readFileCache: createFileStateCacheWithSizeLimit(20),
-    userSpecifiedModel: 'claude-sonnet-5-5', peerCreatorAppSessionId,
+    userSpecifiedModel: 'claude-sonnet-5-5', peerCreatorAppSessionId, initialMessages,
   }))
   controller.subscribe(event => {
     if (event.type !== 'permission.requested') return
@@ -132,12 +139,24 @@ function controllerFor(tools: import('../Tool.js').Tools, peerCreatorAppSessionI
   return controller
 }
 
-const creator = controllerFor([createCreatePeerTool(requestHost)])
+const creator = controllerFor([createCreatePeerTool(requestHost), BashTool], null)
 await creator.submit(`Create the peer for this experiment. ${restriction}`, { uuid: launchUserMessageId })
 const { delivery } = host
 if (!delivery?.assignment) throw new Error('Launch did not deliver a verified creator reference')
+const statusUpdate = 'The fixture investigation is still in progress.'
+const statusOrigin = { kind: 'peer' as const, name: 'Other chat', appSessionId: randomUUID() }
+const shellAction = { name: 'Bash', input: { command: 'printf new > status.txt' } }
+nextAction = shellAction
+await creator.submit(statusUpdate, { origin: statusOrigin })
 const loaded = await loadTranscriptFile(creatorPath, { strict: true, keepAllLeaves: true })
 const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+creator.dispose()
+const resumedCreator = controllerFor([BashTool], null, active.messages)
+nextAction = shellAction
+await resumedCreator.submit('Run the resumed fixture action.', { isMeta: true })
+resumedCreator.dispose()
+const mainPrincipals = principals.splice(0)
+reviews.length = 0
 let parentUuid = active.tip?.uuid
 async function addCreatorInstruction(text: string) {
   const message = createUserMessage({ content: text })
@@ -157,13 +176,13 @@ for (const [index, instruction] of [null, approval, withdrawal].entries()) {
   if (instruction) await addCreatorInstruction(instruction)
   await writeFile(file, 'old')
   nextAction = { name: 'REPL', input: { code: bashScript, description: 'Update fixture status' } }
-  await peer.submit(index === 0 ? delivery.text : openingBrief, {
-    origin: index === 0 ? { ...origin, creationPrompt: true, assignment: delivery.assignment } : origin,
+  await peer.submit(index === 0 ? delivery.text : statusUpdate, {
+    origin: index === 0 ? { ...origin, creationPrompt: true, assignment: delivery.assignment } : statusOrigin,
   })
   effects.push(await readFile(file, 'utf8'))
 }
 nextAction = { name: 'REPL', input: { code: editScript, description: 'Update fixture status with Edit' } }
 await peer.submit(openingBrief, { origin })
 effects.push(await readFile(file, 'utf8'))
-console.log(JSON.stringify({ effects, reviews, prompts, workingLaunchContext }))
+console.log(JSON.stringify({ effects, reviews, prompts, workingLaunchContext, mainPrincipals, principals, launchBrief: delivery.text }))
 process.exit(0)

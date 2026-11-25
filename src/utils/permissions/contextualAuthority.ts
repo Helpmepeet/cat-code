@@ -204,6 +204,7 @@ export function findContextualAssignmentMessage(context: ToolUseContext): { id: 
 
 type PeerParentEvidence = {
   reference: { parentSessionId: string; userMessageId: string }
+  launch?: { text: string; sender: string }
   messages: readonly Message[]
   pendingOperatorInput: boolean
   isCurrent: () => boolean
@@ -302,6 +303,7 @@ export async function resolveContextualPeerParent(
       }
     }
     return { reference: { parentSessionId, userMessageId }, messages: transcript.messages, isCurrent,
+      ...(brief !== undefined && { launch: { text: brief, sender: source.name } }),
       pendingOperatorInput: [...pending].some(id => !messageUuids.has(id)) }
   } catch {
     return undefined
@@ -311,7 +313,7 @@ export async function resolveContextualPeerParent(
 export function captureContextualWorkerParent(parent: ToolUseContext): ContextualWorkerParentBinding {
   const evidence = conversationEvidence(parent.messages, parent.contextualWorkerAssignment)
   const anchor = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
-  const sender = parent.agentId ?? (evidence.some(record => record.origin === 'peer') ? 'peer-session' : 'main')
+  const sender = parent.agentId ?? (parent.peerCreatorAppSessionId ? 'peer-session' : 'main')
   return { anchor, sender }
 }
 
@@ -333,9 +335,7 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
   const worker = context.contextualWorkerAssignment
   const messages = context.getCurrentAutoModeMessages?.() ?? context.messages
   const conversation = conversationEvidence(messages, worker, true)
-  const peer = conversation.find(record => record.origin === 'peer')
-  const peerSession = Boolean(context.peerCreatorAppSessionId || peer || peerParent ||
-    messages.some(message => message.type === 'user' && message.summarizedRelayedInput === true))
+  const peerSession = Boolean(context.peerCreatorAppSessionId || peerParent)
   const actor = context.agentId ?? (peerSession ? 'peer-session' : 'main')
   for (const entry of conversation) {
     if (entry.origin === 'assistant' && !entry.actor) entry.actor = actor
@@ -350,7 +350,7 @@ export function readContextualAuthority(context: ToolUseContext, peerParent?: Pe
   const delegated = Boolean(context.agentId || peerSession)
   const assignment: ContextualEvidence['assignment'] = delegated ? {
     actor, origin: worker ? 'worker-launch' : 'peer',
-    ...(worker ? { text: worker.text, sender: worker.sender } : peer ? { text: peer.text, sender: peer.actor } : {}),
+    ...(worker ? { text: worker.text, sender: worker.sender } : peerParent?.launch),
     ...(parent && { parent, parentAnchor: anchor }),
   } : undefined
   // Keep the operator's actual follow-up available while the main query is
