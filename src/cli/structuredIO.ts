@@ -589,7 +589,9 @@ export class StructuredIO {
 
       const humanOnly = mainPermissionResult.humanOnly === true
       if (humanOnly && !this.humanOnlyPermissionPrompts) return {
-        ...mainPermissionResult, message: mainPermissionResult.message + ' This SDK host cannot resolve a human-only request.',
+        ...mainPermissionResult, message: mainPermissionResult.message + (mainPermissionResult.title
+          ? ' Approve this action in an interactive chat to continue.'
+          : ' This SDK host cannot resolve a human-only request.'),
       }
       const heldInput = mainPermissionResult.updatedInput ?? input
       const resolveSdkReply = (result: PermissionToolOutput) => {
@@ -649,6 +651,7 @@ export class StructuredIO {
             tool_name: tool.name,
             input: heldInput,
             ...(humanOnly && { human_only: true }),
+            ...(mainPermissionResult.title && { title: mainPermissionResult.title }),
             permission_suggestions: mainPermissionResult.suggestions,
             blocked_path: mainPermissionResult.blockedPath,
             decision_reason: humanOnly ? mainPermissionResult.message : serializeDecisionReason(

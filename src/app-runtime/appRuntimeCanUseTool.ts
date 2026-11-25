@@ -79,6 +79,10 @@ export function createAppRuntimeCanUseTool({
 
     const handler = getPermissionRequestHandler()
     if (!handler) {
+      if (permissionResult.humanOnly && permissionResult.title) {
+        return { behavior: 'deny', message: `${permissionResult.message} Approve this action in an interactive chat to continue.`,
+          decisionReason: permissionResult.decisionReason }
+      }
       return permissionResult
     }
 
@@ -98,6 +102,7 @@ export function createAppRuntimeCanUseTool({
         permission_suggestions: permissionResult.suggestions,
         blocked_path: permissionResult.blockedPath,
         decision_reason: permissionResult.message,
+        ...(permissionResult.title && { title: permissionResult.title }),
         tool_use_id: toolUseID,
         agent_id: toolUseContext.agentId,
       },

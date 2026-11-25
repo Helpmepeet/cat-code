@@ -6,7 +6,7 @@ import type { HostEvent, SessionDescriptor } from '../shared/hostApi.js'
 import type { NotificationPreferences } from '../shared/notificationPreferences.js'
 import type { TurnRetryResult } from '../shared/notificationNavigation.js'
 import { buildAllowResponse, buildDenyResponse, type PermissionRequest } from '../renderer/src/permissionState.js'
-import { buildPermissionOptions, selectPermissionPreview } from '../renderer/src/permissionPromptModel.js'
+import { buildPermissionOptions, isOneActionPermissionRequest, selectPermissionPreview } from '../renderer/src/permissionPromptModel.js'
 import { PLAN_APPROVE_OPTIONS } from '../renderer/src/planState.js'
 import { narrowAskQuestions } from '../renderer/src/askQuestionState.js'
 import type { PendingQuestion } from '../shared/nonblockingQuestions.js'
@@ -134,7 +134,9 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
     let actions: (() => void)[] = []
     let labels: string[] = []
     let reply: Notice['reply']
-    if (input.tool_name === 'AskUserQuestion') {
+    if (isOneActionPermissionRequest(input)) {
+      body = 'Open the chat to review the action and decide.'
+    } else if (input.tool_name === 'AskUserQuestion') {
       title = DESKTOP_NOTIFICATION_TITLES.question
       const questions = narrowAskQuestions(input.input)
       body = questions.map(q => q.question).join('\n')

@@ -18,6 +18,7 @@ import {
   buildPermissionOptions,
   formatPermissionInput,
   isEditableElement,
+  isOneActionPermissionRequest,
   permissionKeyIntent,
   permissionKeysAreLive,
   permissionKickerForTool,
@@ -98,8 +99,9 @@ export function PermissionPrompt({
   onSnooze?: () => void
 }) {
   const toolName = request.request.tool_name
-  const commandCard = !denyOnly && (toolName === 'Bash' || toolName === 'PowerShell')
-  const editCard = toolName === 'Edit'
+  const showFullAction = isOneActionPermissionRequest(request.request)
+  const commandCard = !showFullAction && !denyOnly && (toolName === 'Bash' || toolName === 'PowerShell')
+  const editCard = !showFullAction && toolName === 'Edit'
   const compactCard = commandCard || editCard
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([])
 
@@ -138,8 +140,8 @@ export function PermissionPrompt({
     agentTypeMeta(relayingWorker?.role)?.label.toLowerCase() ??
     'coding worker'
   const preview = useMemo(
-    () => compactCard ? null : selectPermissionPreview(toolName, request.request.input),
-    [compactCard, toolName, request.request.input],
+    () => compactCard || showFullAction ? null : selectPermissionPreview(toolName, request.request.input),
+    [compactCard, showFullAction, toolName, request.request.input],
   )
   const options = useMemo(
     () => compactCard ? [] : buildPermissionOptions(request.request, denyOnly === true),
@@ -460,7 +462,7 @@ export function PermissionPrompt({
       ) : null}
       {request.request.decision_reason ? (
         <p className="mt-1 text-xs text-text-subtle">
-          Why: {request.request.decision_reason}
+          {showFullAction ? '' : 'Why: '}{request.request.decision_reason}
         </p>
       ) : null}
       {request.request.blocked_path ? (

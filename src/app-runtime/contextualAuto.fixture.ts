@@ -28,6 +28,7 @@ const oversizeHistory = scenario === 'native-oversize-history'
 const oversizeOperatorHistory = scenario === 'native-oversize-operator-history'
 const earlyRestriction = 'Do not write to effects.txt in this investigation.'
 const oversizeAction = scenario === 'native-oversize-action'
+const oversizeReply = process.env.CONTEXTUAL_AUTO_TEST_OVERSIZE_REPLY
 const compacted = scenario.startsWith('compacted-')
 const reviewCompacted = compacted && scenario.endsWith('-review')
 const peerLocalFollowUp = scenario === 'delegated-local-follow-up-direct'
@@ -477,7 +478,7 @@ state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mod
     alwaysAskRules: { session: ['Bash(cat a.txt)'] },
     alwaysDenyRules: { session: ['Read(./a.txt)', 'Edit(./a.txt)'] },
   }),
-  ...(scenario === 'native-script-no-human' && { shouldAvoidPermissionPrompts: true }),
+  ...((scenario === 'native-script-no-human' || oversizeReply === 'unavailable') && { shouldAvoidPermissionPrompts: true }),
   ...(refusedWorker && { alwaysDenyRules: { session: ['Agent'] } }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
 } }
@@ -538,8 +539,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
     createUserMessage({ content: scriptCells ? 'Run the fixture scripts.' : earlyRestriction }),
     createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
       origin: { kind: 'coordinator' } }),
-  ] : oversizeAction && scriptCells ? [createUserMessage({ content: 'NEAR_LIMIT_CONTEXT ' + 'é'.repeat(100_000),
-    origin: { kind: 'coordinator' } })]
+  ] : oversizeAction && scriptCells ? [createUserMessage({ content: 'Motivation for this change. ' + 'é'.repeat(105_000) })]
     : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]
     : privateNoticeFollowUp ? [createUserMessage({ content: rosterPrivacyVeto })]
     : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
@@ -737,8 +737,10 @@ controller.subscribe(event => {
       const { enqueue } = await import('../utils/messageQueueManager.js')
       enqueue({ mode: 'prompt', value: 'Leave the file untouched. Only inspect it.' })
     }
-    if (repeatedDenials || scriptAskApproved || scenario === 'wait-approve' || scenario === 'wait-correction' || scenario === 'direct-allow' || scenario === 'direct-mutated' || scenario === 'direct-unavailable' || scenario === 'direct-invalid') {
-      const response = { behavior: 'allow' as const, updatedInput: scenario === 'direct-mutated' ? { ...request.input, run_in_background: true } : request.input }
+    if (repeatedDenials || scriptAskApproved || oversizeReply === 'approve' || oversizeReply === 'changed' || scenario === 'wait-approve' || scenario === 'wait-correction' || scenario === 'direct-allow' || scenario === 'direct-mutated' || scenario === 'direct-unavailable' || scenario === 'direct-invalid') {
+      const updatedInput = oversizeReply === 'changed' ? { ...request.input, file_path: 'different.txt' }
+        : scenario === 'direct-mutated' ? { ...request.input, run_in_background: true } : request.input
+      const response = { behavior: 'allow' as const, updatedInput }
       controller.respondToPermissionRequest(requestId, response)
       controller.respondToPermissionRequest(requestId, response)
     } else if (scenario === 'wait-stop') {
@@ -951,3 +953,5 @@ await writeFile(join(root, 'evidence.json'), JSON.stringify({
 controller.dispose()
 await cleanupMcp?.()
 if (helperSymbol) await (await import('../services/lsp/manager.js')).shutdownLspServerManager()
+  ...(oversizeAction && { sensitiveFileSize: await readFile(protectedEditPath).then(bytes => bytes.length, () => 0),
+    queuedFileExists: existsSync(join(cwd, '.vscode', 'launch.json')), changedFileExists: existsSync(join(cwd, 'different.txt')) }),

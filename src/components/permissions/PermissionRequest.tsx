@@ -1,6 +1,7 @@
 import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import * as React from 'react';
+import { Text } from '../../ink.js';
 import { EnterPlanModeTool } from 'src/tools/EnterPlanModeTool/EnterPlanModeTool.js';
 import { ExitPlanModeV2Tool } from 'src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.js';
 import { useNotifyAfterTimeout } from '../../hooks/useNotifyAfterTimeout.js';
@@ -27,6 +28,8 @@ import { FallbackPermissionRequest } from './FallbackPermissionRequest.js';
 import { FileEditPermissionRequest } from './FileEditPermissionRequest/FileEditPermissionRequest.js';
 import { FilesystemPermissionRequest } from './FilesystemPermissionRequest/FilesystemPermissionRequest.js';
 import { FileWritePermissionRequest } from './FileWritePermissionRequest/FileWritePermissionRequest.js';
+import { PermissionDialog } from './PermissionDialog.js';
+import { PermissionPrompt } from './PermissionPrompt.js';
 import { NotebookEditPermissionRequest } from './NotebookEditPermissionRequest/NotebookEditPermissionRequest.js';
 import { PowerShellPermissionRequest } from './PowerShellPermissionRequest/PowerShellPermissionRequest.js';
 import { SkillPermissionRequest } from './SkillPermissionRequest/SkillPermissionRequest.js';
@@ -214,6 +217,25 @@ export function PermissionRequest(t0) {
     $[17] = t5;
   } else {
     t5 = $[17];
+  }
+  const decision = toolUseConfirm.permissionResult;
+  if (decision.behavior === 'ask' && decision.humanOnly && decision.title) {
+    return <PermissionDialog title={decision.title} workerBadge={workerBadge}>
+      <Text>{decision.message}</Text>
+      <Text>{JSON.stringify(toolUseConfirm.input, null, 2)}</Text>
+      <PermissionPrompt
+        question=""
+        options={[{ value: 'allow', label: 'Allow once' }, { value: 'deny', label: 'Decline' }]}
+        onSelect={value => {
+          if (value === 'deny') t1();
+          else {
+            void toolUseConfirm.onAllow(toolUseConfirm.input, []);
+            onDone();
+          }
+        }}
+        onCancel={t1}
+      />
+    </PermissionDialog>;
   }
   return t5;
 }

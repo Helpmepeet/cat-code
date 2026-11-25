@@ -251,26 +251,24 @@ test('over-budget review keeps the early operator restriction and marks omitted 
   expect(proof.prompts).toHaveLength(0)
 }, 30_000)
 
-test('over-budget operator history still reaches review with the newest instruction and an omission marker', async () => {
+test('over-budget operator instructions are held for a one-action decision', async () => {
   const proof = await run('native-oversize-operator-history')
-  expect(proof.requests).toHaveLength(1)
-  const { action, conversation } = proof.requests[0].content
-  expect(action.input.command).toBe('printf effect >> effects.txt')
-  expect(conversation.findLast((row: any) => row.origin === 'operator').text).toBe('Run the isolated action and report the result.')
-  expect(conversation).toContainEqual(expect.objectContaining({
-    origin: 'other', text: expect.stringMatching(/conversation entries were omitted/i),
-  }))
-  expect(JSON.stringify(conversation)).not.toContain('OVERSIZE_OPERATOR_CONTEXT')
-  expect(proof.prompts).toHaveLength(0)
-  expect(proof.effect).toBe('effect')
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.prompts).toEqual([expect.objectContaining({
+    human_only: true, input: expect.objectContaining({ command: 'printf effect >> effects.txt' }),
+    decision_reason: expect.stringContaining('could not review this action'),
+  })])
+  expect(proof.effect).toBeNull()
 }, 30_000)
 
-test('an oversize action alone is denied with guidance to split it', async () => {
+test('an oversize action alone offers the exact input and resolved target for approval', async () => {
   const proof = await run('native-oversize-action')
   expect(proof.requests).toHaveLength(0)
-  expect(proof.prompts).toHaveLength(0)
+  expect(proof.prompts).toEqual([expect.objectContaining({
+    human_only: true, input: expect.objectContaining({ content: 'x'.repeat(300_000) }),
+    decision_reason: expect.stringMatching(/could not review this action.*\.vscode\/settings\.json/),
+  })])
   expect(proof.sensitiveFileExists).toBe(false)
-  expect(proof.reviewEvents).toContainEqual(expect.objectContaining({ outcome: 'blocked', reason: expect.stringMatching(/split this action/i) }))
 }, 30_000)
 
 for (const scenario of ['direct-late-correction', 'background-withdrawal']) {

@@ -246,6 +246,7 @@ export async function createContextualAttempt(
   let reviewStarted = false
   let wholeScriptAttempt = false
   let actionAllowed = false
+  let oversizeHumanApproval = false
   let requiresHuman = false
   let humanAllowed = false
   let coveringGrant: ContextualScriptGrant | undefined
@@ -338,7 +339,7 @@ export async function createContextualAttempt(
     return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
   }
 
-  function ask(reason: string): PermissionDecision {
+  function ask(reason: string, title?: string): PermissionDecision {
     requiresHuman = true
     humanAllowed = false
     emit('asking', reason)
@@ -347,7 +348,7 @@ export async function createContextualAttempt(
       behavior: 'deny', message: reason + ' Interactive approval is unavailable.',
       decisionReason: { type: 'asyncAgent', reason },
     }
-    return { behavior: 'ask', humanOnly: true, message: reason, updatedInput: input,
+    return { behavior: 'ask', humanOnly: true, ...(title && { title }), message: reason, updatedInput: input,
       decisionReason: { type: 'classifier', classifier: 'auto-mode', reason } }
   }
 
@@ -411,6 +412,22 @@ export async function createContextualAttempt(
   function scriptSizeLimit(reason: string): PermissionDecision {
     reviewFailure = 'context_limit'
     return denyReview(reason, 'inconclusive')
+  function askOnceForOversizeReview(reviewedAction: ContextualEvidence['action']): PermissionDecision {
+    reviewFailure = 'context_limit'
+    const reason = 'Auto Mode could not review this action because the request was too large.'
+    if (policy.shouldAvoidPermissionPrompts) {
+      return denyReview(`${reason} Approve this action in an interactive chat to continue.`, 'inconclusive')
+    }
+    oversizeHumanApproval = true
+    const execution = reviewedAction.execution
+    const target = typeof execution?.target === 'string' ? `Target ${JSON.stringify(execution.target)}.`
+      : Array.isArray(execution?.targets) ? `Targets ${execution.targets.map(({ resolved }) => JSON.stringify(resolved)).join(', ')}.`
+      : typeof execution?.server === 'string' ? `Server ${JSON.stringify(execution.server)}.`
+      : execution?.resolvedAction !== undefined ? `Target ${JSON.stringify(execution.resolvedAction)}.`
+      : `Working directory ${JSON.stringify(reviewedAction.cwd)}.`
+    return ask(`${reason} ${target} Approval applies to this action only.`, `Allow ${tool.name} once?`)
+  }
+
   }
 
   async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
@@ -481,19 +498,11 @@ export async function createContextualAttempt(
     }
     const evidence = redactReviewFields(rawEvidence)
     const reviewerInstructions = redactReviewFields(withoutDefaultRules(instructions))
-    const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
-    const built = buildContextualReview(evidence, profile, reviewerInstructions, scriptChild)
-    if (!built) {
-      if (scriptGrant) {
-        return scriptSizeLimit('The Script review request exceeded its size limit before reaching the reviewer. The held action did not run. Report this blocker in chat.')
-      }
-      if (!buildContextualReview({ action: evidence.action, conversation: [] }, profile)) {
-        return denyReview('This action exceeds the Auto Mode review limit. Split this action into smaller calls and retry.')
-      }
-      return denyReview('The applicable instructions and action exceed the Auto Mode review limit. Report this blocker in chat.')
-    }
     if (containsCredentialMaterial(JSON.stringify(evidence)) ||
         containsCredentialMaterial(JSON.stringify(reviewerInstructions))) {
+    const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
+    const built = buildContextualReview(evidence, profile, reviewerInstructions, scriptChild)
+    if (!built) return askOnceForOversizeReview(evidence.action)
       return denyReview('Auto Mode could not safely redact credentials from this action. Revise the action or report the blocker in chat.')
     }
     reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION, profile: { provider: profile.provider, model: profile.model,
@@ -552,6 +561,7 @@ export async function createContextualAttempt(
     get reviewedSkillGrants() { return reviewedSkillGrants },
     review: () => review ??= Promise.resolve(coveredByScript() ?? reviewHeldAction()),
     needsInstructionReview,
+      if (oversizeHumanApproval) return stale('The action changed after approval. Review the current action in chat.')
     async reviewFollowUp() {
       if ((scriptChild && (reviewStarted || requiresHuman || scriptGrant?.granted)) || (scriptWrapper && mode === 'experimental')) return scriptStale()
       renewReview()

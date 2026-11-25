@@ -243,27 +243,53 @@ for (const size of [32_000, 32_001]) {
   }, 30_000)
 }
 
-test('an oversized review sends no request and releases neither the held nor the queued effect', async () => {
+test('a trimmed Script review covers queued and later children in the same cell', async () => {
   const proof = await run('native-oversize-history', cells(queued, twoWrites))
-  expect(proof.effect).toBeNull()
-  expect(proof.requests).toHaveLength(0)
+  expect(proof.effect).toBe('effectqueuedeffecteffect')
+  expect(proof.requests).toHaveLength(2)
+  expect(proof.requests[0].content.action.script.source).toContain(queued)
+  expect(JSON.stringify(proof.requests[0].content.conversation)).not.toContain('OVERSIZE_EARLIER_CONTEXT')
   expect(proof.prompts).toHaveLength(0)
-  expect(proof.reviewEvents.filter((event: any) =>
-    event.reason?.includes('exceeded its size limit before reaching the reviewer. The held action did not run.'))).toHaveLength(2)
 }, 30_000)
 
-test('an oversized held action leaves the same Script interpreter eligible for later review', async () => {
-  const oversized = 'tools.call({name:"Write",input:{file_path:".vscode/settings.json",content:"x".repeat(60000)},nothrow:true})'
-  const proof = await run('native-oversize-action', cells(
-    `await Promise.all([${oversized}, ${bash('printf queued >> effects.txt')}]);`, write,
-  ))
+for (const reply of ['approve', 'decline', 'unavailable', 'changed']) {
+  test(`Script review overflow handles ${reply} without extending approval to other actions`, async () => {
+    const oversized = 'tools.call({name:"Write",input:{file_path:".vscode/settings.json",content:"x".repeat(60000)},nothrow:true})'
+    const queuedWrite = 'tools.call({name:"Write",input:{file_path:".vscode/launch.json",content:"queued"},nothrow:true})'
+    const proof = await run('native-oversize-action', {
+      ...cells(`await Promise.all([${oversized}, ${queuedWrite}]);`, write),
+      CONTEXTUAL_AUTO_TEST_OVERSIZE_REPLY: reply,
+    })
+    const approved = reply === 'approve'
+    if (reply === 'unavailable') {
+      expect(proof.prompts).toHaveLength(0)
+      expect(proof.scripts[0].output).toContain('Approve this action in an interactive chat')
+    } else {
+      expect(proof.prompts).toEqual([expect.objectContaining({
+        tool_name: 'Write', human_only: true,
+        input: expect.objectContaining({ content: 'x'.repeat(60_000) }),
+        decision_reason: expect.stringMatching(/could not review this action.*\.vscode\/settings\.json/),
+      })])
+      expect(proof.prompts[0].decision_reason).not.toContain(coverNote)
+    }
+    expect(proof.sensitiveFileSize).toBe(approved ? 60_000 : 0)
+    expect(proof.queuedFileExists).toBe(false)
+    expect(proof.changedFileExists).toBe(false)
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(approved ? ['Write', 'Bash'] : ['Bash'])
+    if (approved) expect(proof.requests[0].content.action.input.file_path).toEndWith('/.vscode/launch.json')
+    expect(proof.effect).toBe('effect')
+    expect(proof.requests.at(-1).content.action.script.generation).toBe(proof.scripts[0].generation)
+  }, 30_000)
+}
+
+test('an action with a credential Auto Mode cannot redact stays held even when oversized', async () => {
+  const oversized = 'await tools.call({name:"Write",input:{file_path:".vscode/settings.json",' +
+    'content:["-----BEGIN", "PRIVATE KEY-----"].join(" ")+"x".repeat(60000)},nothrow:true})'
+  const proof = await run('native-oversize-action', { ...cells(oversized), CONTEXTUAL_AUTO_TEST_OVERSIZE_REPLY: 'approve' })
   expect(proof.sensitiveFileExists).toBe(false)
-  expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
-  expect(proof.effect).toBe('effect')
   expect(proof.prompts).toHaveLength(0)
-  expect(proof.scripts.map((script: any) => script.status)).toEqual(['blocked', 'completed'])
-  expect(proof.scripts[0].output).toContain('The held action did not run.')
-  expect(proof.requests[0].content.action.script.source).toContain(oversized)
+  expect(proof.requests).toHaveLength(0)
+  expect(proof.scripts[0].output).toContain('could not safely redact credentials')
 }, 30_000)
 
 test('an unavailable reviewer stops every queued effect without child fallback', async () => {

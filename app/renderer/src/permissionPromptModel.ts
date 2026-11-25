@@ -268,6 +268,10 @@ export type PermissionOption = {
   esc?: boolean
 }
 
+export function isOneActionPermissionRequest(request: PermissionRequest['request']): boolean {
+  return request.human_only === true && Boolean(request.title)
+}
+
 /**
  * The rows for one request, in the prototype's order: allow-once, then one row
  * per rule the engine offered, then refuse.
@@ -281,13 +285,15 @@ export function buildPermissionOptions(
   request: PermissionRequest['request'],
   denyOnly = false,
 ): PermissionOption[] {
+  const oneAction = isOneActionPermissionRequest(request)
   const deny: PermissionOption = {
     id: 'deny',
-    pre: 'No',
+    pre: oneAction ? 'Decline' : 'No',
     effect: 'deny',
     esc: true,
   }
   if (denyOnly) return [deny]
+  if (oneAction) return [{ id: 'allow', pre: 'Allow once', effect: 'allow' }, deny]
   const suggestions = Array.isArray(request.permission_suggestions)
     ? request.permission_suggestions
     : []

@@ -466,6 +466,19 @@ describe('desktop notifications', () => {
     h.permission('plan', 'ExitPlanMode', { plan: 'Do it' }); h.handles.at(-1)!.emit('action', 1)
     expect(h.sent.at(-1)[1]).toEqual({ type: 'notification.planApprove', requestId: 'plan', optionIndex: 1 })
   })
+  test('one-action approval opens the chat to review the complete action', () => {
+    const h = harness()
+    const pending = h.request()
+    h.event({ type: 'permission.requested', request: { ...pending, request: {
+      ...pending.request, human_only: true, title: 'Allow Bash once?',
+    } } })
+    const notification = h.handles[0]!
+    expect(notification.options.actions).toEqual([])
+    notification.emit('action', 0)
+    expect(h.sent).toHaveLength(0)
+    notification.emit('click')
+    expect(h.opened).toEqual([['a']])
+  })
   test('question options and custom reply are atomic; multi-question and multiselect open only', () => {
     const h = harness(); const question = { question: 'Which?', header: 'Pick', options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }], multiSelect: false }
     h.permission('q', 'AskUserQuestion', { questions: [question] }); expect(h.handles.at(-1)!.options.hasReply).toBe(true)

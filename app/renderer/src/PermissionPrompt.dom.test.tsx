@@ -257,6 +257,28 @@ const editRequest: PermissionRequest = {
   },
 }
 
+test('one-action approval shows the exact input and offers only one-time approval or decline', async () => {
+  const allowed: number[][] = []
+  let declined = 0
+  const { permission_suggestions: _suggestions, ...edit } = editRequest.request
+  const reason = 'Auto Mode could not review this action because the request was too large. Target "/repo/src/server.ts". Approval applies to this action only.'
+  const approval: PermissionRequest = { ...editRequest, request: {
+    ...edit, title: 'Allow Edit once?', human_only: true, decision_reason: reason,
+  } }
+  const { container } = await harness.mount(<PermissionPrompt request={approval}
+    onAllow={indices => allowed.push(indices)} onDeny={() => { declined++ }} />)
+  expect(container.querySelector('h2')?.textContent).toBe(approval.request.title)
+  expect(container.textContent).toContain(reason)
+  expect(JSON.parse(container.querySelector('pre')!.textContent!)).toEqual(approval.request.input)
+  const choices = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Response options"] button')]
+  expect(choices).toHaveLength(2)
+  expect(choices[0]?.textContent).toContain('Allow once')
+  expect(choices[1]?.textContent).toContain('Decline')
+  await act(async () => { choices[0]!.click(); choices[1]!.click() })
+  expect(allowed).toEqual([[]])
+  expect(declined).toBe(1)
+})
+
 test('Edit previews the file and its syntax-colored changes without a file gutter or generic controls', async () => {
   const { container } = await harness.mount(
     <PermissionPrompt request={editRequest} onAllow={() => {}} onDeny={() => {}} onSnooze={() => {}} />,

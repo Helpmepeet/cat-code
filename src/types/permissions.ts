@@ -202,6 +202,7 @@ export type PermissionAskDecision<
   behavior: 'ask'
   /** Only the engine's interactive reply path can authorize this held action. */
   humanOnly?: true
+  title?: string
   message: string
   updatedInput?: Input
   decisionReason?: PermissionDecisionReason
