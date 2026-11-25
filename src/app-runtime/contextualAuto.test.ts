@@ -58,11 +58,20 @@ for (const state of ['matching', 'script', 'other-child', 'conflicting', 'no-anc
 }
 
 for (const state of ['host-identity', 'relay-marker']) {
-  test(`a compacted helper with ${state} can make an ordinary edit without review`, async () => {
+  test(`a compacted chat with ${state} can make an ordinary edit without review`, async () => {
     const proof = await run(`compacted-${state}`)
     expect(proof.files.a).toBe('new')
     expect(proof.prompts).toHaveLength(0)
     expect(proof.requests).toHaveLength(0)
+  }, 30_000)
+
+  test(`a compacted chat with ${state} shows the correct actor during review`, async () => {
+    const proof = await run(`compacted-${state}-review`)
+    const actor = state === 'host-identity' ? 'peer-session' : 'main'
+    expect(proof.requests.map((request: any) => request.tool)).toEqual(['Bash'])
+    expect(proof.requests[0].content.action.actor).toBe(actor)
+    expect(proof.requests[0].content.assignment).toEqual(state === 'host-identity' ? { actor, origin: 'peer' } : undefined)
+    expect(proof.effect).toBe('effect')
   }, 30_000)
 }
 
@@ -576,19 +585,21 @@ test('a subagent runs base-allowed edits and reviews an outside deletion and dat
   expect(proof.workerDatabase).toBe('new')
 }, 30_000)
 
-for (const scope of ['accepted', 'refused', 'global']) {
+for (const scope of ['accepted', 'refused', 'global', 'parent-verified']) {
   test(`outbound worker restrictions do not govern the sender (${scope} launch)`, async () => {
     const proof = await run(`native-subagent-scope-${scope}`)
     const packets = proof.requests.filter((row: any) => row.tool === 'Bash').map((row: any) => row.content)
-    const [parent, worker] = [packets.find((packet: any) => packet.action.actor === 'main'),
+    const sender = scope === 'parent-verified' ? 'peer-session' : 'main'
+    const [parent, worker] = [packets.find((packet: any) => packet.action.actor === sender),
       packets.find((packet: any) => packet.assignment?.origin === 'worker-launch')]
     const restriction = 'Worker fixture: inspect the task. Do not append to effects.txt.'
     expect(parent?.conversation).not.toContainEqual(expect.objectContaining({ text: restriction }))
     if (scope === 'refused') expect(worker).toBeUndefined()
     else {
       expect(worker?.action.input.command).toBe(parent.action.input.command)
-      expect(worker.assignment).toMatchObject({ text: restriction, sender: 'main' })
+      expect(worker.assignment).toMatchObject({ text: restriction, sender })
     }
+    if (scope === 'parent-verified') expect(parent.assignment).toMatchObject({ origin: 'peer', parentAnchor: expect.any(String) })
     if (scope === 'global') {
       const operator = expect.objectContaining({ origin: 'operator', text: 'Neither you nor the worker may append to effects.txt.' })
       expect(parent.conversation).toContainEqual(operator)

@@ -28,6 +28,7 @@ const oversizeOperatorHistory = scenario === 'native-oversize-operator-history'
 const earlyRestriction = 'Do not write to effects.txt in this investigation.'
 const oversizeAction = scenario === 'native-oversize-action'
 const compacted = scenario.startsWith('compacted-')
+const reviewCompacted = compacted && scenario.endsWith('-review')
 const peerLocalFollowUp = scenario === 'delegated-local-follow-up-direct'
 const peerGitStatus = scenario === 'delegated-git-status-script'
 const workerScope = scenario.startsWith('native-subagent-scope-')
@@ -242,7 +243,7 @@ const submitted = scopeNotice ? { name: 'Announce', input: {
   : workerRouting ? { name: 'Agent', input: { description: 'Run isolated worker operations', prompt: workerBrief, subagent_type: 'general-purpose' } }
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
-    ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
+    ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') || reviewCompacted ? command : candidate)
     : { name: 'REPL', input: { code, description: 'Run isolated fixture',
         ...((scenario === 'measure-background' || backgroundWithdrawal) && { run_in_background: true }) } })
 if (rewrittenEdit || hookAllowEdit || scenario.startsWith('direct-')) {
@@ -542,10 +543,10 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
     : privateNoticeFollowUp ? [createUserMessage({ content: rosterPrivacyVeto })]
     : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
-      ...(scenario === 'compacted-relay-marker' && { summarizedRelayedInput: true }) }),
+      ...(scenario.startsWith('compacted-relay-marker') && { summarizedRelayedInput: true }) }),
   ] : workerRouting ? [createUserMessage({ content: 'An unrelated chat reports that its checks passed.',
     origin: { kind: 'peer', name: 'Other chat', appSessionId: randomUUID() } })] : initial,
-  ...(scenario === 'compacted-host-identity' && { peerCreatorAppSessionId: randomUUID() }),
+  ...(scenario.startsWith('compacted-host-identity') && { peerCreatorAppSessionId: randomUUID() }),
 }
 const creatorAppId = randomUUID()
 const postedNotices: unknown[] = []
@@ -783,7 +784,9 @@ if (surface === 'desktop') {
   } })
   else if (peerLocalFollowUp) await controller.submit('Also update the docs.')
   else if (workerScope) await controller.submit(globalWorkerRestriction ? globalRestrictionText :
-    'Launch a worker to inspect the task. You may append to effects.txt yourself.')
+    'Launch a worker to inspect the task. You may append to effects.txt yourself.', parentReference ? {
+      origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true, assignment: parentReference },
+    } : undefined)
   else await controller.submit(routed || mainEdit ? assignment : loadSkill ? 'Use the fixture-auto-skill.' :
     peerAction ? 'Inspect a.txt yourself. Do not create or contact another session.' :
     'Run the isolated action and report the result.', routed ? {

@@ -313,7 +313,10 @@ export async function resolveContextualPeerParent(
 export function captureContextualWorkerParent(parent: ToolUseContext): ContextualWorkerParentBinding {
   const evidence = conversationEvidence(parent.messages, parent.contextualWorkerAssignment)
   const anchor = evidence.findLast(record => record.origin === 'operator' && record.id)?.id
-  const sender = parent.agentId ?? (parent.peerCreatorAppSessionId ? 'peer-session' : 'main')
+  const attempt = parent.contextualAutoAttempt
+  const peerSession = parent.peerCreatorAppSessionId ||
+    (attempt && attempt.id === parent.toolUseId && attempt.delegated)
+  const sender = parent.agentId ?? (peerSession ? 'peer-session' : 'main')
   return { anchor, sender }
 }
 
