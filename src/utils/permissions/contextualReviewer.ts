@@ -19,46 +19,69 @@ export function contextualReviewerProfile(configuredModel: string) {
   return { provider, model, effort: 'provider-default' as const }
 }
 
-function trimConversation(evidence: ContextualEvidence, budget: number): string | undefined {
-  const { assignment, conversation } = evidence
-  const parent = assignment?.parent ?? []
-  const localWorker = assignment?.origin === 'worker-launch'
-  // Operator instructions can limit later work even when they predate the
-  // current task. Keep linked replies and correspondence that can narrow scope.
-  const optional = (entries: ContextualEvidence['conversation']) => entries.filter((row, index) =>
-    row.origin !== 'operator' && row.origin !== 'peer' && !row.recipient && !row.proposal &&
-    !(localWorker && (row.actor === 'coordinator' || row.actor === 'worker history')) &&
-    !(assignment?.parentAnchor && row.id === assignment.parentAnchor) &&
-    !(row.origin === 'assistant' && entries[index - 1]?.proposal))
-  const removable = [...optional(parent), ...optional(conversation)]
+function reviewHistory(entries: ContextualEvidence['conversation']) {
+  return entries.flatMap(row => {
+    // Selected-option entries are assistant prose. Coordinator correspondence
+    // shares that origin but is identified separately by the engine.
+    if (row.origin === 'assistant' && row.actor !== 'coordinator') return []
+    if (!row.proposal || row.proposal.text.length <= 2_000) return [row]
+    return [{ ...row, proposal: { ...row.proposal, text: row.proposal.text.slice(-2_000), truncated: true as const } }]
+  })
+}
 
-  function contentAfterRemoving(count: number) {
-    const removed = new Set(removable.slice(0, count))
-    const retain = (entries: ContextualEvidence['conversation']) => entries.filter(row => !removed.has(row))
+function fitReviewEvidence(evidence: ContextualEvidence, budget: number): string | undefined {
+  const { workspaceInstructions, assignment, action, toolDescription, agentStatedPurpose,
+    recentShellRuns, priorDecisions } = evidence
+  const parent = reviewHistory(assignment?.parent ?? [])
+  const conversation = reviewHistory(evidence.conversation)
+  const entries = [...parent, ...conversation]
+
+  function serialize(
+    parentRows: ContextualEvidence['conversation'],
+    rows: ContextualEvidence['conversation'],
+    omittedHistoryEntries: number,
+  ) {
     return JSON.stringify({
-      ...evidence,
-      assignment: assignment?.parent ? { ...assignment, parent: retain(parent) } : assignment,
-      conversation: [
-        { origin: 'other', text: 'Some conversation entries were omitted to fit the Auto Mode review limit.' },
-        ...retain(conversation),
-      ],
+      workspaceInstructions: workspaceInstructions ?? '',
+      assignment: assignment?.parent ? { ...assignment, parent: parentRows } : assignment,
+      action, toolDescription, agentStatedPurpose,
+      conversation: rows, omittedHistoryEntries, recentShellRuns, priorDecisions,
     })
   }
 
-  let start = 1
-  let end = removable.length
-  let result: string | undefined
-  while (start <= end) {
-    const count = Math.floor((start + end) / 2)
-    const content = contentAfterRemoving(count)
-    if (Buffer.byteLength(content) <= budget) {
-      result = content
-      end = count - 1
-    } else {
-      start = count + 1
-    }
+  let omitted = entries.length
+  let remaining = budget - Buffer.byteLength(serialize([], [], omitted))
+  if (remaining < 0) return undefined
+
+  const retained = new Set<number>()
+  const sizes = { parent: 0, conversation: 0 }
+  function keep(index: number): boolean {
+    if (retained.has(index)) return true
+    const row = entries[index]!
+    const section = index < parent.length ? 'parent' : 'conversation'
+    const bytes = Buffer.byteLength(JSON.stringify(row)) + (sizes[section] > 0 ? 1 : 0) +
+      String(omitted - 1).length - String(omitted).length
+    if (bytes > remaining) return false
+    retained.add(index)
+    sizes[section]++
+    remaining -= bytes
+    omitted--
+    return true
   }
-  return result
+
+  const newestOperator = entries.findLastIndex(row => row.origin === 'operator')
+  if (newestOperator >= 0 && !keep(newestOperator)) return undefined
+  const firstOperator = entries.findIndex(row => row.origin === 'operator')
+  if (firstOperator >= 0) keep(firstOperator)
+  for (let index = entries.length - 1; index >= 0; index--) {
+    if (!keep(index)) break
+  }
+
+  return serialize(
+    parent.filter((_, index) => retained.has(index)),
+    conversation.filter((_, index) => retained.has(parent.length + index)),
+    omitted,
+  )
 }
 
 export function buildContextualReview(
@@ -69,9 +92,7 @@ export function buildContextualReview(
 ): { options: SideQueryOptions; requestDigest: string; promptDigest: string } | undefined {
   const system = contextualReviewSystem(evidence.action.tool, instructions, scriptCell)
   const budget = CONTEXTUAL_REVIEW_MAX_BYTES - Buffer.byteLength(system)
-  const fullContent = JSON.stringify(evidence)
-  const content = Buffer.byteLength(fullContent) <= budget ? fullContent
-    : trimConversation(evidence, budget)
+  const content = fitReviewEvidence(evidence, budget)
   if (content === undefined) return undefined
   const options: SideQueryOptions = {
     ...profile,

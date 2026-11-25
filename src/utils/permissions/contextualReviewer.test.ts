@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { type ContextualEvidence } from './contextualReviewPrompt.js'
+import { buildSideQueryRequest } from '../sideQuery.js'
+import { CONTEXTUAL_REVIEW_MAX_BYTES, type ContextualEvidence } from './contextualReviewPrompt.js'
 import { buildContextualReview } from './contextualReviewer.js'
 
 type Entry = ContextualEvidence['conversation'][number]
@@ -13,58 +14,70 @@ const operator = (id: string, text: string, proposal?: string): Entry => ({
   id, text, origin: 'operator', ...(proposal && { proposal: { id: `proposal-${id}`, text: proposal } }),
 })
 const latest = operator('latest', 'Leave marker.txt unchanged.', 'Proposed fixture change.')
-const omitted = expect.objectContaining({ origin: 'other', text: expect.stringMatching(/entries were omitted/i) })
 
 function packet(conversation: Entry[], assignment?: ContextualEvidence['assignment']) {
   const built = buildContextualReview({ action, assignment, conversation }, profile)
-  return built ? JSON.parse(String(built.options.messages[0]?.content)) as ContextualEvidence : undefined
+  if (!built) return undefined
+  const content = String(built.options.messages[0]?.content)
+  expect(Buffer.byteLength(String(built.options.system)) + Buffer.byteLength(content))
+    .toBeLessThanOrEqual(CONTEXTUAL_REVIEW_MAX_BYTES)
+  return JSON.parse(content) as ContextualEvidence & { omittedHistoryEntries: number }
 }
 
-test('review trimming drops optional rows while retaining older operator proposals', () => {
-  const earlier = operator('earlier', 'Inspect the fixture.', 'p'.repeat(16_000))
-  const evidence = packet([
-    { origin: 'assistant', text: 'a'.repeat(180_000) },
-    { origin: 'other', text: 't'.repeat(260_000) },
-    earlier,
-    latest,
-  ])
-  expect(evidence?.conversation).toEqual([omitted, earlier, latest])
+test('keeps the first operator message and fills the rest with the newest whole entries', () => {
+  const first = operator('first', 'Inspect the fixture.')
+  const old = operator('old', 'o'.repeat(140_000), 'An older proposal.')
+  const fresh = { ...operator('fresh', 'é'.repeat(75_000)), actor: 'Peer session' }
+  const proposalTail = 'p'.repeat(1_978) + 'Leave the file alone.\n'
+  const newest = operator('newest', 'Yes.', 'Old options.\n' + proposalTail)
+  const evidence = packet([first, old, fresh, newest])
+  expect(evidence?.conversation).toEqual([first, fresh, {
+    ...newest, proposal: { id: 'proposal-newest', text: proposalTail, truncated: true },
+  }])
+  expect(evidence?.omittedHistoryEntries).toBe(1)
 })
 
-test('review trimming cannot split a reply from an over-budget collection of linked proposals', () => {
-  const older = Array.from({ length: 19 }, (_, index) =>
-    operator(`older-${index}`, 'No, leave that as it is.', `Change fixture ${index}: ${'p'.repeat(15_000)}`))
-  expect(packet([...older, latest])).toBeUndefined()
+test('an oversized first operator message ages out when the newest one fits', () => {
+  const evidence = packet([operator('first', 'e'.repeat(256_000)), latest])
+  expect(evidence?.conversation).toEqual([latest])
+  expect(evidence?.omittedHistoryEntries).toBe(1)
 })
 
-test('review trimming keeps the worker assignment anchor and older operator instructions', () => {
+test('an oversized newest operator message prevents review even with older history removed', () => {
+  const newest = operator('newest', 'é'.repeat(128_000))
+  expect(packet([latest, newest, { origin: 'peer', text: 'A later teammate update.' }])).toBeUndefined()
+})
+
+test('worker history shares the budget in chronological order with the local conversation', () => {
   const anchor = operator('anchor', 'Run the fixture with this restriction.')
-  const parentUpdate = operator('parent-update', 'Keep marker.txt private.')
-  const workerOperator = operator('old-operator-turn', 'w'.repeat(130_000))
-  const evidence = packet([workerOperator, latest], {
+  const evidence = packet([latest], {
     actor: 'local-worker', origin: 'worker-launch', parentAnchor: anchor.id,
-    parent: [{ origin: 'assistant', text: 'c'.repeat(170_000) }, anchor, parentUpdate],
+    parent: [anchor, operator('old-parent', 'o'.repeat(260_000)), operator('parent-update', 'Keep marker.txt private.')],
   })
-  expect(evidence?.assignment?.parentAnchor).toBe(anchor.id)
-  expect(evidence?.assignment?.parent).toEqual([anchor, parentUpdate])
-  expect(evidence?.conversation).toEqual([omitted, workerOperator, latest])
+  expect(evidence?.assignment).toEqual({
+    actor: 'local-worker', origin: 'worker-launch', parentAnchor: anchor.id,
+    parent: [anchor, operator('parent-update', 'Keep marker.txt private.')],
+  })
+  expect(evidence?.conversation).toEqual([latest])
+  expect(evidence?.omittedHistoryEntries).toBe(1)
 })
 
-test('last-resort review trimming never separates an approval from its later withdrawal', () => {
-  const approval = operator('approval', 'You may change marker.txt.')
-  const withdrawal = operator('withdrawal', 'Do not change marker.txt after all.')
-  const followUp = operator('follow-up', 'Continue with the documentation.')
-  const longChat = Array.from({ length: 100 }, (_, index): Entry => ({
-    origin: 'other', id: `background-${index}`, text: 'Background notes: ' + 'w'.repeat(3_000),
-  }))
-  const assignment = {
-    actor: 'local-worker', origin: 'worker-launch' as const, parentAnchor: approval.id,
-    parent: [approval, withdrawal, followUp],
+test('system prompt, settings and workspace instructions form a stable request prefix', () => {
+  const settings = [{ source: 'userSettings', soft_deny: ['Keep private files local.'] }]
+  const workspaceInstructions = 'Keep the fixture in the workspace.'
+  const prefix = (attempt: string, conversation: Entry[]) => {
+    const built = buildContextualReview({ action: { ...action, attempt }, workspaceInstructions, conversation }, profile, settings)
+    expect(built).toBeDefined()
+    const request = buildSideQueryRequest(built!.options, profile.provider)
+    const content = String(request.messages[0]?.content)
+    const workspacePrefix = `{"workspaceInstructions":${JSON.stringify(workspaceInstructions)},`
+    expect(content).toStartWith(workspacePrefix)
+    const system = request.system.map(block => block.text).join('\n\n')
+    expect(system).toEndWith(JSON.stringify(settings))
+    return { prefix: system + content.slice(0, workspacePrefix.length), content }
   }
-  const evidence = packet([...longChat, latest], assignment)
-  expect(evidence?.assignment?.parent).toEqual([approval, withdrawal, followUp])
-  expect(evidence?.conversation).toContainEqual(omitted)
-
-  const tooLarge = operator('withdrawal', 'w'.repeat(260_000))
-  expect(packet([latest], { ...assignment, parent: [approval, tooLarge, followUp] })).toBeUndefined()
+  const first = prefix('one', [operator('first', 'Inspect the fixture.')])
+  const second = prefix('two', [latest])
+  expect(second.content).not.toBe(first.content)
+  expect(second.prefix).toBe(first.prefix)
 })

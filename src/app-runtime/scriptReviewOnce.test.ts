@@ -247,8 +247,12 @@ test('a trimmed Script review covers queued and later children in the same cell'
   const proof = await run('native-oversize-history', cells(queued, twoWrites))
   expect(proof.effect).toBe('effectqueuedeffecteffect')
   expect(proof.requests).toHaveLength(2)
-  expect(proof.requests[0].content.action.script.source).toContain(queued)
-  expect(JSON.stringify(proof.requests[0].content.conversation)).not.toContain('OVERSIZE_EARLIER_CONTEXT')
+  const { action, conversation, omittedHistoryEntries } = proof.requests[0].content
+  expect(Object.keys(proof.requests[0].content).slice(0, 4))
+    .toEqual(['workspaceInstructions', 'action', 'conversation', 'omittedHistoryEntries'])
+  expect(action.script.source).toContain(queued)
+  expect(omittedHistoryEntries).toBe(1)
+  expect(JSON.stringify(conversation)).not.toContain('OVERSIZE_EARLIER_CONTEXT')
   expect(proof.prompts).toHaveLength(0)
 }, 30_000)
 

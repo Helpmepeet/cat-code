@@ -189,11 +189,11 @@ test('typed desktop question answers reach the reviewer as operator evidence wit
   expect(proof.effect).toBeNull()
 }, 30_000)
 
-test('v7 sends only custom Auto Mode rules and redacts credentials in them', async () => {
+test('v8 sends only custom Auto Mode rules and redacts credentials in them', async () => {
   const proof = await run('direct-credential-settings')
   expect(proof.requests).toHaveLength(1)
   const system = proof.requests[0].system.at(-1).text
-  expect(system).toStartWith('cat-code-contextual-review-v7')
+  expect(system).toStartWith('cat-code-contextual-review-v8')
   expect(JSON.parse(system.slice(system.lastIndexOf('\n\n') + 2))).toEqual([{
     source: 'userSettings',
     allow: ['Synthetic example password = […]'],
@@ -227,28 +227,27 @@ test('an incomplete private key prevents the action without a review or human pr
 test('over-budget review keeps the early operator restriction and marks omitted context', async () => {
   const proof = await run('native-oversize-history')
   expect(proof.requests).toHaveLength(1)
-  const { action, conversation } = proof.requests[0].content
+  const { action, conversation, omittedHistoryEntries } = proof.requests[0].content
   expect(action.input.command).toBe('printf effect >> effects.txt')
   expect(proof.effect).toBeNull()
   expect(conversation).toContainEqual(expect.objectContaining({
     origin: 'operator', text: 'Do not write to effects.txt in this investigation.',
   }))
-  expect(conversation).toContainEqual(expect.objectContaining({
-    origin: 'other', text: expect.stringMatching(/conversation entries were omitted/i),
-  }))
+  expect(omittedHistoryEntries).toBe(1)
   expect(conversation.findLast((row: any) => row.origin === 'operator').text).toBe('Run the isolated action and report the result.')
   expect(JSON.stringify(conversation)).not.toContain('OVERSIZE_EARLIER_CONTEXT')
   expect(proof.prompts).toHaveLength(0)
 }, 30_000)
 
-test('over-budget operator instructions are held for a one-action decision', async () => {
+test('an oversized opening instruction ages out after a new operator message', async () => {
   const proof = await run('native-oversize-operator-history')
-  expect(proof.requests).toHaveLength(0)
-  expect(proof.prompts).toEqual([expect.objectContaining({
-    human_only: true, input: expect.objectContaining({ command: 'printf effect >> effects.txt' }),
-    decision_reason: expect.stringContaining('could not review this action'),
-  })])
-  expect(proof.effect).toBeNull()
+  expect(proof.requests).toHaveLength(1)
+  expect(proof.requests[0].content).toMatchObject({
+    conversation: [{ origin: 'operator', text: 'Run the isolated action and report the result.' }],
+    omittedHistoryEntries: 1,
+  })
+  expect(proof.prompts).toHaveLength(0)
+  expect(proof.effect).toBe('effect')
 }, 30_000)
 
 test('an oversize action alone offers the exact input and resolved target for approval', async () => {
@@ -308,7 +307,7 @@ test('shadow records trusted peer instructions while the legacy allowance releas
   const proof = await run('native-peer-write-shadow')
   const candidates = proof.requests.filter((request: any) => request.contextual)
   expect(candidates).toHaveLength(1)
-  expect(JSON.stringify(candidates[0].system)).toContain('cat-code-contextual-review-v7')
+  expect(JSON.stringify(candidates[0].system)).toContain('cat-code-contextual-review-v8')
   expect(candidates[0].content.action.actor).toBe('main')
   expect(candidates[0].content.assignment).toBeUndefined()
   expect(candidates[0].content.conversation).toContainEqual(expect.objectContaining({ origin: 'operator', actor: 'Lead',

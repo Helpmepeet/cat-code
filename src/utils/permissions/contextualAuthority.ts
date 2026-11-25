@@ -56,8 +56,8 @@ function conversationEvidence(
         proposals.set(message.uuid, proposals.has(message.uuid) ? null : proposal)
       }
       if (isLiveAssistant(message)) {
-        // The first spoken response records the option the agent selected.
-        // It can explain a delegated choice, but cannot grant permission.
+        // Keep the selected option in the full snapshot compared at release.
+        // The reviewer packet projects it out separately.
         if (evidence.at(-1)?.proposal) {
           const response = proposals.get(message.uuid)
           if (response) evidence.push({ origin: 'assistant', id: message.uuid, text: response.text })

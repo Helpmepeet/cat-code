@@ -32,7 +32,8 @@ for (const [restriction, name] of [
       clearTimeout(timeout)
       if (exit !== 0) throw new Error(`Trim fixture exited ${exit}\n${error}\n${output}`)
       const result = JSON.parse(output) as {
-        reviews: { bytes: number; omittedCorrespondence: boolean; wholeScript: boolean; evidence: ContextualEvidence }[]
+        reviews: { bytes: number; omittedCorrespondence: boolean; wholeScript: boolean;
+          evidence: ContextualEvidence & { omittedHistoryEntries: number } }[]
         effects: string | null; prompts: number; script: string; grant: string; withdrawal: string; teammateHold: string
       }
       expect(result.reviews).toHaveLength(1)
@@ -43,7 +44,7 @@ for (const [restriction, name] of [
       expect(bytes).toBeLessThanOrEqual(CONTEXTUAL_REVIEW_MAX_BYTES)
       expect(omittedCorrespondence).toBe(true)
       expect(wholeScript).toBe(true)
-      expect(evidence.conversation).toContainEqual(expect.objectContaining({ text: expect.stringMatching(/entries were omitted/i) }))
+      expect(evidence.omittedHistoryEntries).toBe(1)
       expect(evidence.action).toMatchObject({ tool: 'Bash', cwd,
         input: { command: 'printf first >> effects.txt' }, script: { source: expect.stringContaining(result.script) },
       })

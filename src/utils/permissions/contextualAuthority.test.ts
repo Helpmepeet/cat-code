@@ -2,8 +2,10 @@ import { expect, test } from 'bun:test'
 import type { ToolUseContext } from '../../Tool.js'
 import { asAgentId } from '../../types/ids.js'
 import type { Message } from '../../types/message.js'
-import { createUserMessage } from '../messages.js'
+import { createAssistantMessage, createUserMessage } from '../messages.js'
 import { readContextualAuthority, workerAssignment } from './contextualAuthority.js'
+import { buildContextualReview } from './contextualReviewer.js'
+import { capturePriorAssistantContext } from './priorAssistantContext.js'
 
 for (const tool of ['Agent', 'Task']) {
   test(`${tool} commit restriction appears only in the intended worker assignment`, () => {
@@ -30,3 +32,30 @@ for (const tool of ['Agent', 'Task']) {
     expect(readContextualAuthority({ ...parent, messages: [request] }).verifiedSource).toBe(false)
   })
 }
+
+test('the release snapshot keeps full linked proposals and selected-option prose when the reviewer view does not', () => {
+  const proposalText = 'Review option one first. ' + 'x'.repeat(2_000)
+  const selectedText = 'I will review option one.'
+  const proposal = createAssistantMessage({ content: proposalText })
+  const selected = createAssistantMessage({ content: selectedText })
+  proposal.message.model = selected.message.model = 'claude-sonnet-5-5'
+  const reply = createUserMessage({
+    content: 'Your choice.',
+    priorAssistantContext: capturePriorAssistantContext([proposal]) ?? undefined,
+  })
+  const context = { messages: [proposal, reply, selected], abortController: new AbortController() } as ToolUseContext
+  const authority = readContextualAuthority(context)
+  const built = buildContextualReview({
+    action: { tool: 'Bash', effect: 'Inspect fixture', input: {}, actor: 'main', cwd: '/fixture', attempt: 'call' },
+    conversation: authority.conversation,
+  }, { provider: 'openai', model: 'gpt-6-luna' })
+  expect(JSON.parse(String(built?.options.messages[0]?.content)).conversation).toEqual([
+    { origin: 'operator', id: reply.uuid, text: 'Your choice.',
+      proposal: { id: proposal.uuid, text: 'x'.repeat(2_000), truncated: true } },
+  ])
+  expect(readContextualAuthority(context)).toEqual(authority)
+  expect(authority.conversation).toEqual([
+    { origin: 'operator', id: reply.uuid, text: 'Your choice.', proposal: { id: proposal.uuid, text: proposalText } },
+    { origin: 'assistant', id: selected.uuid, actor: 'main', text: selectedText },
+  ])
+})

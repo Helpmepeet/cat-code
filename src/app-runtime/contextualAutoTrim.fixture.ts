@@ -86,12 +86,12 @@ const session = createQueryEngineSessionController(createQueryEngineAppSession({
   readFileCache: createFileStateCacheWithSizeLimit(20), userSpecifiedModel: 'claude-sonnet-5-5',
   recordTranscript: async () => null,
   initialMessages: [
-    ...(restriction === 'teammate' ? [createUserMessage({ content: teammateHold,
-      origin: { kind: 'teammate', messages: [{ kind: 'teammate', from: 'Fixture teammate', text: teammateHold }] },
-    })] : []),
     ...Array.from({ length: 4 }, (_, index) => createUserMessage({
       content: `${marker} ${index}. ` + 'é'.repeat(35_000), origin: { kind: 'coordinator' },
     })),
+    ...(restriction === 'teammate' ? [createUserMessage({ content: teammateHold,
+      origin: { kind: 'teammate', messages: [{ kind: 'teammate', from: 'Fixture teammate', text: teammateHold }] },
+    })] : []),
   ],
 }))
 let prompts = 0

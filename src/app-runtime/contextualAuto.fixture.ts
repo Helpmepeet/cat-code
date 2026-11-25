@@ -533,8 +533,7 @@ const config: Omit<import('../QueryEngine.js').QueryEngineConfig, 'canUseTool'> 
     createUserMessage({ content: scriptCells ? 'Run the fixture scripts.' : earlyRestriction }),
     createUserMessage({ content: 'OVERSIZE_EARLIER_CONTEXT ' + 'old '.repeat(80_000),
       origin: { kind: 'coordinator' } }),
-  ] : oversizeAction && scriptCells ? [createUserMessage({ content: 'Motivation for this change. ' + 'é'.repeat(105_000) })]
-    : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]
+  ] : oversizeOperatorHistory ? [createUserMessage({ content: 'OVERSIZE_OPERATOR_CONTEXT ' + 'old '.repeat(80_000) })]
     : privateNoticeFollowUp ? [createUserMessage({ content: rosterPrivacyVeto })]
     : twoChecks ? [createUserMessage({ content: 'Do not push. Old key was ghp_' + 'A'.repeat(36) })] : compacted ? [
     createUserMessage({ content: 'The lead assigned a file edit.', isCompactSummary: true,
@@ -730,6 +729,7 @@ if (surface === 'desktop') {
   else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
     rosterPrivacyVeto : 'Investigate and fix the Chrome crash.')
   else if (cleanup) await controller.submit('yep. up to you')
+  else if (oversizeAction && scriptCells) await controller.submit('Motivation for this change. ' + 'é'.repeat(105_000))
   else if (shadowPeerWrite) await controller.submit(assignment, {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   })
