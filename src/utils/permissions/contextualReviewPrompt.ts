@@ -2,7 +2,7 @@ import { z } from 'zod/v4'
 import { AUTO_MODE_NO_EXPLANATION } from '../../app-runtime/autoModeReviewContract.js'
 import type { ScriptCellReceipt, ScriptCellSource } from '../../tools/REPLTool/scriptReviewHistory.js'
 
-export const CONTEXTUAL_REVIEW_VERSION = 'cat-code-contextual-review-v9'
+export const CONTEXTUAL_REVIEW_VERSION = 'cat-code-contextual-review-v10'
 export const CONTEXTUAL_REVIEW_MAX_OUTPUT = 1024
 export const CONTEXTUAL_REVIEW_MAX_BYTES = 2_000_000
 

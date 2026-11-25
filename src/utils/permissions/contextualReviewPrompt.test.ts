@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
 import { contextualReviewSystem, parseContextualVerdict } from './contextualReviewPrompt.js'
 
-test('v9 reserves interruptions for high-risk decisions and treats omitted history as unknown', () => {
+test('v10 reserves interruptions for high-risk decisions and treats omitted history as unknown', () => {
   const prompt = contextualReviewSystem('Bash')
-  expect(prompt).toStartWith('cat-code-contextual-review-v9')
+  expect(prompt).toStartWith('cat-code-contextual-review-v10')
   expect(prompt).toContain('History may be cut; anything not shown is unknown.')
   expect(prompt).toContain('Your own uncertainty is never a reason to interrupt the user.')
   expect(prompt).toContain('from the operator, the actor\'s assignment, workspace instructions or settings')

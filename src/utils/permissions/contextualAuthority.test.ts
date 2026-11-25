@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
+import { randomUUID } from 'node:crypto'
 import type { ToolUseContext } from '../../Tool.js'
 import { asAgentId } from '../../types/ids.js'
 import type { Message } from '../../types/message.js'
+import { createAttachmentMessage } from '../attachments.js'
+import { enqueue, removeByFilter } from '../messageQueueManager.js'
 import { createAssistantMessage, createUserMessage } from '../messages.js'
 import { readContextualAuthority, workerAssignment } from './contextualAuthority.js'
 import { buildContextualReview } from './contextualReviewer.js'
@@ -58,4 +61,34 @@ test('the release snapshot keeps full linked proposals and selected-option prose
     { origin: 'operator', id: reply.uuid, text: 'Your choice.', proposal: { id: proposal.uuid, text: proposalText } },
     { origin: 'assistant', id: selected.uuid, actor: 'main', text: selectedText },
   ])
+})
+
+test('the reviewer uses the submission identity before, during and after queue drain', () => {
+  const uuid = randomUUID()
+  const value = 'Keep marker.txt unchanged.'
+  const delivered = createAttachmentMessage({ type: 'queued_command', prompt: value, source_uuid: uuid, commandMode: 'prompt' })
+  const controller = new AbortController()
+  const snapshot = (messages: Message[]) =>
+    readContextualAuthority({ messages, abortController: controller } as ToolUseContext)
+  function review(authority: ReturnType<typeof snapshot>, afterOperatorId: string) {
+    const built = buildContextualReview({
+      action: { tool: 'Bash', effect: 'Inspect fixture', input: {}, actor: 'main', cwd: '/fixture', attempt: 'call' },
+      conversation: [...authority.conversation, ...authority.pendingConversation],
+      recentShellRuns: [{ attempt: 'read', afterOperatorId, outcome: 'completed' }],
+    }, { provider: 'openai', model: 'gpt-6-luna' })
+    return String(built?.options.messages[0]?.content)
+  }
+  enqueue({ uuid, value, mode: 'prompt' })
+  try {
+    const pending = review(snapshot([]), uuid)
+    const overlapping = review(snapshot([delivered]), delivered.uuid)
+    removeByFilter(command => command.uuid === uuid)
+    const drained = snapshot([delivered])
+    expect(drained.conversation).toEqual([{ id: delivered.uuid, submittedId: uuid, origin: 'operator', text: value }])
+    expect(JSON.parse(pending).conversation).toEqual([{ id: uuid, origin: 'operator', text: value }])
+    expect(overlapping).toBe(pending)
+    expect(review(drained, delivered.uuid)).toBe(pending)
+  } finally {
+    removeByFilter(command => command.uuid === uuid)
+  }
 })

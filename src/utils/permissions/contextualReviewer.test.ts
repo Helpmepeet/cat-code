@@ -62,6 +62,17 @@ test('worker history shares the budget in chronological order with the local con
   expect(evidence?.omittedHistoryEntries).toBe(1)
 })
 
+test('a worker packet drops a parent anchor when its supporting row ages out', () => {
+  const first = operator('first', 'Inspect the fixture.')
+  const anchor = operator('anchor', 'You may edit marker.txt.')
+  const evidence = packet([latest], {
+    actor: 'local-worker', origin: 'worker-launch', parentAnchor: anchor.id,
+    parent: [first, anchor, { origin: 'other', text: 'p'.repeat(2_000_000) }],
+  })
+  expect(evidence?.assignment).toEqual({ actor: 'local-worker', origin: 'worker-launch', parent: [first] })
+  expect(evidence?.omittedHistoryEntries).toBe(2)
+})
+
 test('consecutive reviews share the prefix through all earlier history entries', () => {
   const settings = [{ source: 'userSettings', soft_deny: ['Keep private files local.'] }]
   const workspaceInstructions = 'Keep the fixture in the workspace.'
@@ -95,6 +106,20 @@ test('an over-budget Script drops the oldest source and keeps its receipt', () =
     cell: 4, source, earlierSources: earlierSources.slice(1), earlierSourcesOmitted: 1, earlierCells,
   })
   expect(evidence?.conversation).toEqual([latest])
+})
+
+test('space freed by an oversized conversation entry can retain Script receipts', () => {
+  const first = operator('first', 'Inspect the fixture.')
+  const history: Entry[] = [first, { origin: 'other', text: 'p'.repeat(2_000_000) }, latest]
+  const earlierSources = [{ cell: 1, source: 'const marker = "fixture";' }]
+  const earlierCells = [{ cell: 1, children: [{ tool: 'Bash', outcome: 'completed' as const }] }]
+  const evidence = packet(history, undefined, { cellId: 'cell', generation: 'fixture', cell: 2,
+    source: 'output(marker);', earlierSources, earlierCells })
+  expect(evidence?.conversation).toEqual([first, latest])
+  expect(evidence?.omittedHistoryEntries).toBe(1)
+  expect(evidence?.action.script?.earlierSources).toEqual(earlierSources)
+  expect(evidence?.action.script?.earlierCells).toEqual(earlierCells)
+  expect(evidence?.action.script).not.toHaveProperty('earlierCellsOmitted')
 })
 
 test('an over-budget current source cannot fit even after dropping all earlier cells', () => {
