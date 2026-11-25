@@ -22,29 +22,17 @@ export function contextualReviewerProfile(configuredModel: string) {
 function trimConversation(evidence: ContextualEvidence, budget: number): string | undefined {
   const { assignment, conversation } = evidence
   const parent = assignment?.parent ?? []
-  type Row = ContextualEvidence['conversation'][number]
-  const isOperator = (row: Row) => row.origin === 'operator'
-  const newest = new Set([parent.findLast(isOperator), conversation.findLast(isOperator)])
-  const anchor = assignment?.parentAnchor ? parent.find(row => row.id === assignment.parentAnchor) : undefined
-  const rows = [...parent, ...conversation]
-  const nonOperator = rows.filter(row => !isOperator(row) && row !== anchor)
-  const olderOperators = rows.filter(row => isOperator(row) && !newest.has(row))
-  const proposals = olderOperators.filter(row => row.proposal)
-  const anchorIndex = anchor ? parent.indexOf(anchor) : -1
-  // A parent instruction after the anchor can withdraw it, so never drop one.
-  const removableOperators = olderOperators.filter(row => row !== anchor && parent.indexOf(row) <= anchorIndex)
+  // Operator instructions can limit later work even when they predate the
+  // current task. Keep replies, their proposals and any selected option intact.
+  const optional = (entries: ContextualEvidence['conversation']) => entries.filter((row, index) =>
+    row.origin !== 'operator' && !row.recipient && !row.proposal &&
+    !(assignment?.parentAnchor && row.id === assignment.parentAnchor) &&
+    !(row.origin === 'assistant' && entries[index - 1]?.proposal))
+  const removable = [...optional(parent), ...optional(conversation)]
 
   function contentAfterRemoving(count: number) {
-    // Remove lower-priority context before losing any operator text.
-    const afterNonOperator = Math.max(0, count - nonOperator.length)
-    const removed = new Set([
-      ...nonOperator.slice(0, count),
-      ...removableOperators.slice(0, Math.max(0, afterNonOperator - proposals.length)),
-    ])
-    const stripped = new Set(proposals.slice(0, afterNonOperator))
-    const retain = (entries: readonly Row[]) => entries
-      .filter(row => !removed.has(row))
-      .map(row => stripped.has(row) ? { ...row, proposal: undefined } : row)
+    const removed = new Set(removable.slice(0, count))
+    const retain = (entries: ContextualEvidence['conversation']) => entries.filter(row => !removed.has(row))
     return JSON.stringify({
       ...evidence,
       assignment: assignment?.parent ? { ...assignment, parent: retain(parent) } : assignment,
@@ -56,7 +44,7 @@ function trimConversation(evidence: ContextualEvidence, budget: number): string 
   }
 
   let start = 1
-  let end = nonOperator.length + proposals.length + removableOperators.length
+  let end = removable.length
   let result: string | undefined
   while (start <= end) {
     const count = Math.floor((start + end) / 2)
@@ -75,14 +63,13 @@ export function buildContextualReview(
   evidence: ContextualEvidence,
   profile: { model: string; provider: APIProvider },
   instructions?: unknown,
-  trimOlderConversation = false,
   scriptCell = false,
 ): { options: SideQueryOptions; requestDigest: string; promptDigest: string } | undefined {
   const system = contextualReviewSystem(evidence.action.tool, instructions, scriptCell)
   const budget = CONTEXTUAL_REVIEW_MAX_BYTES - Buffer.byteLength(system)
   const fullContent = JSON.stringify(evidence)
   const content = Buffer.byteLength(fullContent) <= budget ? fullContent
-    : trimOlderConversation ? trimConversation(evidence, budget) : undefined
+    : trimConversation(evidence, budget)
   if (content === undefined) return undefined
   const options: SideQueryOptions = {
     ...profile,

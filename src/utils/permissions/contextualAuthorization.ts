@@ -482,7 +482,7 @@ export async function createContextualAttempt(
     const evidence = redactReviewFields(rawEvidence)
     const reviewerInstructions = redactReviewFields(withoutDefaultRules(instructions))
     const profile = contextualReviewerProfile(getConfiguredAutoModeModel())
-    const built = buildContextualReview(evidence, profile, reviewerInstructions, !scriptChild, scriptChild)
+    const built = buildContextualReview(evidence, profile, reviewerInstructions, scriptChild)
     if (!built) {
       if (scriptGrant) {
         return scriptSizeLimit('The Script review request exceeded its size limit before reaching the reviewer. The held action did not run. Report this blocker in chat.')

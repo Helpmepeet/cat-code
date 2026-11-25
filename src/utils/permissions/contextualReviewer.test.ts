@@ -16,11 +16,11 @@ const latest = operator('latest', 'Leave marker.txt unchanged.', 'Proposed fixtu
 const omitted = expect.objectContaining({ origin: 'other', text: expect.stringMatching(/entries were omitted/i) })
 
 function packet(conversation: Entry[], assignment?: ContextualEvidence['assignment']) {
-  const built = buildContextualReview({ action, assignment, conversation }, profile, undefined, true)
+  const built = buildContextualReview({ action, assignment, conversation }, profile)
   return built ? JSON.parse(String(built.options.messages[0]?.content)) as ContextualEvidence : undefined
 }
 
-test('review trimming drops assistant and tool rows before stripping older operator proposals', () => {
+test('review trimming drops optional rows while retaining older operator proposals', () => {
   const earlier = operator('earlier', 'Inspect the fixture.', 'p'.repeat(16_000))
   const evidence = packet([
     { origin: 'assistant', text: 'a'.repeat(180_000) },
@@ -31,36 +31,34 @@ test('review trimming drops assistant and tool rows before stripping older opera
   expect(evidence?.conversation).toEqual([omitted, earlier, latest])
 })
 
-test('review trimming strips older attached proposals before dropping operator rows', () => {
+test('review trimming cannot split a reply from an over-budget collection of linked proposals', () => {
   const older = Array.from({ length: 19 }, (_, index) =>
-    operator(`older-${index}`, `Operator restriction ${index}.`, 'p'.repeat(16_000)))
-  const evidence = packet([...older, latest])
-  const operatorRows = evidence?.conversation.filter(row => row.origin === 'operator')
-  expect(operatorRows?.map(row => row.text)).toEqual([...older, latest].map(row => row.text))
-  expect(operatorRows?.[0]?.proposal).toBeUndefined()
-  expect(operatorRows?.at(-1)).toEqual(latest)
-  expect(evidence?.conversation).toContainEqual(omitted)
+    operator(`older-${index}`, 'No, leave that as it is.', `Change fixture ${index}: ${'p'.repeat(15_000)}`))
+  expect(packet([...older, latest])).toBeUndefined()
 })
 
-test('last-resort review trimming keeps the assignment anchor and newest operator rows', () => {
+test('review trimming keeps the worker assignment anchor and older operator instructions', () => {
   const anchor = operator('anchor', 'Run the fixture with this restriction.')
-  const creatorUpdate = operator('creator-update', 'Keep marker.txt private.')
-  const evidence = packet([operator('old-peer-turn', 'w'.repeat(130_000)), latest], {
-    actor: 'peer-session', origin: 'peer', parentAnchor: anchor.id,
-    parent: [operator('old-parent-turn', 'c'.repeat(170_000)), anchor, creatorUpdate],
+  const parentUpdate = operator('parent-update', 'Keep marker.txt private.')
+  const workerOperator = operator('old-operator-turn', 'w'.repeat(130_000))
+  const evidence = packet([workerOperator, latest], {
+    actor: 'local-worker', origin: 'worker-launch', parentAnchor: anchor.id,
+    parent: [{ origin: 'assistant', text: 'c'.repeat(170_000) }, anchor, parentUpdate],
   })
   expect(evidence?.assignment?.parentAnchor).toBe(anchor.id)
-  expect(evidence?.assignment?.parent).toEqual([anchor, creatorUpdate])
-  expect(evidence?.conversation).toEqual([omitted, expect.objectContaining({ id: 'old-peer-turn' }), latest])
+  expect(evidence?.assignment?.parent).toEqual([anchor, parentUpdate])
+  expect(evidence?.conversation).toEqual([omitted, workerOperator, latest])
 })
 
 test('last-resort review trimming never separates an approval from its later withdrawal', () => {
   const approval = operator('approval', 'You may change marker.txt.')
   const withdrawal = operator('withdrawal', 'Do not change marker.txt after all.')
   const followUp = operator('follow-up', 'Continue with the documentation.')
-  const longChat = Array.from({ length: 100 }, (_, index) => operator(`peer-${index}`, 'w'.repeat(3_000)))
+  const longChat = Array.from({ length: 100 }, (_, index): Entry => ({
+    origin: 'peer', id: `teammate-${index}`, text: 'Background notes: ' + 'w'.repeat(3_000),
+  }))
   const assignment = {
-    actor: 'peer-session', origin: 'peer' as const, parentAnchor: approval.id,
+    actor: 'local-worker', origin: 'worker-launch' as const, parentAnchor: approval.id,
     parent: [approval, withdrawal, followUp],
   }
   const evidence = packet([...longChat, latest], assignment)
